@@ -31,6 +31,9 @@ pub struct Plan {
     /// The loading regimes supported by the game.
     #[serde(default)]
     pub loaders: Vec<Loader>,
+    /// Pinned component bundles available to loaders and resolution steps.
+    #[serde(default)]
+    pub components: Vec<Component>,
     /// The ordered, closed set of resolution steps.
     #[serde(default)]
     pub steps: Vec<Step>,
@@ -51,12 +54,20 @@ impl Plan {
         require_text("plan version", &self.version)?;
 
         let mut loader_ids = BTreeSet::new();
+        let mut component_ids = BTreeSet::new();
+        for component in &self.components {
+            component.validate()?;
+            if !component_ids.insert(&component.id) {
+                return Err(ValidationError::DuplicateComponent(component.id.clone()));
+            }
+        }
+
         for loader in &self.loaders {
             require_text("loader id", &loader.id)?;
             if !loader_ids.insert(&loader.id) {
                 return Err(ValidationError::DuplicateLoader(loader.id.clone()));
             }
-            loader.validate()?;
+            loader.validate(&component_ids)?;
         }
 
         for step in &self.steps {
@@ -138,14 +149,70 @@ pub struct Loader {
 }
 
 impl Loader {
-    fn validate(&self) -> Result<(), ValidationError> {
+    fn validate(&self, components: &BTreeSet<&String>) -> Result<(), ValidationError> {
         require_text("loader bootstrap", &self.bootstrap)?;
+        if !components.is_empty()
+            && self.bootstrap != "none"
+            && !components.contains(&self.bootstrap)
+        {
+            return Err(ValidationError::UnknownComponent(self.bootstrap.clone()));
+        }
         let mut names = BTreeSet::new();
         for target in &self.targets {
             target.validate()?;
             if !names.insert(&target.name) {
                 return Err(ValidationError::DuplicateTarget(target.name.clone()));
             }
+        }
+        Ok(())
+    }
+}
+
+/// A content-addressed, non-executable bundle installed by a reviewed component adapter.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Component {
+    /// Stable registry-wide component identity.
+    pub id: String,
+    /// Exact component version the plan author reviewed.
+    pub version: String,
+    /// Lowercase SHA-512 of the acquired component bundle.
+    pub sha512: String,
+    /// Vetted mappings from bundle entries to instance-relative paths.
+    pub files: Vec<ComponentFile>,
+}
+
+impl Component {
+    fn validate(&self) -> Result<(), ValidationError> {
+        require_text("component id", &self.id)?;
+        require_text("component version", &self.version)?;
+        if self.sha512.len() != 128 || !self.sha512.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(ValidationError::InvalidComponentHash(self.id.clone()));
+        }
+        for file in &self.files {
+            file.validate()?;
+        }
+        Ok(())
+    }
+}
+
+/// One file a component bundle may materialize.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ComponentFile {
+    /// Safe relative path inside the acquired bundle.
+    pub source: String,
+    /// Safe instance-relative materialization destination.
+    pub path: String,
+}
+
+impl ComponentFile {
+    fn validate(&self) -> Result<(), ValidationError> {
+        if !is_relative_path(&self.source) || !is_relative_path(&self.path) {
+            return Err(ValidationError::InvalidPath(format!(
+                "{} -> {}",
+                self.source, self.path
+            )));
         }
         Ok(())
     }
@@ -276,6 +343,15 @@ pub enum ValidationError {
     /// Multiple loaders declare the same identifier.
     #[error("duplicate loader {0:?}")]
     DuplicateLoader(String),
+    /// Multiple components declare the same identifier.
+    #[error("duplicate component {0:?}")]
+    DuplicateComponent(String),
+    /// A loader refers to an undeclared bootstrap component.
+    #[error("unknown component {0:?}")]
+    UnknownComponent(String),
+    /// A component's declared SHA-512 is not 128 hexadecimal characters.
+    #[error("component {0:?} has an invalid SHA-512")]
+    InvalidComponentHash(String),
     /// Multiple deployment targets on one loader have the same name.
     #[error("duplicate loader target {0:?}")]
     DuplicateTarget(String),
@@ -339,6 +415,7 @@ mod tests {
                 }],
                 sides: vec![Side::Client, Side::Server],
             }],
+            components: Vec::new(),
             steps: vec![
                 Step::Extract(super::ExtractStep {
                     allow: vec!["**/*.jar".to_owned()],

@@ -348,6 +348,7 @@ mod tests {
                 }],
                 sides: vec![Side::Client],
             }],
+            components: Vec::new(),
             steps: vec![Step::Place(PlaceStep {
                 into: "@loader.targets.mods".to_owned(),
                 flatten,

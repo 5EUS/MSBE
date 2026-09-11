@@ -30,7 +30,7 @@ use msbe_fsops::{
     Applier, Backend, Capabilities, Digest, Journal, Observer, Operation, RelPath, Store, TxnId,
     atomic,
 };
-use msbe_plan_schema::{Plan, Side};
+use msbe_plan_schema::{Component, Plan, Side};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
 
@@ -46,6 +46,8 @@ const RESERVED_NAMES: [&str; 22] = [
 ];
 
 static NOTHING_DEPLOYED: BTreeMap<RelPath, Digest> = BTreeMap::new();
+
+type BootstrapClaims = Vec<(RelPath, Claim)>;
 
 const fn default_side() -> Side {
     Side::Client
@@ -158,9 +160,24 @@ pub struct Profile {
     /// instance target until explicitly configured.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<ProfileTarget>,
+    /// Verified bootstrap component bundles, keyed by component ID.
+    #[serde(default)]
+    pub components: BTreeMap<String, ComponentEntry>,
     /// Mods by name.
     #[serde(default)]
     pub mods: BTreeMap<Name, ModEntry>,
+}
+
+/// A verified component bundle retained in the content store for one profile.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ComponentEntry {
+    /// Exact reviewed component version.
+    pub version: String,
+    /// SHA-512 verified by the acquiring component adapter.
+    pub sha512: String,
+    /// Files extracted from the verified bundle.
+    pub files: Vec<StoredFile>,
 }
 
 /// The loader-specific part of a profile compatibility target.
@@ -686,6 +703,57 @@ impl Instance {
         self.store_artifacts(profile, artifacts, Placement::Replace)
     }
 
+    /// Records a verified bootstrap bundle for the profile's selected loader.
+    ///
+    /// The bundle must exactly match a component declared by the plan. Its files are later
+    /// materialized through the normal deployment transaction, never executed by MSBE.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the component is not the selected loader's bootstrap, is not the
+    /// reviewed version or digest, or omits a declared bundle file.
+    pub fn install_component(
+        &self,
+        profile: &Name,
+        component_id: &str,
+        entry: ComponentEntry,
+    ) -> Result<(), InstanceError> {
+        let target = self.profile_target(profile)?;
+        let loader = self
+            .plan
+            .loaders
+            .iter()
+            .find(|loader| loader.id == target.loader)
+            .ok_or_else(|| ResolveError::UnknownLoader(target.loader.clone()))?;
+        if loader.bootstrap != component_id {
+            return Err(InstanceError::UnexpectedComponent {
+                loader: loader.id.clone(),
+                component: component_id.to_owned(),
+            });
+        }
+        let component = self.component(component_id)?;
+        if component.version != entry.version
+            || !component.sha512.eq_ignore_ascii_case(&entry.sha512)
+        {
+            return Err(InstanceError::ComponentMismatch(component_id.to_owned()));
+        }
+        for file in &component.files {
+            if !entry
+                .files
+                .iter()
+                .any(|stored| stored.source.as_str() == file.source)
+            {
+                return Err(InstanceError::MissingComponentFile {
+                    component: component_id.to_owned(),
+                    path: file.source.clone(),
+                });
+            }
+        }
+        let mut selection = self.profile(profile)?;
+        selection.components.insert(component_id.to_owned(), entry);
+        write_toml(&self.profile_path(profile), &selection)
+    }
+
     fn store_artifacts(
         &self,
         profile: &Name,
@@ -786,6 +854,55 @@ impl Instance {
         Ok(target)
     }
 
+    fn component(&self, id: &str) -> Result<&Component, InstanceError> {
+        self.plan
+            .components
+            .iter()
+            .find(|component| component.id == id)
+            .ok_or_else(|| InstanceError::UnknownComponent(id.to_owned()))
+    }
+
+    fn bootstrap_claims(
+        &self,
+        loader_id: &str,
+        entries: &BTreeMap<String, ComponentEntry>,
+    ) -> Result<BootstrapClaims, InstanceError> {
+        let loader = self
+            .plan
+            .loaders
+            .iter()
+            .find(|loader| loader.id == loader_id)
+            .ok_or_else(|| ResolveError::UnknownLoader(loader_id.to_owned()))?;
+        if self.plan.components.is_empty() || loader.bootstrap == "none" {
+            return Ok(Vec::new());
+        }
+        let entry = entries
+            .get(&loader.bootstrap)
+            .ok_or_else(|| InstanceError::MissingComponent(loader.bootstrap.clone()))?;
+        let component = self.component(&loader.bootstrap)?;
+        component
+            .files
+            .iter()
+            .map(|file| {
+                let stored = entry
+                    .files
+                    .iter()
+                    .find(|stored| stored.source.as_str() == file.source)
+                    .ok_or_else(|| InstanceError::MissingComponentFile {
+                        component: component.id.clone(),
+                        path: file.source.clone(),
+                    })?;
+                Ok((
+                    RelPath::new(&file.path)?,
+                    Claim {
+                        module: Name::new(&format!("component-{}", component.id))?,
+                        blob: stored.blob,
+                    },
+                ))
+            })
+            .collect()
+    }
+
     /// Sets a profile-specific compatibility target.
     ///
     /// # Errors
@@ -853,6 +970,9 @@ impl Instance {
                     });
                 }
             }
+        }
+        for (path, claim) in self.bootstrap_claims(&target.loader, &selection.components)? {
+            claims.entry(path).or_default().push(claim);
         }
         let target = settle_claims(claims)?;
 
@@ -1328,6 +1448,36 @@ pub enum InstanceError {
         module: Name,
     },
 
+    /// The plan does not declare this component.
+    #[error("plan does not declare component {0:?}")]
+    UnknownComponent(String),
+
+    /// The selected loader does not use this component.
+    #[error("loader {loader:?} does not use component {component:?}")]
+    UnexpectedComponent {
+        /// The selected loader.
+        loader: String,
+        /// The supplied component.
+        component: String,
+    },
+
+    /// A component's supplied version or digest differs from the reviewed plan declaration.
+    #[error("component {0:?} does not match its reviewed version or SHA-512")]
+    ComponentMismatch(String),
+
+    /// The loader bootstrap has not been supplied for this profile.
+    #[error("loader bootstrap component {0:?} is not installed for this profile")]
+    MissingComponent(String),
+
+    /// A verified component bundle omitted a file its plan declaration requires.
+    #[error("component {component:?} is missing declared file {path:?}")]
+    MissingComponentFile {
+        /// The component.
+        component: String,
+        /// The bundle path.
+        path: String,
+    },
+
     /// Mods claim the same paths with different contents.
     #[error("{} path(s) are claimed by more than one mod with different contents", .0.len())]
     Conflicts(Vec<Conflict>),
@@ -1523,8 +1673,8 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        Deployed, DeploymentState, Instance, InstanceError, ModEntry, Name, Profile, StoredFile,
-        write_toml,
+        ComponentEntry, Deployed, DeploymentState, Instance, InstanceError, ModEntry, Name,
+        Profile, StoredFile, write_toml,
     };
     use crate::config::Home;
 
@@ -1650,6 +1800,44 @@ flatten = true
         assert_eq!(
             Name::sanitize("Iris Shaders (1.8)").unwrap().as_str(),
             "Iris-Shaders--1.8-"
+        );
+    }
+
+    #[test]
+    fn deploys_a_pinned_loader_bootstrap_component() {
+        let hash = "0".repeat(128);
+        let plan = PLAN.replace("bootstrap = \"none\"", "bootstrap = \"mc.fabric\"")
+            + &format!(
+                "\n[[components]]\nid = \"mc.fabric\"\nversion = \"0.16.0\"\nsha512 = \"{hash}\"\nfiles = [{{ source = \"profile.json\", path = \"versions/fabric/fabric.json\" }}]\n"
+            );
+        let fixture = Fixture::with_plan(&plan);
+        let mut instance = fixture.create();
+        let blob = instance
+            .applier
+            .store()
+            .put_bytes(b"launcher profile")
+            .unwrap();
+        instance
+            .install_component(
+                &name("default"),
+                "mc.fabric",
+                ComponentEntry {
+                    version: "0.16.0".to_owned(),
+                    sha512: hash,
+                    files: vec![StoredFile {
+                        source: RelPath::new("profile.json").unwrap(),
+                        blob,
+                    }],
+                },
+            )
+            .unwrap();
+
+        instance
+            .deploy(&name("default"), &mut NoopObserver)
+            .unwrap();
+        assert_eq!(
+            fs::read(fixture.game.join("versions/fabric/fabric.json")).unwrap(),
+            b"launcher profile"
         );
     }
 
@@ -1927,6 +2115,7 @@ flatten = true
         let blob = instance.applier.store().put_bytes(b"texture").unwrap();
         let profile = Profile {
             target: None,
+            components: BTreeMap::new(),
             mods: BTreeMap::from([(
                 name("pack"),
                 ModEntry {
@@ -2016,6 +2205,7 @@ flatten = true
         };
         let profile = Profile {
             target: None,
+            components: BTreeMap::new(),
             mods: BTreeMap::from([
                 (name("first"), entry("a/common.bin", first)),
                 (name("second"), entry("b/common.bin", second)),
