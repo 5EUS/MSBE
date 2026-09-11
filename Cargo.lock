@@ -366,6 +366,7 @@ dependencies = [
  "msbe-fsops",
  "msbe-http",
  "msbe-providers",
+ "msbe-rpc-schema",
  "serde",
  "serde_json",
  "sha2",
@@ -391,6 +392,12 @@ dependencies = [
 [[package]]
 name = "msbe-daemon"
 version = "0.0.0"
+dependencies = [
+ "msbe-cli",
+ "msbe-rpc-schema",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "msbe-fsops"
@@ -442,6 +449,10 @@ dependencies = [
 [[package]]
 name = "msbe-rpc-schema"
 version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "once_cell"

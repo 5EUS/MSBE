@@ -26,6 +26,7 @@ msbe-core            = { path = "../msbe-core" }
 msbe-fsops           = { path = "../msbe-fsops" }
 msbe-http            = { path = "../msbe-http" }
 msbe-providers       = { path = "../msbe-providers" }
+msbe-rpc-schema      = { path = "../msbe-rpc-schema" }
 serde.workspace      = true
 serde_json.workspace = true
 tempfile.workspace   = true

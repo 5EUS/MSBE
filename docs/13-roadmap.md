@@ -50,13 +50,13 @@ Throwaway spikes with written conclusions, answering what could invalidate the
 architecture before anything is built on it. A time-boxed first pass, using primary docs
 plus live evidence from a real machine, settled most of it and changed three designs.
 
-| Spike | Status | Outcome |
-|---|---|---|
-| Avalonia 12 + NativeAOT + `CommunityToolkit.Mvvm` | publish **proven**; launch pending | 0 trim/AOT warnings; 33.4 MB shippable on linux-x64 |
-| wasmtime host | **supported by docs**; not executed | denial is structural: unlinked imports fail instantiation |
-| Filesystem probes | **proven** on ext4 and NTFS | → store is **per volume**; hardlink is the Linux default |
-| Proton reality check | **confirmed**, and largely avoidable | → DLL overrides go in the **prefix registry**, not `localconfig.vdf` |
-| CEF hosting | **better than planned** | → `msbe-browser` is **Rust on `cef-rs`** |
+| Spike                                             | Status                               | Outcome                                                              |
+| ------------------------------------------------- | ------------------------------------ | -------------------------------------------------------------------- |
+| Avalonia 12 + NativeAOT + `CommunityToolkit.Mvvm` | publish **proven**; launch pending   | 0 trim/AOT warnings; 33.4 MB shippable on linux-x64                  |
+| wasmtime host                                     | **supported by docs**; not executed  | denial is structural: unlinked imports fail instantiation            |
+| Filesystem probes                                 | **proven** on ext4 and NTFS          | → store is **per volume**; hardlink is the Linux default             |
+| Proton reality check                              | **confirmed**, and largely avoidable | → DLL overrides go in the **prefix registry**, not `localconfig.vdf` |
+| CEF hosting                                       | **better than planned**              | → `msbe-browser` is **Rust on `cef-rs`**                             |
 
 **Decision: GO on the C# UI**, conditional on the AOT binary launching. Fallback decided: a
 self-contained non-AOT publish of the same app. A Rust-native UI is no longer carried as a
@@ -69,7 +69,7 @@ loader installed by hand through the Proton registry route; a `cef-rs` build tha
 `nxm://`.
 
 **Exit criterion**: a written go/no-go on the C# UI, with the fallback decided rather than
-deferred. *Written. The go is conditional on the first remaining item.*
+deferred. _Written. The go is conditional on the first remaining item._
 
 ## M1 — Core spine + Minecraft, easy path (6–8 weeks)
 
@@ -89,16 +89,16 @@ vanilla — on Linux, Windows and macOS, entirely from the CLI.
 **Status (2026-09-11): local files, direct URLs and Modrinth work end to end.** Tested on Linux, including
 live against api.modrinth.com; the crates that do not link `ring` are lint-clean for Windows:
 
-| Piece | State |
-|---|---|
-| `msbe-fsops`: store shard, capability probe, journaled applier, rollback, crash recovery, verify-before-link with store repair, read-only-safe replacement, empty-directory removal | done, with crash injection at every checkpoint; the Windows path is tested with simulated Windows semantics but has not run on Windows |
-| `msbe-plan-schema` and the resolver: loaders, extract and place steps, exclusion report, `[deploy] mutable` paths | done |
-| `msbe-archive`: bare-file and `.zip` ingest, refusing unsafe paths, symlinks, bombs, oversized files and case collisions | done; a deterministic mutation suite (every truncation and byte flip, plus random mutations, plus lying size headers) runs on stable, cargo-fuzz targets not yet |
-| `msbe-core::instance`: profiles, diff-based deploy (which is how profiles switch), conflict detection, verify, rollback, purge, provenance, mutable files that keep runtime changes, removal of directories MSBE created once nothing needs them, and a two-phase commit with the journal | done |
-| `msbe-providers`: direct https URLs with pinned checksums; Modrinth search, version selection by loader (including provided APIs) and game version, size- and SHA-512-verified HTTPS downloads, a required-dependency walk, and update checks through the bulk hash endpoints that keep each mod on its release channel | done; the walk is not a solver |
-| `msbe-http`: HTTPS over rustls and `ring`, roots from the OS trust store, https only (redirects included), an identifying User-Agent, rate-limit reporting | done |
-| `msbe-cli`: `instance add\|set\|list`, `profile`, `add` (files, archives, `https://` URLs, `modrinth:<project>[@version]`, `--with-deps`), `search`, `update [<mod>...] [--dry-run]`, `remove`, `deploy [--dry-run]`, `rollback`, `purge`, `verify`, `status`, `--format json`, exit codes 0/1/2/4/7 | done; end-to-end tests purge to byte-identical vanilla |
-| `plans/minecraft/plan.toml` for Fabric, Quilt and NeoForge | done |
+| Piece                                                                                                                                                                                                                                                                                                                   | State                                                                                                                                                            |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `msbe-fsops`: store shard, capability probe, journaled applier, rollback, crash recovery, verify-before-link with store repair, read-only-safe replacement, empty-directory removal                                                                                                                                     | done, with crash injection at every checkpoint; the Windows path is tested with simulated Windows semantics but has not run on Windows                           |
+| `msbe-plan-schema` and the resolver: loaders, extract and place steps, exclusion report, `[deploy] mutable` paths                                                                                                                                                                                                       | done                                                                                                                                                             |
+| `msbe-archive`: bare-file and `.zip` ingest, refusing unsafe paths, symlinks, bombs, oversized files and case collisions                                                                                                                                                                                                | done; a deterministic mutation suite (every truncation and byte flip, plus random mutations, plus lying size headers) runs on stable, cargo-fuzz targets not yet |
+| `msbe-core::instance`: profiles, diff-based deploy (which is how profiles switch), conflict detection, verify, rollback, purge, provenance, mutable files that keep runtime changes, removal of directories MSBE created once nothing needs them, and a two-phase commit with the journal                               | done                                                                                                                                                             |
+| `msbe-providers`: direct https URLs with pinned checksums; Modrinth search, version selection by loader (including provided APIs) and game version, size- and SHA-512-verified HTTPS downloads, a required-dependency walk, and update checks through the bulk hash endpoints that keep each mod on its release channel | done; the walk is not a solver                                                                                                                                   |
+| `msbe-http`: HTTPS over rustls and `ring`, roots from the OS trust store, https only (redirects included), an identifying User-Agent, rate-limit reporting                                                                                                                                                              | done                                                                                                                                                             |
+| `msbe-cli`: `instance add\|set\|list`, `profile`, `add` (files, archives, `https://` URLs, `modrinth:<project>[@version]`, `--with-deps`), `search`, `update [<mod>...] [--dry-run]`, `remove`, `deploy [--dry-run]`, `rollback`, `purge`, `verify`, `status`, `--format json`, exit codes 0/1/2/4/7                    | done; end-to-end tests purge to byte-identical vanilla                                                                                                           |
+| `plans/minecraft/plan.toml` for Fabric, Quilt and NeoForge                                                                                                                                                                                                                                                              | done                                                                                                                                                             |
 
 Still open in M1:
 
@@ -106,7 +106,9 @@ Still open in M1:
   is now handled (`docs/04` §4.2), and removal already works through the standard library.
   The tests simulate Windows semantics, but the suite has not yet run on Windows itself.
 - **Fuzz targets** for `msbe-archive` (a stable-toolchain mutation suite covers the gap for
-  now), **macOS** runs, and the **daemon**.
+  now), **macOS** runs, and a **Windows named-pipe daemon transport**. The Unix daemon is
+  available now: it serializes `command.run` requests over a mode-0600 local socket, and the
+  CLI launches and uses it by default.
 - **State storage.** Profiles and deployment history are TOML and JSON files. SQLite is
   deferred until the daemon needs an index.
 
