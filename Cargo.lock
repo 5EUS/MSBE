@@ -133,6 +133,12 @@ version = "0.0.0"
 [[package]]
 name = "msbe-core"
 version = "0.0.0"
+dependencies = [
+ "msbe-fsops",
+ "msbe-plan-schema",
+ "serde",
+ "thiserror",
+]
 
 [[package]]
 name = "msbe-daemon"

@@ -14,3 +14,9 @@ publish.workspace      = true
 
 [lints]
 workspace = true
+
+[dependencies]
+msbe-fsops       = { path = "../msbe-fsops" }
+msbe-plan-schema = { path = "../msbe-plan-schema" }
+serde.workspace  = true
+thiserror.workspace = true
