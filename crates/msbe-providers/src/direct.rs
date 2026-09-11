@@ -14,7 +14,7 @@ use msbe_fsops::RelPath;
 use thiserror::Error;
 
 use crate::{
-    artifact::{ArtifactError, download as download_artifact},
+    acquisition::{AcquisitionError, ArtifactDescriptor, acquire},
     http::{HttpClient, HttpError},
 };
 
@@ -98,29 +98,26 @@ pub fn download(
     source: &DirectSource,
     dir: &Path,
 ) -> Result<Downloaded, DirectError> {
-    let path = dir.join(&source.file_name);
-    let artifact = download_artifact(http, &source.url, &path, DOWNLOAD_LIMIT)?;
-
-    let sha512 = artifact.sha512;
-    let pinned = match &source.checksum {
-        Some(Checksum::Sha256(expected)) => Some(("SHA-256", expected, artifact.sha256)),
-        Some(Checksum::Sha512(expected)) => Some(("SHA-512", expected, sha512.clone())),
-        None => None,
+    let descriptor = ArtifactDescriptor {
+        url: source.url.clone(),
+        file_name: source.file_name.clone(),
+        limit: DOWNLOAD_LIMIT,
+        size: None,
+        sha256: match &source.checksum {
+            Some(Checksum::Sha256(digest)) => Some(digest.clone()),
+            Some(Checksum::Sha512(_)) | None => None,
+        },
+        sha512: match &source.checksum {
+            Some(Checksum::Sha512(digest)) => Some(digest.clone()),
+            Some(Checksum::Sha256(_)) | None => None,
+        },
     };
-    if let Some((algorithm, expected, actual)) = pinned
-        && *expected != actual
-    {
-        return Err(DirectError::ChecksumMismatch {
-            file: source.file_name.clone(),
-            algorithm,
-            expected: expected.clone(),
-            actual,
-        });
-    }
+    let artifact = acquire(http, &descriptor, dir)?;
+
     Ok(Downloaded {
-        path,
-        sha512,
-        size: artifact.bytes,
+        path: artifact.path,
+        sha512: artifact.sha512,
+        size: artifact.size,
     })
 }
 
@@ -202,11 +199,27 @@ pub enum DirectError {
     },
 }
 
-impl From<ArtifactError> for DirectError {
-    fn from(error: ArtifactError) -> Self {
+impl From<AcquisitionError> for DirectError {
+    fn from(error: AcquisitionError) -> Self {
         match error {
-            ArtifactError::Http(error) => Self::Http(error),
-            ArtifactError::Io { path, source } => Self::Io { path, source },
+            AcquisitionError::Transfer(error) => match error {
+                crate::artifact::ArtifactError::Http(error) => Self::Http(error),
+                crate::artifact::ArtifactError::Io { path, source } => Self::Io { path, source },
+            },
+            AcquisitionError::InsecureUrl(url) => Self::Insecure(url),
+            AcquisitionError::UnsafeFileName(_) => unreachable!("DirectSource validates names"),
+            AcquisitionError::SizeMismatch { .. } => unreachable!("direct URLs publish no size"),
+            AcquisitionError::HashMismatch {
+                file,
+                algorithm,
+                expected,
+                actual,
+            } => Self::ChecksumMismatch {
+                file,
+                algorithm,
+                expected,
+                actual,
+            },
         }
     }
 }

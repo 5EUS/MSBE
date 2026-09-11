@@ -10,14 +10,13 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use msbe_fsops::RelPath;
 use msbe_plan_schema::Side;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    EndpointError, JsonEndpoint,
-    artifact::{ArtifactError, download as download_artifact},
+    Availability, EndpointError, JsonEndpoint, Target,
+    acquisition::{AcquisitionError, ArtifactDescriptor, acquire},
     http::{HttpClient, HttpError},
 };
 
@@ -29,27 +28,6 @@ const METADATA_LIMIT: u64 = 16 << 20;
 
 /// The most search results Modrinth returns in one request.
 const MAX_SEARCH_LIMIT: u8 = 100;
-
-/// What a mod must be compatible with.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Target {
-    /// The selected loader id.
-    pub loader: String,
-    /// Virtual loader APIs satisfied by the selected loader.
-    pub provides: Vec<String>,
-    /// The selected loader version, when the game or loader exposes one.
-    pub loader_version: Option<String>,
-    /// The game version, such as `1.21.1`.
-    pub game_version: String,
-    /// Whether this target is a player client or dedicated server.
-    pub side: Side,
-}
-
-impl Target {
-    fn loader_ids(&self) -> impl Iterator<Item = &str> {
-        std::iter::once(self.loader.as_str()).chain(self.provides.iter().map(String::as_str))
-    }
-}
 
 /// A request for a project, optionally pinned to a version.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,37 +77,6 @@ pub struct Project {
     /// Whether the project supports dedicated servers.
     #[serde(default)]
     pub server_side: Availability,
-}
-
-impl Project {
-    fn supports(&self, side: Side) -> bool {
-        match side {
-            Side::Client => self.client_side.supports(),
-            Side::Server => self.server_side.supports(),
-        }
-    }
-}
-
-/// Whether a provider declares a project available on one game side.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Availability {
-    /// The project is required on this side.
-    Required,
-    /// The project may run on this side.
-    Optional,
-    /// The project cannot run on this side.
-    Unsupported,
-    /// The provider did not declare the project's availability.
-    #[default]
-    #[serde(other)]
-    Unknown,
-}
-
-impl Availability {
-    const fn supports(self) -> bool {
-        matches!(self, Self::Required | Self::Optional)
-    }
 }
 
 /// One published version of a project.
@@ -254,15 +201,6 @@ pub struct SearchHit {
     /// Whether the project supports dedicated servers.
     #[serde(default)]
     pub server_side: Availability,
-}
-
-impl SearchHit {
-    fn supports(&self, side: Side) -> bool {
-        match side {
-            Side::Client => self.client_side.supports(),
-            Side::Server => self.server_side.supports(),
-        }
-    }
 }
 
 #[derive(Deserialize)]
@@ -408,7 +346,7 @@ impl<'a> Modrinth<'a> {
         Ok(results
             .hits
             .into_iter()
-            .filter(|hit| hit.supports(target.side))
+            .filter(|hit| target.supports_side(hit.client_side, hit.server_side))
             .collect())
     }
 
@@ -461,7 +399,7 @@ impl<'a> Modrinth<'a> {
     /// Returns [`ModrinthError::NoMatchingVersion`] if nothing compatible matches.
     pub fn select(&self, spec: &Spec, target: &Target) -> Result<Selection, ModrinthError> {
         let project = self.project(&spec.project)?;
-        if !project.supports(target.side) {
+        if !target.supports_side(project.client_side, project.server_side) {
             return Err(ModrinthError::UnsupportedSide {
                 project: project.slug,
                 side: target.side,
@@ -555,32 +493,15 @@ impl<'a> Modrinth<'a> {
     ///
     /// Returns [`ModrinthError`] for an unsafe URL or name, a transfer failure, or a mismatch.
     pub fn download(&self, file: &VersionFile, dir: &Path) -> Result<PathBuf, ModrinthError> {
-        if !file.url.starts_with("https://") {
-            return Err(ModrinthError::InsecureUrl(file.url.clone()));
-        }
-        let name = RelPath::new(&file.filename)
-            .ok()
-            .filter(|name| !name.as_str().contains('/'))
-            .ok_or_else(|| ModrinthError::UnsafeFileName(file.filename.clone()))?;
-        let path = dir.join(name.as_str());
-        let artifact = download_artifact(self.endpoint.http(), &file.url, &path, file.size)?;
-
-        if artifact.bytes != file.size {
-            return Err(ModrinthError::SizeMismatch {
-                file: file.filename.clone(),
-                expected: file.size,
-                actual: artifact.bytes,
-            });
-        }
-        let actual = artifact.sha512;
-        if !actual.eq_ignore_ascii_case(&file.hashes.sha512) {
-            return Err(ModrinthError::HashMismatch {
-                file: file.filename.clone(),
-                expected: file.hashes.sha512.clone(),
-                actual,
-            });
-        }
-        Ok(path)
+        let descriptor = ArtifactDescriptor {
+            url: file.url.clone(),
+            file_name: file.filename.clone(),
+            limit: file.size,
+            size: Some(file.size),
+            sha256: None,
+            sha512: Some(file.hashes.sha512.clone()),
+        };
+        Ok(acquire(self.endpoint.http(), &descriptor, dir)?.path)
     }
 
     /// Checks installed files, identified by the SHA-512 Modrinth published for them, for
@@ -810,11 +731,35 @@ pub enum ModrinthError {
     },
 }
 
-impl From<ArtifactError> for ModrinthError {
-    fn from(error: ArtifactError) -> Self {
+impl From<AcquisitionError> for ModrinthError {
+    fn from(error: AcquisitionError) -> Self {
         match error {
-            ArtifactError::Http(error) => Self::Http(error),
-            ArtifactError::Io { path, source } => Self::Io { path, source },
+            AcquisitionError::Transfer(error) => match error {
+                crate::artifact::ArtifactError::Http(error) => Self::Http(error),
+                crate::artifact::ArtifactError::Io { path, source } => Self::Io { path, source },
+            },
+            AcquisitionError::InsecureUrl(url) => Self::InsecureUrl(url),
+            AcquisitionError::UnsafeFileName(file) => Self::UnsafeFileName(file),
+            AcquisitionError::SizeMismatch {
+                file,
+                expected,
+                actual,
+            } => Self::SizeMismatch {
+                file,
+                expected,
+                actual,
+            },
+            AcquisitionError::HashMismatch {
+                file,
+                algorithm: "SHA-512",
+                expected,
+                actual,
+            } => Self::HashMismatch {
+                file,
+                expected,
+                actual,
+            },
+            AcquisitionError::HashMismatch { .. } => unreachable!("Modrinth verifies SHA-512"),
         }
     }
 }

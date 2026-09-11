@@ -23,9 +23,10 @@ use msbe_fsops::{Backend, NoopObserver, Operation, RelPath};
 use msbe_plan_schema::Side;
 use msbe_providers::{
     Catalog, HttpClient, HttpError, MODRINTH, ProviderRegistry, RegistryError, ResolvedSource,
+    Target,
     direct::{self, DirectError, DirectSource},
     modrinth::{
-        InstallPlan, Modrinth, ModrinthError, Requirement, Target, Update, UpdateCheck, Version,
+        InstallPlan, Modrinth, ModrinthError, Requirement, Update, UpdateCheck, Version,
         VersionFile,
     },
 };
@@ -946,9 +947,13 @@ fn search(
     let profile = Name::new(profile)?;
     let target = target(&opened, &profile)?;
     let client = (console.connect)()?;
-    let hits = ProviderRegistry::new(providers)
-        .modrinth(client.as_ref())?
-        .search(&query.join(" "), &target, limit)?;
+    let hits = ProviderRegistry::new(providers).search(
+        MODRINTH,
+        client.as_ref(),
+        &query.join(" "),
+        &target,
+        limit,
+    )?;
     console.emit(&hits, |out, hits| {
         if hits.is_empty() {
             return writeln!(out, "No compatible mods found.");
@@ -956,8 +961,8 @@ fn search(
         for hit in hits {
             writeln!(
                 out,
-                "modrinth:{:<28} {} ({} downloads)",
-                hit.slug, hit.title, hit.downloads
+                "{}:{:<28} {} ({} downloads)",
+                hit.provider, hit.reference, hit.title, hit.downloads
             )?;
             let summary: String = hit.description.chars().take(96).collect();
             writeln!(out, "    {summary}")?;

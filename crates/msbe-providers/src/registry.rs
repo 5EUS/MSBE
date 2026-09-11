@@ -3,7 +3,7 @@
 use thiserror::Error;
 
 use crate::{
-    Catalog, HttpClient, ManifestError, Provider,
+    Catalog, HttpClient, ManifestError, Provider, SearchResult, Target,
     direct::DirectSource,
     modrinth::{Modrinth, Spec},
 };
@@ -63,6 +63,38 @@ impl<'a> ProviderRegistry<'a> {
         Ok(Modrinth::with_base(http, api_base))
     }
 
+    /// Searches one reviewed provider and returns provider-neutral project records.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RegistryError`] when the provider is unavailable, prohibited by policy, does
+    /// not support search, or its reviewed adapter cannot complete the request.
+    pub fn search(
+        &self,
+        provider_id: &str,
+        http: &'a dyn HttpClient,
+        query: &str,
+        target: &Target,
+        limit: u8,
+    ) -> Result<Vec<SearchResult>, RegistryError> {
+        match provider_id {
+            MODRINTH => Ok(self
+                .modrinth(http)?
+                .search(query, target, limit)?
+                .into_iter()
+                .map(|hit| SearchResult {
+                    provider: MODRINTH.to_owned(),
+                    project: hit.project_id,
+                    reference: hit.slug,
+                    title: hit.title,
+                    description: hit.description,
+                    downloads: hit.downloads,
+                })
+                .collect()),
+            _ => Err(RegistryError::SearchUnavailable(provider_id.to_owned())),
+        }
+    }
+
     fn authorize(provider: &Provider) -> Result<(), RegistryError> {
         if provider.policy.requires_auth {
             return Err(RegistryError::AuthenticationRequired(provider.id.clone()));
@@ -106,6 +138,9 @@ pub enum RegistryError {
     /// The manifest names a provider without a reviewed adapter in this MSBE release.
     #[error("provider {0:?} is declared but has no reviewed adapter in this MSBE release")]
     UnavailableAdapter(String),
+    /// The reviewed adapter does not expose provider search.
+    #[error("provider {0:?} does not support search")]
+    SearchUnavailable(String),
     /// The provider requires an authentication flow which M1 does not implement.
     #[error("provider {0:?} requires authentication, which is not implemented in M1")]
     AuthenticationRequired(String),
@@ -129,8 +164,34 @@ pub enum RegistryError {
 
 #[cfg(test)]
 mod tests {
-    use super::{ProviderRegistry, RegistryError, ResolvedSource};
-    use crate::Catalog;
+    use std::io::Write;
+
+    use msbe_plan_schema::Side;
+    use serde_json::json;
+
+    use super::{MODRINTH, ProviderRegistry, RegistryError, ResolvedSource};
+    use crate::{Catalog, HttpClient, HttpError, Target};
+
+    struct SearchHttp;
+
+    impl HttpClient for SearchHttp {
+        fn get(&self, _: &str, _: &[(&str, &str)], _: u64) -> Result<Vec<u8>, HttpError> {
+            Ok(serde_json::to_vec(&json!({ "hits": [{
+                "project_id": "AANobbMI", "slug": "sodium", "title": "Sodium",
+                "description": "A rendering engine", "downloads": 42,
+                "client_side": "required", "server_side": "required"
+            }] }))
+            .unwrap())
+        }
+
+        fn post_json(&self, _: &str, _: &[u8], _: u64) -> Result<Vec<u8>, HttpError> {
+            unreachable!("search never posts")
+        }
+
+        fn download(&self, _: &str, _: &mut dyn Write, _: u64) -> Result<u64, HttpError> {
+            unreachable!("search never downloads")
+        }
+    }
 
     const EXAMPLE: &str = r#"
         schema = 1
@@ -205,5 +266,30 @@ mod tests {
                 _
             )))
         ));
+    }
+
+    #[test]
+    fn search_returns_provider_neutral_records() -> Result<(), RegistryError> {
+        let catalog = Catalog::builtins()?;
+        let results = ProviderRegistry::new(&catalog).search(
+            MODRINTH,
+            &SearchHttp,
+            "rendering",
+            &Target {
+                loader: "fabric".to_owned(),
+                provides: Vec::new(),
+                loader_version: None,
+                game_version: "1.21.1".to_owned(),
+                side: Side::Client,
+            },
+            10,
+        )?;
+        let [result] = results.as_slice() else {
+            panic!("expected one result, got {results:?}");
+        };
+        assert_eq!(result.provider, MODRINTH);
+        assert_eq!(result.project, "AANobbMI");
+        assert_eq!(result.reference, "sodium");
+        Ok(())
     }
 }
