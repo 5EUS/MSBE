@@ -65,7 +65,7 @@ fn merge_toml(layers: &[&[u8]]) -> Result<Vec<u8>, ConfigError> {
         );
     }
     toml::to_string_pretty(&merged)
-        .map(|text| text.into_bytes())
+        .map(String::into_bytes)
         .map_err(ConfigError::TomlSerialize)
 }
 
@@ -101,11 +101,14 @@ fn merge_properties(layers: &[&[u8]]) -> Result<Vec<u8>, ConfigError> {
             merged.insert(key.trim().to_owned(), value.trim().to_owned());
         }
     }
-    Ok(merged
-        .into_iter()
-        .map(|(key, value)| format!("{key}={value}\n"))
-        .collect::<String>()
-        .into_bytes())
+    let mut output = String::new();
+    for (key, value) in merged {
+        output.push_str(&key);
+        output.push('=');
+        output.push_str(&value);
+        output.push('\n');
+    }
+    Ok(output.into_bytes())
 }
 
 /// Why structured configuration merging failed.

@@ -9,7 +9,6 @@
 pub mod config;
 pub mod instance;
 pub mod solver;
-
 use msbe_fsops::{Applier, Digest, Observer, Operation, RelPath, Result as FsResult, TxnReport};
 use msbe_plan_schema::{ExtractStep, Hygiene, Loader, Plan, Step, ValidationError};
 use serde::{Deserialize, Serialize};
@@ -121,10 +120,30 @@ pub fn resolve(
             })?;
 
         for file in &files {
+            if !place.include.is_empty()
+                && !place
+                    .include
+                    .iter()
+                    .any(|pattern| matches_glob(pattern, file.source.as_str()))
+            {
+                continue;
+            }
+            let source = place.strip_prefix.as_deref().map_or_else(
+                || Ok(file.source.as_str()),
+                |prefix| {
+                    file.source
+                        .as_str()
+                        .strip_prefix(&format!("{prefix}/"))
+                        .ok_or_else(|| ResolveError::OutsidePlacementPrefix {
+                            path: file.source.clone(),
+                            prefix: prefix.to_owned(),
+                        })
+                },
+            )?;
             let source = if place.flatten {
-                file.source.file_name()
+                source.rsplit('/').next().unwrap_or(source)
             } else {
-                file.source.as_str()
+                source
             };
             let path = RelPath::new(&format!("{}/{}", target.path, source))?;
             let mutable = file.mutable
@@ -316,6 +335,14 @@ pub enum ResolveError {
         /// The missing target name.
         target: String,
     },
+    /// A routed source did not start with its declared stripped prefix.
+    #[error("source {path} is not under placement prefix {prefix:?}")]
+    OutsidePlacementPrefix {
+        /// The artifact-relative source path.
+        path: RelPath,
+        /// The required leading directory.
+        prefix: String,
+    },
     /// Constructing a final instance-relative destination failed.
     #[error(transparent)]
     InvalidPath(#[from] msbe_fsops::Error),
@@ -351,6 +378,8 @@ mod tests {
             components: Vec::new(),
             steps: vec![Step::Place(PlaceStep {
                 into: "@loader.targets.mods".to_owned(),
+                include: Vec::new(),
+                strip_prefix: None,
                 flatten,
             })],
         }
@@ -424,6 +453,8 @@ mod tests {
         }));
         plan.steps.push(Step::Place(PlaceStep {
             into: "@loader.targets.mods".to_owned(),
+            include: Vec::new(),
+            strip_prefix: None,
             flatten: true,
         }));
 

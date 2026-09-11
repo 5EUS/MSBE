@@ -355,6 +355,12 @@ pub enum Hygiene {
 pub struct PlaceStep {
     /// A symbolic deployment target such as `@loader.targets.mods`.
     pub into: String,
+    /// Source glob patterns eligible for this target. Empty selects every source file.
+    #[serde(default)]
+    pub include: Vec<String>,
+    /// A source-directory prefix removed before placement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strip_prefix: Option<String>,
     /// Whether the source tree's directory structure is discarded.
     #[serde(default)]
     pub flatten: bool,
@@ -367,6 +373,18 @@ impl PlaceStep {
         };
         if name.is_empty() || name.contains(['/', '\\', ':']) {
             return Err(ValidationError::InvalidTargetReference(self.into.clone()));
+        }
+        if self.include.iter().any(String::is_empty) {
+            return Err(ValidationError::EmptyPattern);
+        }
+        if self
+            .strip_prefix
+            .as_deref()
+            .is_some_and(|prefix| !is_relative_path(prefix))
+        {
+            return Err(ValidationError::InvalidPath(
+                self.strip_prefix.clone().unwrap_or_default(),
+            ));
         }
         Ok(())
     }
@@ -466,6 +484,8 @@ mod tests {
                 }),
                 Step::Place(PlaceStep {
                     into: "@loader.targets.mods".to_owned(),
+                    include: Vec::new(),
+                    strip_prefix: None,
                     flatten: true,
                 }),
             ],
@@ -532,6 +552,8 @@ mod tests {
         plan.steps.clear();
         plan.steps.push(Step::Place(PlaceStep {
             into: "mods".to_owned(),
+            include: Vec::new(),
+            strip_prefix: None,
             flatten: false,
         }));
         assert!(plan.validate().is_err());

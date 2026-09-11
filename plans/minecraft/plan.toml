@@ -13,7 +13,12 @@ version = "0.1.0"
 id        = "fabric"
 bootstrap = "mc.fabric-installer"
 sides     = ["client", "server"]
-targets   = [{ name = "mods", path = "mods" }]
+targets   = [
+  { name = "mods", path = "mods" },
+  { name = "resourcepacks", path = "resourcepacks" },
+  { name = "shaderpacks", path = "shaderpacks" },
+  { name = "datapacks", path = "datapacks" },
+]
 
 [[loaders]]
 id        = "quilt"
@@ -21,13 +26,23 @@ id        = "quilt"
 provides  = ["fabric"]
 bootstrap = "mc.quilt-installer"
 sides     = ["client", "server"]
-targets   = [{ name = "mods", path = "mods" }]
+targets   = [
+  { name = "mods", path = "mods" },
+  { name = "resourcepacks", path = "resourcepacks" },
+  { name = "shaderpacks", path = "shaderpacks" },
+  { name = "datapacks", path = "datapacks" },
+]
 
 [[loaders]]
 id        = "neoforge"
 bootstrap = "mc.neoforge-installer"
 sides     = ["client", "server"]
-targets   = [{ name = "mods", path = "mods" }]
+targets   = [
+  { name = "mods", path = "mods" },
+  { name = "resourcepacks", path = "resourcepacks" },
+  { name = "shaderpacks", path = "shaderpacks" },
+  { name = "datapacks", path = "datapacks" },
+]
 
 [[steps]]
 type = "extract"
