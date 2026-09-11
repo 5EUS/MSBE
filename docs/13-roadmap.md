@@ -119,10 +119,10 @@ conflicting version requirements between dependencies. The M2 PubGrub solver rep
 
 Where the domain gets hard, still without touching credentials.
 
-- **Target pre-filter** — `{ game_version, loader, loader_version, side }` applied before
-  version solving, with loader-level `provides` so a Quilt target accepts Fabric mods.
-  This is the Forge/NeoForge/Fabric/Quilt split, which is the defining structural fact of
-  Minecraft modding and the reason the game is worth building against first.
+- **Target pre-filter** — **implemented**: `{ game_version, loader, loader_version, side }`
+  is applied before version selection, with loader-level `provides` so a Quilt target accepts
+  Fabric mods. This is the Forge/NeoForge/Fabric/Quilt split, which is the defining structural
+  fact of Minecraft modding and the reason the game is worth building against first.
 - **PubGrub solver** with Fabric/NeoForge version-range semantics, reading dependency
   metadata from `fabric.mod.json` and `neoforge.mods.toml`.
 - **Virtual packages** — Fabric API forks and reimplementations, `replaces` for abandoned

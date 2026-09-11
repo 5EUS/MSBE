@@ -30,7 +30,7 @@ use msbe_fsops::{
     Applier, Backend, Capabilities, Digest, Journal, Observer, Operation, RelPath, Store, TxnId,
     atomic,
 };
-use msbe_plan_schema::Plan;
+use msbe_plan_schema::{Plan, Side};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
 
@@ -46,6 +46,10 @@ const RESERVED_NAMES: [&str; 22] = [
 ];
 
 static NOTHING_DEPLOYED: BTreeMap<RelPath, Digest> = BTreeMap::new();
+
+const fn default_side() -> Side {
+    Side::Client
+}
 
 /// A validated name for an instance, profile or mod.
 ///
@@ -133,6 +137,12 @@ pub struct InstanceConfig {
     pub root: PathBuf,
     /// The loader this instance deploys with.
     pub loader: String,
+    /// The selected loader version, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loader_version: Option<String>,
+    /// Whether profiles target a player client or dedicated server.
+    #[serde(default = "default_side")]
+    pub side: Side,
     /// The game version, used to choose compatible versions from providers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub game_version: Option<String>,
@@ -144,9 +154,26 @@ pub struct InstanceConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Profile {
+    /// The compatibility target for this profile. Profiles written before M2 inherit the
+    /// instance target until explicitly configured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<ProfileTarget>,
     /// Mods by name.
     #[serde(default)]
     pub mods: BTreeMap<Name, ModEntry>,
+}
+
+/// The loader-specific part of a profile compatibility target.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProfileTarget {
+    /// The loader selected by this profile.
+    pub loader: String,
+    /// The selected loader version, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loader_version: Option<String>,
+    /// Whether this profile targets a player client or dedicated server.
+    pub side: Side,
 }
 
 /// One mod in a profile: an artifact whose files are already in the store.
@@ -213,6 +240,10 @@ pub struct NewInstance<'a> {
     pub plan: &'a Path,
     /// The loader to deploy with, as declared by the plan.
     pub loader: &'a str,
+    /// The selected loader version, when known.
+    pub loader_version: Option<&'a str>,
+    /// Whether profiles target a player client or dedicated server.
+    pub side: Side,
     /// The game version, which providers need to choose compatible versions.
     pub game_version: Option<&'a str>,
     /// An explicit store location. Defaults to `.msbe/store` beside the game directory.
@@ -403,12 +434,16 @@ impl Instance {
         }
         let plan_text = fs::read_to_string(new.plan).map_err(io_error("read plan", new.plan))?;
         let plan = parse_plan(&plan_text, new.plan)?;
-        if !plan
+        let loader = plan
             .loaders
             .iter()
-            .any(|candidate| candidate.id == new.loader)
-        {
-            return Err(ResolveError::UnknownLoader(new.loader.to_owned()).into());
+            .find(|candidate| candidate.id == new.loader)
+            .ok_or_else(|| ResolveError::UnknownLoader(new.loader.to_owned()))?;
+        if !loader.sides.is_empty() && !loader.sides.contains(&new.side) {
+            return Err(InstanceError::UnsupportedSide {
+                loader: new.loader.to_owned(),
+                side: new.side,
+            });
         }
         let store = match new.store {
             Some(path) => std::path::absolute(path).map_err(io_error("resolve store", path))?,
@@ -424,6 +459,8 @@ impl Instance {
             name: new.name.clone(),
             root,
             loader: new.loader.to_owned(),
+            loader_version: new.loader_version.map(str::to_owned),
+            side: new.side,
             game_version: new.game_version.map(str::to_owned),
             store,
         };
@@ -431,7 +468,14 @@ impl Instance {
         atomic::write_file(&dir.join("plan.toml"), plan_text.as_bytes())?;
         write_toml(
             &profiles.join(format!("{DEFAULT_PROFILE}.toml")),
-            &Profile::default(),
+            &Profile {
+                target: Some(ProfileTarget {
+                    loader: config.loader.clone(),
+                    loader_version: config.loader_version.clone(),
+                    side: config.side,
+                }),
+                ..Profile::default()
+            },
         )?;
         Self::open_dir(dir)
     }
@@ -602,7 +646,10 @@ impl Instance {
         }
         let profile = match from {
             Some(source) => self.profile(source)?,
-            None => Profile::default(),
+            None => Profile {
+                target: Some(self.default_target()),
+                ..Profile::default()
+            },
         };
         write_toml(&path, &profile)?;
         Ok(profile)
@@ -725,6 +772,37 @@ impl Instance {
         write_toml(&self.profile_path(profile), &selection)
     }
 
+    /// Returns `profile`'s target, inheriting the legacy instance target when absent.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the profile is missing or its target loader is invalid for the plan.
+    pub fn profile_target(&self, profile: &Name) -> Result<ProfileTarget, InstanceError> {
+        let target = self
+            .profile(profile)?
+            .target
+            .unwrap_or_else(|| self.default_target());
+        self.validate_target(&target)?;
+        Ok(target)
+    }
+
+    /// Sets a profile-specific compatibility target.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the profile is missing, its target is invalid for the plan, or it
+    /// cannot be written.
+    pub fn set_profile_target(
+        &self,
+        profile: &Name,
+        target: ProfileTarget,
+    ) -> Result<(), InstanceError> {
+        self.validate_target(&target)?;
+        let mut selection = self.profile(profile)?;
+        selection.target = Some(target);
+        write_toml(&self.profile_path(profile), &selection)
+    }
+
     /// Works out what deploying `profile` would change, without touching the instance.
     ///
     /// Files already deployed with the right contents are left alone; a deployed file that
@@ -739,6 +817,8 @@ impl Instance {
     /// any resolution error.
     pub fn plan_deploy(&self, profile: &Name) -> Result<DeployPlan, InstanceError> {
         let selection = self.profile(profile)?;
+        let target = selection.target.unwrap_or_else(|| self.default_target());
+        self.validate_target(&target)?;
         let mut claims: BTreeMap<RelPath, Vec<Claim>> = BTreeMap::new();
         let mut mutable = BTreeSet::new();
         let mut excluded = Vec::new();
@@ -752,7 +832,7 @@ impl Instance {
                     mutable: false,
                 })
                 .collect();
-            let resolved = resolve(&self.plan, &self.config.loader, &files)?;
+            let resolved = resolve(&self.plan, &target.loader, &files)?;
             excluded.extend(resolved.excluded.into_iter().map(|file| ModExclusion {
                 module: module.clone(),
                 file,
@@ -966,6 +1046,27 @@ impl Instance {
         write_toml(&self.dir.join("instance.toml"), &self.config)
     }
 
+    /// Records the target facts providers use for compatibility filtering.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the selected side is not supported by the configured loader or the
+    /// updated configuration cannot be written.
+    pub fn set_target(
+        &mut self,
+        loader_version: Option<&str>,
+        side: Side,
+    ) -> Result<(), InstanceError> {
+        self.validate_target(&ProfileTarget {
+            loader: self.config.loader.clone(),
+            loader_version: loader_version.map(str::to_owned),
+            side,
+        })?;
+        self.config.loader_version = loader_version.map(str::to_owned);
+        self.config.side = side;
+        write_toml(&self.dir.join("instance.toml"), &self.config)
+    }
+
     /// The loader ids a provider may offer mods for: the instance's loader, then every API the
     /// plan says that loader provides.
     pub fn loader_ids(&self) -> Vec<String> {
@@ -979,6 +1080,48 @@ impl Instance {
             ids.extend(loader.provides.iter().cloned());
         }
         ids
+    }
+
+    /// The virtual loader APIs provided by the selected loader.
+    pub fn loader_provides(&self) -> Vec<String> {
+        self.plan
+            .loaders
+            .iter()
+            .find(|loader| loader.id == self.config.loader)
+            .map_or_else(Vec::new, |loader| loader.provides.clone())
+    }
+
+    /// Returns the virtual loader APIs available to `target`.
+    pub fn target_provides(&self, target: &ProfileTarget) -> Vec<String> {
+        self.plan
+            .loaders
+            .iter()
+            .find(|loader| loader.id == target.loader)
+            .map_or_else(Vec::new, |loader| loader.provides.clone())
+    }
+
+    fn default_target(&self) -> ProfileTarget {
+        ProfileTarget {
+            loader: self.config.loader.clone(),
+            loader_version: self.config.loader_version.clone(),
+            side: self.config.side,
+        }
+    }
+
+    fn validate_target(&self, target: &ProfileTarget) -> Result<(), InstanceError> {
+        let loader = self
+            .plan
+            .loaders
+            .iter()
+            .find(|loader| loader.id == target.loader)
+            .ok_or_else(|| ResolveError::UnknownLoader(target.loader.clone()))?;
+        if !loader.sides.is_empty() && !loader.sides.contains(&target.side) {
+            return Err(InstanceError::UnsupportedSide {
+                loader: loader.id.clone(),
+                side: target.side,
+            });
+        }
+        Ok(())
     }
 
     /// Scratch space on the store's volume, for downloads about to be ingested.
@@ -1197,6 +1340,14 @@ pub enum InstanceError {
         /// The instance root.
         root: PathBuf,
     },
+    /// The selected loader does not support the requested game side.
+    #[error("loader {loader:?} does not support the {side:?} target")]
+    UnsupportedSide {
+        /// The loader id.
+        loader: String,
+        /// The requested game side.
+        side: Side,
+    },
 
     /// A path that must be a directory is not one.
     #[error("{} is not a directory", .0.display())]
@@ -1368,6 +1519,7 @@ mod tests {
     use msbe_fsops::{
         Backend, Checkpoint, Error as FsError, NoopObserver, Observer, Operation, RelPath,
     };
+    use msbe_plan_schema::Side;
     use tempfile::TempDir;
 
     use super::{
@@ -1435,6 +1587,8 @@ flatten = true
                     root: &self.game,
                     plan: &self.plan,
                     loader: "loader",
+                    loader_version: None,
+                    side: Side::Client,
                     game_version: Some("1.0"),
                     store: None,
                 },
@@ -1772,6 +1926,7 @@ flatten = true
         let empty = name("empty");
         let blob = instance.applier.store().put_bytes(b"texture").unwrap();
         let profile = Profile {
+            target: None,
             mods: BTreeMap::from([(
                 name("pack"),
                 ModEntry {
@@ -1860,6 +2015,7 @@ flatten = true
             }],
         };
         let profile = Profile {
+            target: None,
             mods: BTreeMap::from([
                 (name("first"), entry("a/common.bin", first)),
                 (name("second"), entry("b/common.bin", second)),

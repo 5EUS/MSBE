@@ -11,6 +11,7 @@ use std::{
 };
 
 use msbe_fsops::RelPath;
+use msbe_plan_schema::Side;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -32,10 +33,22 @@ const MAX_SEARCH_LIMIT: u8 = 100;
 /// What a mod must be compatible with.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Target {
-    /// Acceptable loader ids: the instance's loader and every API it provides.
-    pub loaders: Vec<String>,
+    /// The selected loader id.
+    pub loader: String,
+    /// Virtual loader APIs satisfied by the selected loader.
+    pub provides: Vec<String>,
+    /// The selected loader version, when the game or loader exposes one.
+    pub loader_version: Option<String>,
     /// The game version, such as `1.21.1`.
     pub game_version: String,
+    /// Whether this target is a player client or dedicated server.
+    pub side: Side,
+}
+
+impl Target {
+    fn loader_ids(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(self.loader.as_str()).chain(self.provides.iter().map(String::as_str))
+    }
 }
 
 /// A request for a project, optionally pinned to a version.
@@ -80,6 +93,43 @@ pub struct Project {
     pub title: String,
     /// The kind of project, such as `mod`.
     pub project_type: String,
+    /// Whether the project supports player clients.
+    #[serde(default)]
+    pub client_side: Availability,
+    /// Whether the project supports dedicated servers.
+    #[serde(default)]
+    pub server_side: Availability,
+}
+
+impl Project {
+    fn supports(&self, side: Side) -> bool {
+        match side {
+            Side::Client => self.client_side.supports(),
+            Side::Server => self.server_side.supports(),
+        }
+    }
+}
+
+/// Whether a provider declares a project available on one game side.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Availability {
+    /// The project is required on this side.
+    Required,
+    /// The project may run on this side.
+    Optional,
+    /// The project cannot run on this side.
+    Unsupported,
+    /// The provider did not declare the project's availability.
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
+impl Availability {
+    const fn supports(self) -> bool {
+        matches!(self, Self::Required | Self::Optional)
+    }
 }
 
 /// One published version of a project.
@@ -98,6 +148,9 @@ pub struct Version {
     /// The loaders it supports.
     #[serde(default)]
     pub loaders: Vec<String>,
+    /// Per-loader versions this release supports, when the provider declares them.
+    #[serde(default)]
+    pub loader_versions: BTreeMap<String, Vec<String>>,
     /// The game versions it supports.
     #[serde(default)]
     pub game_versions: Vec<String>,
@@ -195,6 +248,21 @@ pub struct SearchHit {
     /// Total downloads.
     #[serde(default)]
     pub downloads: u64,
+    /// Whether the project supports player clients.
+    #[serde(default)]
+    pub client_side: Availability,
+    /// Whether the project supports dedicated servers.
+    #[serde(default)]
+    pub server_side: Availability,
+}
+
+impl SearchHit {
+    fn supports(&self, side: Side) -> bool {
+        match side {
+            Side::Client => self.client_side.supports(),
+            Side::Server => self.server_side.supports(),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -322,10 +390,10 @@ impl<'a> Modrinth<'a> {
             vec!["project_type:mod".to_owned()],
             vec![format!("versions:{}", target.game_version)],
         ];
-        if !target.loaders.is_empty() {
+        let loader_ids: Vec<&str> = target.loader_ids().collect();
+        if !loader_ids.is_empty() {
             facets.push(
-                target
-                    .loaders
+                loader_ids
                     .iter()
                     .map(|loader| format!("categories:{loader}"))
                     .collect(),
@@ -337,7 +405,11 @@ impl<'a> Modrinth<'a> {
             "/search",
             &[("query", query), ("facets", &facets), ("limit", &limit)],
         )?;
-        Ok(results.hits)
+        Ok(results
+            .hits
+            .into_iter()
+            .filter(|hit| hit.supports(target.side))
+            .collect())
     }
 
     /// Fetches a project by slug or id.
@@ -355,7 +427,8 @@ impl<'a> Modrinth<'a> {
     ///
     /// Returns [`ModrinthError`] for an invalid reference, a request failure or bad JSON.
     pub fn versions(&self, project: &str, target: &Target) -> Result<Vec<Version>, ModrinthError> {
-        let loaders = serde_json::to_string(&target.loaders).unwrap_or_default();
+        let loader_ids: Vec<&str> = target.loader_ids().collect();
+        let loaders = serde_json::to_string(&loader_ids).unwrap_or_default();
         let game_versions =
             serde_json::to_string(std::slice::from_ref(&target.game_version)).unwrap_or_default();
         let mut versions: Vec<Version> = self.get_json(
@@ -366,6 +439,7 @@ impl<'a> Modrinth<'a> {
                 ("include_changelog", "false"),
             ],
         )?;
+        versions.retain(|version| supports(version, target));
         versions.sort_by(|a, b| b.date_published.cmp(&a.date_published));
         Ok(versions)
     }
@@ -387,13 +461,19 @@ impl<'a> Modrinth<'a> {
     /// Returns [`ModrinthError::NoMatchingVersion`] if nothing compatible matches.
     pub fn select(&self, spec: &Spec, target: &Target) -> Result<Selection, ModrinthError> {
         let project = self.project(&spec.project)?;
+        if !project.supports(target.side) {
+            return Err(ModrinthError::UnsupportedSide {
+                project: project.slug,
+                side: target.side,
+            });
+        }
         let versions = self.versions(&project.id, target)?;
         let version = choose(&versions, spec.version.as_deref())
             .cloned()
             .ok_or_else(|| ModrinthError::NoMatchingVersion {
                 project: project.slug.clone(),
                 wanted: spec.version.clone(),
-                loaders: target.loaders.clone(),
+                loaders: target.loader_ids().map(str::to_owned).collect(),
                 game_version: target.game_version.clone(),
             })?;
         let file = primary_file(&version)?.clone();
@@ -531,6 +611,7 @@ impl<'a> Modrinth<'a> {
             return Ok(BTreeMap::new());
         }
         let all: Vec<&str> = hashes.iter().map(String::as_str).collect();
+        let loader_ids: Vec<String> = target.loader_ids().map(str::to_owned).collect();
         let installed: BTreeMap<String, Version> = lowercase_keys(self.post_json(
             "/version_files",
             &HashQuery {
@@ -556,7 +637,7 @@ impl<'a> Modrinth<'a> {
                 &HashQuery {
                     hashes: &group,
                     algorithm: "sha512",
-                    loaders: Some(&target.loaders),
+                    loaders: Some(&loader_ids),
                     game_versions: Some([target.game_version.as_str()]),
                     version_types: Some(version_types),
                 },
@@ -672,6 +753,15 @@ pub enum ModrinthError {
         game_version: String,
     },
 
+    /// A project does not support the target's game side.
+    #[error("project {project:?} does not support the {side:?} target")]
+    UnsupportedSide {
+        /// The project slug.
+        project: String,
+        /// The requested game side.
+        side: Side,
+    },
+
     /// A version has no files.
     #[error("version {version} has no files")]
     NoFiles {
@@ -780,11 +870,20 @@ const fn channel(installed: VersionType) -> &'static [&'static str] {
 }
 
 fn supports(version: &Version, target: &Target) -> bool {
-    version.game_versions.contains(&target.game_version)
-        && version
-            .loaders
+    let loader_ids: Vec<&str> = target.loader_ids().collect();
+    let loader_matches = version
+        .loaders
+        .iter()
+        .any(|loader| loader_ids.contains(&loader.as_str()));
+    let version_matches = target.loader_version.as_ref().is_none_or(|wanted| {
+        let declared: Vec<&String> = loader_ids
             .iter()
-            .any(|loader| target.loaders.contains(loader))
+            .filter_map(|loader| version.loader_versions.get(*loader))
+            .flatten()
+            .collect();
+        declared.is_empty() || declared.contains(&wanted)
+    });
+    version.game_versions.contains(&target.game_version) && loader_matches && version_matches
 }
 
 /// Whether `latest`, the newest version on the installed version's channel, should replace it.
@@ -820,6 +919,7 @@ fn lowercase_keys<V>(map: BTreeMap<String, V>) -> BTreeMap<String, V> {
 mod tests {
     use std::{cell::RefCell, collections::BTreeMap, io::Write};
 
+    use msbe_plan_schema::Side;
     use serde_json::{Value, json};
     use sha2::{Digest as _, Sha512};
 
@@ -919,8 +1019,11 @@ mod tests {
 
     fn target() -> Target {
         Target {
-            loaders: vec!["fabric".to_owned()],
+            loader: "fabric".to_owned(),
+            provides: Vec::new(),
+            loader_version: None,
             game_version: "1.21.1".to_owned(),
+            side: Side::Client,
         }
     }
 
@@ -953,8 +1056,8 @@ mod tests {
     /// Sodium (a newer beta and an older release) and Iris, which requires Sodium.
     fn catalogue() -> FakeHttp {
         let mut http = FakeHttp::default();
-        let sodium =
-            json!({ "id": "AANobbMI", "slug": "sodium", "title": "Sodium", "project_type": "mod" });
+        let sodium = json!({ "id": "AANobbMI", "slug": "sodium", "title": "Sodium", "project_type": "mod",
+                    "client_side": "required", "server_side": "required" });
         http.route("/project/sodium", sodium.clone());
         http.route("/project/AANobbMI", sodium);
         http.route(
@@ -992,7 +1095,8 @@ mod tests {
         );
         http.route(
             "/project/iris",
-            json!({ "id": "YL57xq9U", "slug": "iris", "title": "Iris", "project_type": "mod" }),
+            json!({ "id": "YL57xq9U", "slug": "iris", "title": "Iris", "project_type": "mod",
+                    "client_side": "required", "server_side": "required" }),
         );
         http.route("/project/YL57xq9U/version", json!([iris]));
         for file in ["sodium-0.8.12.jar", "sodium-beta.jar", "iris-1.8.0.jar"] {
@@ -1048,6 +1152,57 @@ mod tests {
                 && request.contains(r#"game_versions=["1.21.1"]"#)
                 && request.contains("include_changelog=false")
         }));
+    }
+
+    #[test]
+    fn target_prefilter_honours_loader_capabilities_side_and_loader_version() {
+        let mut http = catalogue();
+        let mut quilt = target();
+        quilt.loader = "quilt".to_owned();
+        quilt.provides = vec!["fabric".to_owned()];
+        assert!(
+            Modrinth::new(&http)
+                .select(&Spec::parse("sodium").unwrap(), &quilt)
+                .is_ok()
+        );
+
+        let server_only = http
+            .json
+            .get_mut(&format!("{BASE}/project/sodium"))
+            .and_then(Value::as_object_mut);
+        if let Some(project) = server_only {
+            project.insert("server_side".to_owned(), json!("unsupported"));
+        }
+        let mut server = target();
+        server.side = Side::Server;
+        assert!(matches!(
+            Modrinth::new(&http).select(&Spec::parse("sodium").unwrap(), &server),
+            Err(ModrinthError::UnsupportedSide { .. })
+        ));
+
+        let versions = http
+            .json
+            .get_mut(&format!("{BASE}/project/AANobbMI/version"))
+            .and_then(Value::as_array_mut);
+        if let Some(versions) = versions {
+            for version in versions {
+                if let Some(version) = version.as_object_mut() {
+                    version.insert("loader_versions".to_owned(), json!({ "fabric": ["0.16"] }));
+                }
+            }
+        }
+        let mut mismatched = target();
+        mismatched.loader_version = Some("0.17".to_owned());
+        assert!(matches!(
+            Modrinth::new(&http).select(&Spec::parse("sodium").unwrap(), &mismatched),
+            Err(ModrinthError::NoMatchingVersion { .. })
+        ));
+        mismatched.loader_version = Some("0.16".to_owned());
+        assert!(
+            Modrinth::new(&http)
+                .select(&Spec::parse("sodium").unwrap(), &mismatched)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -1264,7 +1419,8 @@ mod tests {
             "/search",
             json!({
                 "hits": [{ "project_id": "AANobbMI", "slug": "sodium", "title": "Sodium",
-                           "description": "A rendering engine", "downloads": 42, "author": "ignored" }],
+                           "description": "A rendering engine", "downloads": 42,
+                           "client_side": "required", "server_side": "required", "author": "ignored" }],
                 "offset": 0, "limit": 5, "total_hits": 1
             }),
         );

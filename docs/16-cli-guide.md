@@ -1,7 +1,7 @@
 # 16 - CLI guide
 
 This guide is the operational reference for `msbe`. It distinguishes commands that work
-in the current M1 implementation from the documented CLI surface planned for later
+in the current M1/M2 implementation from the documented CLI surface planned for later
 milestones. Do not rely on a command marked **Planned** in scripts or automation.
 
 ## 1. Status and installation
@@ -79,8 +79,9 @@ is not implemented: register a game directory that already has the chosen loader
   --game-version 1.21.1
 ```
 
-Use `--store DIR` to choose a store shard explicitly. Use `instance set` to set or
-change the game version used for provider compatibility filtering.
+Use `--store DIR` to choose a store shard explicitly. `--loader-version` and `--side`
+set defaults for the initial profile target; `--side` defaults to `client`. Use `instance
+set` to change the game version, or those defaults for legacy profiles.
 
 ```sh
 "$MSBE" instance set mc --game-version 1.21.1
@@ -96,9 +97,17 @@ deploying it; switching is a diff deployment, not a separate command.
 ```sh
 "$MSBE" profile new mc performance
 "$MSBE" profile new mc experiment --from performance
+"$MSBE" profile set-target mc performance --loader quilt --side client
 "$MSBE" profile list mc
 "$MSBE" profile show mc performance
 ```
+
+Each profile owns its target: loader, optional loader version, and side. The game version
+is an instance fact. New profiles begin with the instance defaults, and copied profiles
+keep the source target. Provider searches, adds, and updates reject candidates outside this
+target before version selection. Quilt declares Fabric as a capability, so a Quilt target
+can use Fabric provider releases. Compatibility-layer widening beyond declared loader
+capabilities is not implemented.
 
 ### 4.3 Add mods
 
@@ -111,6 +120,7 @@ shell does not interpret `#`.
 "$MSBE" add mc "$HOME/Downloads/modpack-files.zip"
 "$MSBE" add mc 'https://example.invalid/mod.jar#sha512=<hex>'
 "$MSBE" search mc sodium
+"$MSBE" search mc sodium --profile performance
 "$MSBE" add mc modrinth:sodium
 "$MSBE" add mc modrinth:iris --with-deps
 ```
@@ -152,23 +162,24 @@ plan preserve runtime changes rather than being overwritten or removed.
 
 ## 5. Implemented command reference
 
-| Command                                                                                       | Status          | Notes                                         |
-| --------------------------------------------------------------------------------------------- | --------------- | --------------------------------------------- |
-| `instance add NAME --root DIR --plan FILE --loader ID [--game-version VERSION] [--store DIR]` | **Implemented** | Register an existing game instance.           |
-| `instance set NAME --game-version VERSION`                                                    | **Implemented** | Set provider compatibility target.            |
-| `instance list`                                                                               | **Implemented** | List registered instances.                    |
-| `profile new INSTANCE NAME [--from PROFILE]`                                                  | **Implemented** | Create or copy a profile.                     |
-| `profile list INSTANCE`                                                                       | **Implemented** | List profiles and the deployed profile.       |
-| `profile show INSTANCE [NAME]`                                                                | **Implemented** | Show selected mods.                           |
-| `search INSTANCE QUERY... [--limit N]`                                                        | **Implemented** | Search Modrinth for the instance target.      |
-| `add INSTANCE SOURCE... [-p PROFILE] [--with-deps]`                                           | **Implemented** | Add local, archive, URL, or Modrinth content. |
-| `update INSTANCE [MOD...] [-p PROFILE] [--dry-run]`                                           | **Implemented** | Update Modrinth mods.                         |
-| `remove INSTANCE MOD [-p PROFILE]`                                                            | **Implemented** | Remove a selection from a profile.            |
-| `deploy INSTANCE [-p PROFILE] [--dry-run]`                                                    | **Implemented** | Apply a journaled profile diff.               |
-| `rollback INSTANCE`                                                                           | **Implemented** | Undo the latest deployment.                   |
-| `purge INSTANCE`                                                                              | **Implemented** | Undo all deployment history.                  |
-| `verify INSTANCE`                                                                             | **Implemented** | Report deployment drift.                      |
-| `status INSTANCE`                                                                             | **Implemented** | Show instance and deployment state.           |
+| Command                                                                                                                                          | Status          | Notes                                              |
+| ------------------------------------------------------------------------------------------------------------------------------------------------ | --------------- | -------------------------------------------------- |
+| `instance add NAME --root DIR --plan FILE --loader ID [--loader-version VERSION] [--side client\|server] [--game-version VERSION] [--store DIR]` | **Implemented** | Register an existing game instance.                |
+| `instance set NAME [--game-version VERSION] [--loader-version VERSION] [--side client\|server]`                                                  | **Implemented** | Change instance facts and legacy-profile defaults. |
+| `instance list`                                                                                                                                  | **Implemented** | List registered instances.                         |
+| `profile new INSTANCE NAME [--from PROFILE]`                                                                                                     | **Implemented** | Create or copy a profile.                          |
+| `profile list INSTANCE`                                                                                                                          | **Implemented** | List profiles and the deployed profile.            |
+| `profile show INSTANCE [NAME]`                                                                                                                   | **Implemented** | Show selected mods.                                |
+| `profile set-target INSTANCE [NAME] --loader ID [--loader-version VERSION] --side client\|server`                                                | **Implemented** | Set a profile compatibility target.                |
+| `search INSTANCE QUERY... [-p PROFILE] [--limit N]`                                                                                              | **Implemented** | Search Modrinth for a profile target.              |
+| `add INSTANCE SOURCE... [-p PROFILE] [--with-deps]`                                                                                              | **Implemented** | Add local, archive, URL, or Modrinth content.      |
+| `update INSTANCE [MOD...] [-p PROFILE] [--dry-run]`                                                                                              | **Implemented** | Update Modrinth mods.                              |
+| `remove INSTANCE MOD [-p PROFILE]`                                                                                                               | **Implemented** | Remove a selection from a profile.                 |
+| `deploy INSTANCE [-p PROFILE] [--dry-run]`                                                                                                       | **Implemented** | Apply a journaled profile diff.                    |
+| `rollback INSTANCE`                                                                                                                              | **Implemented** | Undo the latest deployment.                        |
+| `purge INSTANCE`                                                                                                                                 | **Implemented** | Undo all deployment history.                       |
+| `verify INSTANCE`                                                                                                                                | **Implemented** | Report deployment drift.                           |
+| `status INSTANCE`                                                                                                                                | **Implemented** | Show instance and deployment state.                |
 
 ## 6. Planned command surface
 
@@ -187,8 +198,9 @@ in the current binary. Their names and arguments can change before implementatio
 | Steam Workshop            | Opt-in user-installed SteamCMD acquisition or local import; optional item-ID metadata | Future, subject to policy |
 | Game launch               | `launch`                                                                              | Future                    |
 
-M2 also adds target pre-filtering, PubGrub solving, loader bootstrap, structured config
-merge, pack import, lockfiles, and reproducible cross-platform deployment. Later
+M2 also adds PubGrub solving, loader bootstrap, structured config merge, pack import,
+lockfiles, and reproducible cross-platform deployment. Target pre-filtering is implemented.
+Later
 milestones add legacy Minecraft topologies, a No Man's Sky validation plan, the
 acquisition stack, the desktop UI, a signed registry, and Bethesda/KSP support. See
 [13 - Roadmap](13-roadmap.md) for the milestone definitions and completion criteria.

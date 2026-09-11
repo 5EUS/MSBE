@@ -365,6 +365,7 @@ dependencies = [
  "msbe-core",
  "msbe-fsops",
  "msbe-http",
+ "msbe-plan-schema",
  "msbe-providers",
  "msbe-rpc-schema",
  "serde",
@@ -439,6 +440,7 @@ name = "msbe-providers"
 version = "0.0.0"
 dependencies = [
  "msbe-fsops",
+ "msbe-plan-schema",
  "serde",
  "serde_json",
  "sha2",

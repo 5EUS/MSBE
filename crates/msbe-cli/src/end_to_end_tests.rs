@@ -54,7 +54,8 @@ impl FakeModrinth {
         fake.json.borrow_mut().insert(
             format!("{API}/search"),
             json!({ "hits": [{ "project_id": "AANobbMI", "slug": "sodium", "title": "Sodium",
-                               "description": "A rendering engine", "downloads": 42 }] }),
+                               "description": "A rendering engine", "downloads": 42,
+                               "client_side": "required", "server_side": "required" }] }),
         );
         fake
     }
@@ -82,7 +83,8 @@ impl FakeModrinth {
             }],
             "dependencies": dependencies
         });
-        let project = json!({ "id": id, "slug": slug, "title": slug, "project_type": "mod" });
+        let project = json!({ "id": id, "slug": slug, "title": slug, "project_type": "mod",
+                      "client_side": "required", "server_side": "required" });
         let mut json = self.json.borrow_mut();
         json.insert(format!("{API}/project/{slug}"), project.clone());
         json.insert(format!("{API}/project/{id}"), project);
@@ -663,6 +665,81 @@ fn search_lists_mods_compatible_with_the_instance() {
     world.add_instance(Some("1.21.1"));
     let hits = world.json(&["search", "mc", "rendering", "engine"]);
     assert_eq!(at(&hits, "/0/slug"), "sodium");
+}
+
+#[test]
+fn profile_target_persists_and_quilt_provides_fabric_compatibility() {
+    let world = World::new();
+    world.add_instance(Some("1.21.1"));
+    world.json(&["profile", "new", "mc", "performance"]);
+    let target = world.json(&[
+        "profile",
+        "set-target",
+        "mc",
+        "performance",
+        "--loader",
+        "quilt",
+        "--side",
+        "client",
+    ]);
+    assert_eq!(at(&target, "/loader"), "quilt");
+    assert_eq!(at(&target, "/side"), "client");
+
+    assert_eq!(
+        at(
+            &world.json(&["add", "mc", "modrinth:sodium", "--profile", "performance"]),
+            "/added",
+        ),
+        &json!(["sodium"])
+    );
+    assert_eq!(
+        at(
+            &world.json(&["profile", "show", "mc", "performance"]),
+            "/target/loader"
+        ),
+        "quilt"
+    );
+}
+
+#[test]
+fn server_profile_filters_client_only_projects_before_selection() {
+    let world = World::new();
+    world.add_instance(Some("1.21.1"));
+    let sodium = project_id("sodium");
+    for project in [
+        format!("{API}/project/sodium"),
+        format!("{API}/project/{sodium}"),
+    ] {
+        world.modrinth.json.borrow_mut().get_mut(&project).unwrap()["server_side"] =
+            json!("unsupported");
+    }
+    world.modrinth.json.borrow_mut().insert(
+        format!("{API}/search"),
+        json!({ "hits": [{ "project_id": sodium, "slug": "sodium", "title": "Sodium",
+                           "description": "A rendering engine", "downloads": 42,
+                           "client_side": "required", "server_side": "unsupported" }] }),
+    );
+
+    world.json(&[
+        "profile",
+        "set-target",
+        "mc",
+        "--loader",
+        "fabric",
+        "--side",
+        "server",
+    ]);
+    let outcome = world.msbe(&["add", "mc", "modrinth:sodium"]);
+    assert_eq!(outcome.code, exit::FAILURE);
+    assert!(
+        outcome.err.contains("does not support the Server target"),
+        "{}",
+        outcome.err
+    );
+    assert_eq!(
+        world.json(&["search", "mc", "rendering", "--profile", "default"]),
+        json!([])
+    );
 }
 
 #[test]

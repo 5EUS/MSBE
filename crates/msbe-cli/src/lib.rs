@@ -16,10 +16,11 @@ use msbe_core::{
     config::Home,
     instance::{
         Artifact, DEFAULT_PROFILE, DeployPlan, DeployReport, Instance, InstanceError, ModExclusion,
-        Name, NewInstance, Profile, Provenance, Status,
+        Name, NewInstance, Profile, ProfileTarget, Provenance, Status,
     },
 };
 use msbe_fsops::{Backend, NoopObserver, Operation, RelPath};
+use msbe_plan_schema::Side;
 use msbe_providers::{
     Catalog, HttpClient, HttpError, MODRINTH, ProviderRegistry, RegistryError, ResolvedSource,
     direct::{self, DirectError, DirectSource},
@@ -71,6 +72,21 @@ enum Format {
     Json,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum TargetSide {
+    Client,
+    Server,
+}
+
+impl From<TargetSide> for Side {
+    fn from(side: TargetSide) -> Self {
+        match side {
+            TargetSide::Client => Self::Client,
+            TargetSide::Server => Self::Server,
+        }
+    }
+}
+
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Register, configure and list game instances.
@@ -94,13 +110,16 @@ enum Command {
         #[arg(long)]
         with_deps: bool,
     },
-    /// Search Modrinth for mods compatible with an instance.
+    /// Search Modrinth for mods compatible with a profile target.
     Search {
-        /// The instance whose loader and game version filter the results.
+        /// The instance.
         instance: String,
         /// Words to search for.
         #[arg(required = true)]
         query: Vec<String>,
+        /// The profile whose target filters the results.
+        #[arg(long, short, default_value = DEFAULT_PROFILE)]
+        profile: String,
         /// The most results to show.
         #[arg(long, default_value_t = 10)]
         limit: u8,
@@ -177,6 +196,12 @@ enum InstanceCommand {
         /// The loader to deploy with, as declared by the plan.
         #[arg(long)]
         loader: String,
+        /// The loader version providers should match, when they publish loader-version metadata.
+        #[arg(long)]
+        loader_version: Option<String>,
+        /// Whether this instance targets a player client or dedicated server.
+        #[arg(long, value_enum, default_value_t = TargetSide::Client)]
+        side: TargetSide,
         /// The game version, such as 1.21.1. Needed to install from Modrinth.
         #[arg(long)]
         game_version: Option<String>,
@@ -191,7 +216,13 @@ enum InstanceCommand {
         name: String,
         /// The game version providers should match, such as 1.21.1.
         #[arg(long)]
-        game_version: String,
+        game_version: Option<String>,
+        /// The loader version providers should match, when they publish loader-version metadata.
+        #[arg(long)]
+        loader_version: Option<String>,
+        /// Whether this instance targets a player client or dedicated server.
+        #[arg(long, value_enum)]
+        side: Option<TargetSide>,
     },
     /// List instances.
     List,
@@ -221,6 +252,23 @@ enum ProfileCommand {
         /// The profile.
         #[arg(default_value = DEFAULT_PROFILE)]
         name: String,
+    },
+    /// Set the loader compatibility target for one profile.
+    SetTarget {
+        /// The instance.
+        instance: String,
+        /// The profile.
+        #[arg(default_value = DEFAULT_PROFILE)]
+        name: String,
+        /// The loader declared by the plan.
+        #[arg(long)]
+        loader: String,
+        /// The loader version providers should match, when known.
+        #[arg(long)]
+        loader_version: Option<String>,
+        /// Whether this profile targets a player client or dedicated server.
+        #[arg(long, value_enum, default_value_t = TargetSide::Client)]
+        side: TargetSide,
     },
 }
 
@@ -382,8 +430,9 @@ fn execute(cli: &Cli, console: &mut Console<'_>) -> Result<u8, CliError> {
         Command::Search {
             instance,
             query,
+            profile,
             limit,
-        } => search(&providers, &home, instance, query, *limit, console),
+        } => search(&providers, &home, instance, profile, query, *limit, console),
         Command::Update {
             instance,
             modules,
@@ -431,6 +480,8 @@ fn instance_command(
             root,
             plan,
             loader,
+            loader_version,
+            side,
             game_version,
             store,
         } => {
@@ -442,6 +493,8 @@ fn instance_command(
                     root,
                     plan,
                     loader,
+                    loader_version: loader_version.as_deref(),
+                    side: (*side).into(),
                     game_version: game_version.as_deref(),
                     store: store.as_deref(),
                 },
@@ -457,9 +510,26 @@ fn instance_command(
                 writeln!(out, "  profile       {DEFAULT_PROFILE} (empty)")
             })?;
         }
-        InstanceCommand::Set { name, game_version } => {
+        InstanceCommand::Set {
+            name,
+            game_version,
+            loader_version,
+            side,
+        } => {
             let mut instance = open(home, name, console)?;
-            instance.set_game_version(Some(game_version))?;
+            if let Some(game_version) = game_version {
+                instance.set_game_version(Some(game_version))?;
+            }
+            if loader_version.is_some() || side.is_some() {
+                let current_loader_version = instance.config().loader_version.clone();
+                let current_side = instance.config().side;
+                instance.set_target(
+                    loader_version
+                        .as_deref()
+                        .or(current_loader_version.as_deref()),
+                    side.map(Into::into).unwrap_or(current_side),
+                )?;
+            }
             console.emit(&instance.status()?, |out, status| {
                 writeln!(out, "Updated instance {}", status.name)?;
                 print_settings(out, status)
@@ -535,6 +605,35 @@ fn profile_command(
                 Ok(())
             })?;
         }
+        ProfileCommand::SetTarget {
+            instance,
+            name,
+            loader,
+            loader_version,
+            side,
+        } => {
+            let opened = open(home, instance, console)?;
+            let name = Name::new(name)?;
+            opened.set_profile_target(
+                &name,
+                ProfileTarget {
+                    loader: loader.clone(),
+                    loader_version: loader_version.clone(),
+                    side: (*side).into(),
+                },
+            )?;
+            let target = opened.profile_target(&name)?;
+            console.emit(&target, |out, target| {
+                writeln!(out, "Updated target for {name}:")?;
+                writeln!(out, "  loader        {}", target.loader)?;
+                writeln!(
+                    out,
+                    "  loader version {}",
+                    target.loader_version.as_deref().unwrap_or("not set")
+                )?;
+                writeln!(out, "  side          {:?}", target.side)
+            })?;
+        }
     }
     Ok(exit::OK)
 }
@@ -593,7 +692,7 @@ fn add(
         };
         if !specs.is_empty() {
             let modrinth = registry.modrinth(client.as_ref())?;
-            let plan = modrinth.plan_install(&specs, &target(&opened)?, with_deps)?;
+            let plan = modrinth.plan_install(&specs, &target(&opened, &profile)?, with_deps)?;
             fetch.modrinth(&modrinth, plan)?;
         }
         fetch.urls(client.as_ref(), &urls)?;
@@ -701,7 +800,7 @@ fn update(
     };
     let tracked = tracked_mods(&selection, &profile, modules, &mut report)?;
     if !tracked.is_empty() {
-        let target = target(&opened)?;
+        let target = target(&opened, &profile)?;
         let client = (console.connect)()?;
         let modrinth = ProviderRegistry::new(providers).modrinth(client.as_ref())?;
         let updates = find_updates(&modrinth, &tracked, &target, &mut report)?;
@@ -830,16 +929,22 @@ fn report_relationships(
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "command handlers receive their parsed inputs separately"
+)]
 fn search(
     providers: &Catalog,
     home: &Home,
     instance: &str,
+    profile: &str,
     query: &[String],
     limit: u8,
     console: &mut Console<'_>,
 ) -> Result<u8, CliError> {
     let opened = open(home, instance, console)?;
-    let target = target(&opened)?;
+    let profile = Name::new(profile)?;
+    let target = target(&opened, &profile)?;
     let client = (console.connect)()?;
     let hits = ProviderRegistry::new(providers)
         .modrinth(client.as_ref())?
@@ -973,15 +1078,19 @@ fn status(home: &Home, instance: &str, console: &mut Console<'_>) -> Result<u8, 
     Ok(exit::OK)
 }
 
-fn target(instance: &Instance) -> Result<Target, CliError> {
+fn target(instance: &Instance, profile: &Name) -> Result<Target, CliError> {
+    let profile_target = instance.profile_target(profile)?;
     let game_version = instance
         .config()
         .game_version
         .clone()
         .ok_or_else(|| CliError::GameVersionRequired(instance.name().clone()))?;
     Ok(Target {
-        loaders: instance.loader_ids(),
+        loader: profile_target.loader.clone(),
+        provides: instance.target_provides(&profile_target),
+        loader_version: profile_target.loader_version,
         game_version,
+        side: profile_target.side,
     })
 }
 

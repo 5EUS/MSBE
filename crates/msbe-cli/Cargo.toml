@@ -25,6 +25,7 @@ clap.workspace       = true
 msbe-core            = { path = "../msbe-core" }
 msbe-fsops           = { path = "../msbe-fsops" }
 msbe-http            = { path = "../msbe-http" }
+msbe-plan-schema     = { path = "../msbe-plan-schema" }
 msbe-providers       = { path = "../msbe-providers" }
 msbe-rpc-schema      = { path = "../msbe-rpc-schema" }
 serde.workspace      = true
