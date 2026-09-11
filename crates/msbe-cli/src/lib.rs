@@ -160,6 +160,14 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Write a portable, reproducible lockfile for a profile.
+    Lock {
+        /// The instance.
+        instance: String,
+        /// The profile to lock.
+        #[arg(long, short, default_value = DEFAULT_PROFILE)]
+        profile: String,
+    },
     /// Undo the most recent deployment.
     Rollback {
         /// The instance.
@@ -455,6 +463,7 @@ fn execute(cli: &Cli, console: &mut Console<'_>) -> Result<u8, CliError> {
             profile,
             dry_run,
         } => deploy(&home, instance, profile, *dry_run, console),
+        Command::Lock { instance, profile } => lock(&home, instance, profile, console),
         Command::Rollback { instance } => rollback(&home, instance, console),
         Command::Purge { instance } => purge(&home, instance, console),
         Command::Verify { instance } => verify(&home, instance, console),
@@ -1050,6 +1059,27 @@ fn deploy(
     } else {
         console.emit(&opened.deploy(&profile, &mut NoopObserver)?, print_deploy)?;
     }
+    Ok(exit::OK)
+}
+
+fn lock(
+    home: &Home,
+    instance: &str,
+    profile: &str,
+    console: &mut Console<'_>,
+) -> Result<u8, CliError> {
+    let opened = open(home, instance, console)?;
+    let profile = Name::new(profile)?;
+    let lockfile = opened.write_lockfile(&profile)?;
+    console.emit(&lockfile, |out, lockfile| {
+        writeln!(
+            out,
+            "Locked {} module(s) for {} {}.",
+            lockfile.mods.len(),
+            lockfile.plan.id,
+            lockfile.plan.version
+        )
+    })?;
     Ok(exit::OK)
 }
 

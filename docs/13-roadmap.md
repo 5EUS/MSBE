@@ -140,7 +140,10 @@ Where the domain gets hard, still without touching credentials.
   `shaderpacks/`, per-world `datapacks/`.
 - **Pack import** — `.mrpack` and CurseForge `manifest.json` (metadata-only; CurseForge
   _downloads_ wait for M5, and the distribution flag is honoured from day one).
-- **Lockfiles** and cross-platform reproducibility.
+- **Lockfiles and cross-platform reproducibility** — **implemented**: `msbe lock` writes a
+  canonical TOML snapshot of the pinned plan, compatibility target, components, provider
+  provenance, CAS digests, and portable relative deployment shape. Filesystem backend and host
+  paths are intentionally excluded.
 
 **Done when**: a 250-mod modpack imports, resolves, deploys, updates and rolls back; the
 same lockfile reproduces on another OS; `msbe bisect` finds a deliberately broken mod.

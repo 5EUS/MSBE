@@ -193,6 +193,61 @@ pub struct ProfileTarget {
     pub side: Side,
 }
 
+/// A portable, reproducible snapshot of one resolved profile.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Lockfile {
+    /// Lockfile schema version.
+    pub schema: u32,
+    /// The pinned plan identity.
+    pub plan: LockedPlan,
+    /// The compatibility target used to select artifacts.
+    pub target: LockedTarget,
+    /// Resolved modules keyed by stable local module name.
+    pub mods: BTreeMap<Name, LockedModule>,
+    /// Pinned loader component bundles.
+    #[serde(default)]
+    pub components: BTreeMap<String, ComponentEntry>,
+    /// Exact portable deployment shape, independent of filesystem backend.
+    pub deployment: BTreeMap<RelPath, Digest>,
+}
+
+/// The exact plan used to resolve a lockfile.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LockedPlan {
+    /// Stable plan identifier.
+    pub id: String,
+    /// Exact plan version.
+    pub version: String,
+}
+
+/// Instance facts needed to reproduce provider compatibility filtering.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LockedTarget {
+    /// Game version used for candidate filtering.
+    pub game_version: Option<String>,
+    /// Selected loader identifier.
+    pub loader: String,
+    /// Selected loader version, when known.
+    pub loader_version: Option<String>,
+    /// Player-client or dedicated-server target.
+    pub side: Side,
+}
+
+/// One resolved module and its exact content-addressed files.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LockedModule {
+    /// Original local artifact name.
+    pub origin: String,
+    /// Provider release identity and published digest, when available.
+    pub provider: Option<Provenance>,
+    /// Exact CAS files included by this module.
+    pub files: Vec<StoredFile>,
+}
+
 /// One mod in a profile: an artifact whose files are already in the store.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -645,6 +700,59 @@ impl Instance {
             return Err(InstanceError::UnknownProfile(name.clone()));
         }
         read_toml(&path)
+    }
+
+    /// Derives the canonical lockfile for `profile` without writing it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the profile is missing or its resolved deployment is invalid.
+    pub fn lockfile(&self, profile: &Name) -> Result<Lockfile, InstanceError> {
+        let selection = self.profile(profile)?;
+        let target = self.profile_target(profile)?;
+        let deployment = self.plan_deploy(profile)?.target;
+        Ok(Lockfile {
+            schema: 1,
+            plan: LockedPlan {
+                id: self.plan.id.clone(),
+                version: self.plan.version.clone(),
+            },
+            target: LockedTarget {
+                game_version: self.config.game_version.clone(),
+                loader: target.loader,
+                loader_version: target.loader_version,
+                side: target.side,
+            },
+            mods: selection
+                .mods
+                .into_iter()
+                .map(|(name, module)| {
+                    (
+                        name,
+                        LockedModule {
+                            origin: module.origin,
+                            provider: module.provider,
+                            files: module.files,
+                        },
+                    )
+                })
+                .collect(),
+            components: selection.components,
+            deployment,
+        })
+    }
+
+    /// Writes a canonical lockfile in the instance's portable lockfile directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the lockfile cannot be derived or written.
+    pub fn write_lockfile(&self, profile: &Name) -> Result<Lockfile, InstanceError> {
+        let lockfile = self.lockfile(profile)?;
+        let directory = self.dir.join("locks");
+        fs::create_dir_all(&directory).map_err(io_error("create directory", &directory))?;
+        write_toml(&directory.join(format!("{profile}.toml")), &lockfile)?;
+        Ok(lockfile)
     }
 
     /// Creates a profile, empty or copied from `from`.
@@ -1870,6 +1978,36 @@ flatten = true
         );
         assert!(!fixture.game.join("mods/alpha.bin").exists());
         assert!(instance.deployed_profile().is_none());
+    }
+
+    #[test]
+    fn lockfile_captures_the_portable_resolved_profile() {
+        let fixture = Fixture::new();
+        let instance = fixture.create();
+        let profile = name("default");
+        instance
+            .add_mods(&profile, &[fixture.input("alpha.bin", b"alpha")])
+            .unwrap();
+
+        let lockfile = instance.write_lockfile(&profile).unwrap();
+        assert_eq!(lockfile.schema, 1);
+        assert_eq!(lockfile.plan.id, "example");
+        assert_eq!(lockfile.target.game_version.as_deref(), Some("1.0"));
+        assert_eq!(lockfile.target.loader, "loader");
+        assert!(lockfile.mods.contains_key(&name("alpha")));
+        assert_eq!(lockfile.deployment.len(), 1);
+        assert!(
+            lockfile
+                .deployment
+                .contains_key(&RelPath::new("mods/alpha.bin").unwrap())
+        );
+
+        let path = fixture
+            .home
+            .instance(&name("demo"))
+            .join("locks/default.toml");
+        let persisted: super::Lockfile = super::read_toml(&path).unwrap();
+        assert_eq!(persisted, lockfile);
     }
 
     #[test]
