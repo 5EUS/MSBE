@@ -22,12 +22,12 @@ use msbe_core::{
 use msbe_fsops::{Backend, NoopObserver, Operation, RelPath};
 use msbe_plan_schema::Side;
 use msbe_providers::{
-    Catalog, HttpClient, HttpError, MODRINTH, ProviderRegistry, RegistryError, ResolvedSource,
-    Target,
+    Catalog, HttpClient, HttpError, MODRINTH, Overlay, OverlayError, ProviderRegistry,
+    RegistryError, ResolvedSource, Target,
     direct::{self, DirectError, DirectSource},
     modrinth::{
-        InstallPlan, Modrinth, ModrinthError, Requirement, Update, UpdateCheck, Version,
-        VersionFile,
+        InstallPlan, InstalledRelease, Modrinth, ModrinthError, Requirement, Substitution, Update,
+        UpdateCheck, Version, VersionFile,
     },
 };
 use serde::Serialize;
@@ -285,6 +285,8 @@ enum CliError {
     Http(#[from] HttpError),
     #[error(transparent)]
     Provider(#[from] RegistryError),
+    #[error(transparent)]
+    Overlay(#[from] OverlayError),
     #[error(
         "instance {0} has no game version; set one with `msbe instance set {0} --game-version <version>`"
     )]
@@ -338,6 +340,7 @@ struct AddReport {
     skipped: Vec<Name>,
     unresolved: Vec<Requirement>,
     incompatible: Vec<Requirement>,
+    substituted: Vec<Substitution>,
 }
 
 #[derive(Serialize)]
@@ -693,7 +696,13 @@ fn add(
         };
         if !specs.is_empty() {
             let modrinth = registry.modrinth(client.as_ref())?;
-            let plan = modrinth.plan_install(&specs, &target(&opened, &profile)?, with_deps)?;
+            let plan = modrinth.plan_install(
+                &specs,
+                &target(&opened, &profile)?,
+                with_deps,
+                &Overlay::builtins()?,
+                &installed_releases(&existing),
+            )?;
             fetch.modrinth(&modrinth, plan)?;
         }
         fetch.urls(client.as_ref(), &urls)?;
@@ -715,6 +724,13 @@ fn add(
         if !report.skipped.is_empty() {
             writeln!(out, "Already in the profile: {}", join(&report.skipped))?;
         }
+        for substitution in &report.substituted {
+            writeln!(
+                out,
+                "{} requires Modrinth project {}; Modrinth project {} stands in for it.",
+                substitution.declared_by, substitution.project_id, substitution.supplied_by
+            )?;
+        }
         print_requirements(
             out,
             &report.unresolved,
@@ -723,6 +739,20 @@ fn add(
         )
     })?;
     Ok(exit::OK)
+}
+
+/// The profile's Modrinth releases, which resolution keeps as they are.
+fn installed_releases(profile: &Profile) -> Vec<InstalledRelease> {
+    profile
+        .mods
+        .values()
+        .filter_map(|entry| entry.provider.as_ref())
+        .filter(|provenance| provenance.provider == MODRINTH)
+        .map(|provenance| InstalledRelease {
+            project: provenance.project.clone(),
+            version: provenance.version.clone(),
+        })
+        .collect()
 }
 
 /// Downloads for `add`, collected as artifacts, skipping sources the profile already has.
@@ -749,6 +779,7 @@ impl Fetch<'_> {
         }
         self.report.unresolved = plan.unresolved;
         self.report.incompatible = plan.incompatible;
+        self.report.substituted = plan.substitutions;
         Ok(())
     }
 
@@ -912,13 +943,25 @@ fn report_relationships(
         .filter(|provenance| provenance.provider == MODRINTH)
         .map(|provenance| provenance.project.as_str())
         .collect();
+    // A requirement is met by the required project, or by one that provides or replaces it.
+    let overlay = Overlay::builtins()?;
+    let met = |project: &str| {
+        let required = msbe_core::solver::PackageId {
+            provider: MODRINTH.to_owned(),
+            project: project.to_owned(),
+        };
+        installed.contains(project)
+            || overlay.suppliers(&required).any(|supplier| {
+                supplier.provider == MODRINTH && installed.contains(supplier.project.as_str())
+            })
+    };
     for (module, update) in updates {
         let relationships = modrinth.relationships(&update.version, module.as_str())?;
         report.unresolved.extend(
             relationships
                 .required
                 .into_iter()
-                .filter(|requirement| !installed.contains(requirement.project_id.as_str())),
+                .filter(|requirement| !met(&requirement.project_id)),
         );
         report.incompatible.extend(
             relationships

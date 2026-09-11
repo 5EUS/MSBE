@@ -42,6 +42,20 @@ fixed-in = "3.2.2"
 Evidence links are required for `conflicts` and `known-bad`. This is what keeps the
 overlay from becoming a rumour mill, and it gives reviewers something to check.
 
+`provides` and `replaces` name packages a mod can stand in for, with the solver semantics in
+[05 §5.5](05-solver.md):
+
+```toml
+schema   = 1
+mod      = "modrinth:qvIfYCYJ"   # Quilted Fabric API
+provides = ["modrinth:P7dR8mSH"] # Fabric API
+replaces = []                    # successors of abandoned mods go here
+```
+
+A mod may not provide or replace itself, or both provide and replace the same package.
+Until the registry ships, MSBE compiles in the entries it carries
+(`crates/msbe-providers/src/overlays/`), in this format and with this validation.
+
 ## 10.2 Distribution & trust
 
 Git-backed, content-addressed, signed. **TUF-lite** role separation — a compromised

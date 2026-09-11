@@ -126,8 +126,11 @@ Where the domain gets hard, still without touching credentials.
 - **PubGrub solver** — **implemented for Modrinth's target-filtered candidate graph**, including
   exact release requirements and backtracking. Fabric/NeoForge version-range semantics and
   dependency metadata from `fabric.mod.json` and `neoforge.mods.toml` remain pending.
-- **Virtual packages** — Fabric API forks and reimplementations, `replaces` for abandoned
-  mods.
+- **Virtual packages** — **implemented**: overlay `provides` and `replaces` on solver
+  candidates, with one supplier per package, replacements preferred over abandoned originals
+  and originals over forks. Built-in overlay entries cover Quilted Fabric API and Forgified
+  Fabric API, and installed mods take part in resolution. Registry-distributed overlays wait
+  for M7.
 - **Loader bootstrap as a component** — Fabric and NeoForge installation and version
   pinning, including the launcher profile JSON.
 - **Structured config merge** across TOML, JSON/JSON5 and `.properties`, with the user

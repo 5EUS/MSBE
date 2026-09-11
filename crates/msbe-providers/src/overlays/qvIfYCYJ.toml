@@ -1,0 +1,9 @@
+# Quilted Fabric API (QFAPI), https://modrinth.com/mod/qsl
+# Fabric API reimplemented for Quilt. Its quilt.mod.json declares `provides` for `fabric-api`,
+# so Quilt Loader treats it as Fabric API, and the two cannot be installed together.
+schema = 1
+mod    = "modrinth:qvIfYCYJ"
+
+provides = [
+  "modrinth:P7dR8mSH", # Fabric API
+]

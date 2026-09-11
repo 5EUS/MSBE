@@ -195,6 +195,8 @@ fn project_id(slug: &str) -> &'static str {
     match slug {
         "sodium" => "AANobbMI",
         "iris" => "YL57xq9U",
+        "fabric-api" => "P7dR8mSH",
+        "qsl" => "qvIfYCYJ",
         _ => panic!("no id for test project {slug}"),
     }
 }
@@ -698,6 +700,65 @@ fn profile_target_persists_and_quilt_provides_fabric_compatibility() {
             "/target/loader"
         ),
         "quilt"
+    );
+}
+
+#[test]
+fn a_fabric_api_reimplementation_in_the_profile_meets_requirements_on_fabric_api() {
+    let world = World::new();
+    world.add_instance(Some("1.21.1"));
+    let date = "2026-08-01T00:00:00Z";
+    world
+        .modrinth
+        .publish("fabric-api", "0.116.0", "release", date, &json!([]));
+    world
+        .modrinth
+        .publish("qsl", "10.0.0", "release", date, &json!([]));
+    world
+        .modrinth
+        .publish("sodium", "0.9.0", "release", date, &requires("P7dR8mSH"));
+
+    // With nothing standing in for it, Fabric API itself meets the requirement.
+    let fabric = world.json(&["add", "mc", "modrinth:sodium", "--with-deps"]);
+    assert_eq!(at(&fabric, "/added"), &json!(["sodium", "fabric-api"]));
+    assert_eq!(at(&fabric, "/substituted"), &json!([]));
+
+    // Quilted Fabric API provides Fabric API, so a profile that has it gets no second copy.
+    world.json(&["profile", "new", "mc", "quilt"]);
+    world.json(&[
+        "profile",
+        "set-target",
+        "mc",
+        "quilt",
+        "--loader",
+        "quilt",
+        "--side",
+        "client",
+    ]);
+    world.json(&["add", "mc", "modrinth:qsl", "--profile", "quilt"]);
+    let quilt = world.json(&[
+        "add",
+        "mc",
+        "modrinth:sodium",
+        "--with-deps",
+        "--profile",
+        "quilt",
+    ]);
+    assert_eq!(at(&quilt, "/added"), &json!(["sodium"]));
+    assert_eq!(
+        at(&quilt, "/substituted"),
+        &json!([{ "project_id": "P7dR8mSH", "declared_by": "sodium", "supplied_by": "qvIfYCYJ" }])
+    );
+
+    // Nor can Fabric API be added beside it.
+    let clash = world.msbe(&["add", "mc", "modrinth:fabric-api", "--profile", "quilt"]);
+    assert_eq!(clash.code, exit::FAILURE, "{}", clash.out);
+    assert!(clash.err.contains("P7dR8mSH"), "{}", clash.err);
+    assert_eq!(
+        at(&world.json(&["profile", "show", "mc", "quilt"]), "/mods")
+            .as_object()
+            .map(|mods| mods.keys().cloned().collect::<Vec<_>>()),
+        Some(vec!["qsl".to_owned(), "sodium".to_owned()])
     );
 }
 

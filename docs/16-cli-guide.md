@@ -133,6 +133,10 @@ Use `--profile NAME` or `-p NAME` with `add` to add to a non-default profile.
 
 `--with-deps` collects the full target-compatible Modrinth dependency graph and resolves it
 with PubGrub. Exact Modrinth release requirements can backtrack to an older compatible release.
+Mods already in the profile stay at their installed release. A requirement is also met by a
+mod that provides or replaces the required one, such as Quilted Fabric API for Fabric API; the
+report lists these under `substituted`, and adding a second implementation of the same API
+fails with an explanation.
 Fabric/NeoForge dependency ranges embedded in artifacts are not yet read.
 
 ### 4.4 Update, remove, and deploy

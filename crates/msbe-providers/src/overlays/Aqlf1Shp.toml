@@ -1,0 +1,9 @@
+# Forgified Fabric API, https://modrinth.com/mod/forgified-fabric-api
+# Fabric API ported to NeoForge for Sinytra Connector. Its neoforge.mods.toml declares `provides`
+# for `fabric-api`, so the two cannot be installed together.
+schema = 1
+mod    = "modrinth:Aqlf1Shp"
+
+provides = [
+  "modrinth:P7dR8mSH", # Fabric API
+]

@@ -19,6 +19,7 @@ mod http;
 pub mod manifest;
 mod metadata;
 pub mod modrinth;
+pub mod overlay;
 pub mod registry;
 mod target;
 
@@ -26,5 +27,6 @@ pub use endpoint::{EndpointError, JsonEndpoint};
 pub use http::{HttpClient, HttpError};
 pub use manifest::{Catalog, ManifestError, Provider, Source};
 pub use metadata::SearchResult;
+pub use overlay::{Overlay, OverlayError};
 pub use registry::{DIRECT, MODRINTH, ProviderRegistry, RegistryError, ResolvedSource};
 pub use target::{Availability, Target};

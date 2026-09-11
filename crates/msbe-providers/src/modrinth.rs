@@ -11,14 +11,14 @@ use std::{
 };
 
 use msbe_core::solver::{
-    Candidate, PackageId, Requirement as SolverRequirement, RootRequirement, solve,
+    Candidate, PackageId, Requirement as SolverRequirement, RootRequirement, Solution, solve,
 };
 use msbe_plan_schema::Side;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    Availability, EndpointError, JsonEndpoint, Target,
+    Availability, EndpointError, JsonEndpoint, Overlay, Target,
     acquisition::{AcquisitionError, ArtifactDescriptor, acquire},
     http::{HttpClient, HttpError},
 };
@@ -242,6 +242,8 @@ pub struct InstallPlan {
     pub unresolved: Vec<Requirement>,
     /// Declared incompatibilities between selected projects.
     pub incompatible: Vec<Requirement>,
+    /// Required projects that another selected or installed project stands in for.
+    pub substitutions: Vec<Substitution>,
 }
 
 /// A version that should replace an installed one, and the file to install from it.
@@ -290,13 +292,106 @@ struct HashQuery<'q> {
     version_types: Option<&'q [&'q str]>,
 }
 
+/// A Modrinth release already in the profile, which resolution keeps as it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstalledRelease {
+    /// The project id.
+    pub project: String,
+    /// The version id.
+    pub version: String,
+}
+
+/// A required project that another selected or installed project provides or replaces.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Substitution {
+    /// The required project.
+    pub project_id: String,
+    /// The slug of the project that requires it.
+    pub declared_by: String,
+    /// The project that stands in for it.
+    pub supplied_by: String,
+}
+
 type ReleaseKey = (String, String);
 type ReleaseRecord = (Project, Version);
 
+/// Why a project is collected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Reach {
+    /// It was requested or is required, so it must exist.
+    Required,
+    /// The overlay says it could stand in for a required project.
+    StandIn,
+}
+
+#[derive(Default)]
 struct CandidateGraph {
+    /// The requested projects' ids, in request order.
+    requested: Vec<String>,
     roots: Vec<RootRequirement>,
     candidates: Vec<Candidate>,
     records: BTreeMap<ReleaseKey, ReleaseRecord>,
+    /// Installed releases the walk did not collect, which are candidates without a record.
+    kept: BTreeSet<ReleaseKey>,
+}
+
+impl CandidateGraph {
+    /// Rewrites requested version numbers to the release ids the solver knows them by.
+    fn pin_requested_versions(&mut self) {
+        for root in &mut self.roots {
+            let Some(wanted) = root.release.as_deref() else {
+                continue;
+            };
+            let project = root.package.project.as_str();
+            let release = self
+                .records
+                .get(&(project.to_owned(), wanted.to_owned()))
+                .or_else(|| {
+                    self.records.values().find(|(candidate, version)| {
+                        candidate.id == project && version.version_number == wanted
+                    })
+                })
+                .map(|(_, version)| version.id.clone());
+            if let Some(release) = release {
+                root.release = Some(release);
+            }
+        }
+    }
+
+    /// Requires every `installed` release exactly. One the walk did not collect, because nothing
+    /// reached its project or it no longer suits the target, becomes a candidate without
+    /// dependencies: what it needed was settled when it was installed.
+    fn keep_installed(&mut self, installed: &[InstalledRelease], overlay: &Overlay) {
+        let mut order = 0_u64;
+        for release in installed {
+            let package = package(&release.project);
+            let key = (release.project.clone(), release.version.clone());
+            if !self.records.contains_key(&key) && self.kept.insert(key) {
+                let supplies = overlay.entry(&package).cloned().unwrap_or_default();
+                self.candidates.push(Candidate {
+                    package: package.clone(),
+                    release: release.version.clone(),
+                    order,
+                    dependencies: Vec::new(),
+                    provides: supplies.provides,
+                    replaces: supplies.replaces,
+                });
+                order = order.saturating_add(1);
+            }
+            self.roots.push(RootRequirement {
+                package,
+                release: Some(release.version.clone()),
+            });
+        }
+    }
+}
+
+/// Whether `error` is Modrinth reporting that what was asked for does not exist.
+const fn is_not_found(error: &ModrinthError) -> bool {
+    matches!(
+        error,
+        ModrinthError::Endpoint(EndpointError::Http(HttpError::Status { status: 404, .. }))
+    )
 }
 
 /// A Modrinth API client over any [`HttpClient`].
@@ -442,6 +537,12 @@ impl<'a> Modrinth<'a> {
     /// resolves exact release requirements. Provider dependency ranges from artifact metadata
     /// are added by the later Fabric/NeoForge metadata reader.
     ///
+    /// `overlay` says which projects provide or replace others. A requirement on a project is met
+    /// by a selected or installed project that provides or replaces it, so every such project is
+    /// collected as a candidate too; one that no longer exists on Modrinth is skipped. `installed`
+    /// releases stay as they are, so a selection that contradicts one, such as a second
+    /// implementation of an API already installed, fails resolution with an explanation.
+    ///
     /// # Errors
     ///
     /// Returns the first selection or request error.
@@ -450,15 +551,13 @@ impl<'a> Modrinth<'a> {
         specs: &[Spec],
         target: &Target,
         with_dependencies: bool,
+        overlay: &Overlay,
+        installed: &[InstalledRelease],
     ) -> Result<InstallPlan, ModrinthError> {
-        let graph = self.collect_candidates(specs, target, with_dependencies)?;
+        let mut graph = self.collect_candidates(specs, target, with_dependencies, overlay)?;
+        graph.keep_installed(installed, overlay);
         let solved = solve(&graph.roots, &graph.candidates)?;
-        self.install_plan(
-            graph.roots,
-            graph.records,
-            solved.selected,
-            with_dependencies,
-        )
+        self.install_plan(graph, &solved, with_dependencies)
     }
 
     fn collect_candidates(
@@ -466,10 +565,11 @@ impl<'a> Modrinth<'a> {
         specs: &[Spec],
         target: &Target,
         with_dependencies: bool,
+        overlay: &Overlay,
     ) -> Result<CandidateGraph, ModrinthError> {
         let mut queue = VecDeque::new();
         let mut projects = BTreeMap::new();
-        let mut roots = Vec::new();
+        let mut graph = CandidateGraph::default();
         for spec in specs {
             let project = self.project(&spec.project)?;
             if !target.supports_side(project.client_side, project.server_side) {
@@ -478,110 +578,101 @@ impl<'a> Modrinth<'a> {
                     side: target.side,
                 });
             }
-            let package = package(&project.id);
-            roots.push(RootRequirement {
-                package: package.clone(),
+            graph.roots.push(RootRequirement {
+                package: package(&project.id),
                 release: spec.version.clone(),
             });
-            queue.push_back(project.id.clone());
+            graph.requested.push(project.id.clone());
+            queue.push_back((project.id.clone(), Reach::Required));
             projects.insert(project.id.clone(), project);
         }
 
         let mut seen = BTreeSet::new();
-        let mut candidates = Vec::new();
-        let mut records = BTreeMap::new();
-        while let Some(project_id) = queue.pop_front() {
-            if !seen.insert(project_id.clone()) {
+        while let Some((project_id, reach)) = queue.pop_front() {
+            if seen.contains(&project_id) {
                 continue;
             }
-            let project = if let Some(project) = projects.get(&project_id) {
-                project.clone()
-            } else {
-                let project = self.project(&project_id)?;
-                projects.insert(project_id.clone(), project.clone());
-                project
+            let Some(project) = self.queued_project(&project_id, reach, &mut projects)? else {
+                continue;
             };
+            seen.insert(project_id);
+            let supplies = overlay
+                .entry(&package(&project.id))
+                .cloned()
+                .unwrap_or_default();
             let versions = self.versions(&project.id, target)?;
             for (index, version) in versions.into_iter().enumerate() {
                 let index = u64::try_from(index).map_err(|_| ModrinthError::TooManyCandidates)?;
                 let dependencies = if with_dependencies {
-                    self.solver_dependencies(&version, &mut queue)?
+                    self.solver_dependencies(&version, overlay, &mut queue)?
                 } else {
                     Vec::new()
                 };
-                candidates.push(Candidate {
+                graph.candidates.push(Candidate {
                     package: package(&project.id),
                     release: version.id.clone(),
                     order: u64::MAX - index,
                     dependencies,
+                    provides: supplies.provides.clone(),
+                    replaces: supplies.replaces.clone(),
                 });
-                records.insert(
+                graph.records.insert(
                     (project.id.clone(), version.id.clone()),
                     (project.clone(), version),
                 );
             }
         }
-        for root in &mut roots {
-            let Some(wanted) = root.release.as_deref() else {
-                continue;
-            };
-            let release = records
-                .get(&(root.package.project.clone(), wanted.to_owned()))
-                .map(|(_, version)| version.id.clone())
-                .or_else(|| {
-                    records
-                        .values()
-                        .find(|(project, version)| {
-                            project.id == root.package.project && version.version_number == wanted
-                        })
-                        .map(|(_, version)| version.id.clone())
-                });
-            if let Some(release) = release {
-                root.release = Some(release);
-            }
-        }
+        graph.pin_requested_versions();
+        Ok(graph)
+    }
 
-        Ok(CandidateGraph {
-            roots,
-            candidates,
-            records,
-        })
+    /// The project `id` names, fetched at most once. A possible stand-in that Modrinth no longer
+    /// has is `None`, so a stale overlay entry cannot fail resolution.
+    fn queued_project(
+        &self,
+        id: &str,
+        reach: Reach,
+        projects: &mut BTreeMap<String, Project>,
+    ) -> Result<Option<Project>, ModrinthError> {
+        if let Some(project) = projects.get(id) {
+            return Ok(Some(project.clone()));
+        }
+        match self.project(id) {
+            Ok(project) => {
+                projects.insert(id.to_owned(), project.clone());
+                Ok(Some(project))
+            }
+            Err(error) if reach == Reach::StandIn && is_not_found(&error) => Ok(None),
+            Err(error) => Err(error),
+        }
     }
 
     fn install_plan(
         &self,
-        roots: Vec<RootRequirement>,
-        mut records: BTreeMap<ReleaseKey, ReleaseRecord>,
-        solved: BTreeMap<PackageId, Candidate>,
+        graph: CandidateGraph,
+        solved: &Solution,
         with_dependencies: bool,
     ) -> Result<InstallPlan, ModrinthError> {
+        let CandidateGraph {
+            requested,
+            mut records,
+            kept,
+            ..
+        } = graph;
         let mut selected: BTreeMap<String, (Project, Version)> = BTreeMap::new();
-        for (package, candidate) in solved {
-            let key = (package.project.clone(), candidate.release);
-            let record = records.remove(&key).ok_or(ModrinthError::MissingCandidate(
-                key.0.clone(),
-                key.1.clone(),
-            ))?;
-            selected.insert(package.project, record);
-        }
-        let selected_ids: BTreeSet<String> = selected.keys().cloned().collect();
-        let mut required_by = BTreeMap::new();
-        for (project, version) in selected.values() {
-            for dependency in &version.dependencies {
-                if dependency.dependency_type != DependencyType::Required {
-                    continue;
+        for (package, candidate) in &solved.selected {
+            let key = (package.project.clone(), candidate.release.clone());
+            match records.remove(&key) {
+                Some(record) => {
+                    selected.insert(package.project.clone(), record);
                 }
-                if let Some(required) = self.dependency_project(dependency)?
-                    && selected_ids.contains(&required)
-                {
-                    required_by
-                        .entry(required)
-                        .or_insert_with(|| project.slug.clone());
-                }
+                None if kept.contains(&key) => {}
+                None => return Err(ModrinthError::MissingCandidate(key.0, key.1)),
             }
         }
+        let mut required_by = self.required_by(&selected, solved)?;
         let mut plan = InstallPlan::default();
-        let mut ordered: Vec<String> = roots.into_iter().map(|root| root.package.project).collect();
+        let mut ordered = requested;
         let transitive: Vec<String> = selected
             .keys()
             .filter(|project| !ordered.contains(project))
@@ -592,28 +683,7 @@ impl<'a> Modrinth<'a> {
             let Some((project, version)) = selected.remove(&project_id) else {
                 continue;
             };
-            for dependency in &version.dependencies {
-                let Some(required) = self.dependency_project(dependency)? else {
-                    continue;
-                };
-                let requirement = Requirement {
-                    project_id: required.clone(),
-                    declared_by: project.slug.clone(),
-                };
-                match dependency.dependency_type {
-                    DependencyType::Required if !with_dependencies => {
-                        plan.unresolved.push(requirement);
-                    }
-                    DependencyType::Incompatible if selected_ids.contains(&required) => {
-                        plan.incompatible.push(requirement);
-                    }
-                    DependencyType::Required
-                    | DependencyType::Incompatible
-                    | DependencyType::Optional
-                    | DependencyType::Embedded
-                    | DependencyType::Unknown => {}
-                }
-            }
+            self.record_relationships(&mut plan, &project, &version, solved, with_dependencies)?;
             let file = primary_file(&version)?.clone();
             plan.selections.push(Selection {
                 project,
@@ -625,10 +695,89 @@ impl<'a> Modrinth<'a> {
         Ok(plan)
     }
 
+    /// For each selected project that meets another selected project's requirement, directly or
+    /// by standing in for the required project, the slug of the first project requiring it.
+    fn required_by(
+        &self,
+        selected: &BTreeMap<String, (Project, Version)>,
+        solved: &Solution,
+    ) -> Result<BTreeMap<String, String>, ModrinthError> {
+        let mut required_by = BTreeMap::new();
+        for (project, version) in selected.values() {
+            for dependency in &version.dependencies {
+                if dependency.dependency_type != DependencyType::Required {
+                    continue;
+                }
+                let Some(required) = self.dependency_project(dependency)? else {
+                    continue;
+                };
+                let required = package(&required);
+                let meeting = solved.supplied_by.get(&required).unwrap_or(&required);
+                if selected.contains_key(&meeting.project) {
+                    required_by
+                        .entry(meeting.project.clone())
+                        .or_insert_with(|| project.slug.clone());
+                }
+            }
+        }
+        Ok(required_by)
+    }
+
+    /// Records the requirements of `version` that nothing selected or installed meets, when
+    /// dependencies were not walked; those another project stands in for; and the selected or
+    /// installed projects it declares incompatible.
+    fn record_relationships(
+        &self,
+        plan: &mut InstallPlan,
+        project: &Project,
+        version: &Version,
+        solved: &Solution,
+        with_dependencies: bool,
+    ) -> Result<(), ModrinthError> {
+        for dependency in &version.dependencies {
+            let Some(related) = self.dependency_project(dependency)? else {
+                continue;
+            };
+            let present = solved.selected.contains_key(&package(&related));
+            let stand_in = solved.supplied_by.get(&package(&related));
+            let requirement = Requirement {
+                project_id: related,
+                declared_by: project.slug.clone(),
+            };
+            match (dependency.dependency_type, stand_in) {
+                (DependencyType::Required, Some(stand_in)) => {
+                    plan.substitutions.push(Substitution {
+                        project_id: requirement.project_id,
+                        declared_by: requirement.declared_by,
+                        supplied_by: stand_in.project.clone(),
+                    });
+                }
+                (DependencyType::Required, None) if !with_dependencies && !present => {
+                    plan.unresolved.push(requirement);
+                }
+                (DependencyType::Incompatible, _) if present => {
+                    plan.incompatible.push(requirement);
+                }
+                (
+                    DependencyType::Required
+                    | DependencyType::Incompatible
+                    | DependencyType::Optional
+                    | DependencyType::Embedded
+                    | DependencyType::Unknown,
+                    _,
+                ) => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// The solver requirements `version` declares. Each required project is queued for
+    /// collection, and so is every project the overlay says could stand in for it.
     fn solver_dependencies(
         &self,
         version: &Version,
-        queue: &mut VecDeque<String>,
+        overlay: &Overlay,
+        queue: &mut VecDeque<(String, Reach)>,
     ) -> Result<Vec<SolverRequirement>, ModrinthError> {
         let mut requirements = Vec::new();
         for dependency in &version.dependencies {
@@ -638,9 +787,18 @@ impl<'a> Modrinth<'a> {
             let Some(project) = self.dependency_project(dependency)? else {
                 continue;
             };
-            queue.push_back(project.clone());
+            let required = package(&project);
+            queue.push_back((project, Reach::Required));
+            if dependency.version_id.is_none() {
+                queue.extend(
+                    overlay
+                        .suppliers(&required)
+                        .filter(|supplier| supplier.provider == crate::MODRINTH)
+                        .map(|supplier| (supplier.project.clone(), Reach::StandIn)),
+                );
+            }
             requirements.push(SolverRequirement {
-                package: package(&project),
+                package: required,
                 release: dependency.version_id.clone(),
             });
         }
@@ -1050,9 +1208,11 @@ mod tests {
     use sha2::{Digest as _, Sha512};
 
     use super::{
-        Modrinth, ModrinthError, Requirement, Spec, Target, UpdateCheck, Version, VersionType,
+        InstalledRelease, Modrinth, ModrinthError, Requirement, Spec, Substitution, Target,
+        UpdateCheck, Version, VersionType,
     };
     use crate::{
+        Overlay,
         hashing::hex,
         http::{HttpClient, HttpError},
     };
@@ -1337,7 +1497,9 @@ mod tests {
         let modrinth = Modrinth::new(&http);
         let iris = [Spec::parse("iris").unwrap()];
 
-        let with = modrinth.plan_install(&iris, &target(), true).unwrap();
+        let with = modrinth
+            .plan_install(&iris, &target(), true, &Overlay::default(), &[])
+            .unwrap();
         let chosen: Vec<(&str, Option<&str>)> = with
             .selections
             .iter()
@@ -1351,7 +1513,9 @@ mod tests {
         assert_eq!(chosen, [("iris", None), ("sodium", Some("iris"))]);
         assert!(with.unresolved.is_empty());
 
-        let without = modrinth.plan_install(&iris, &target(), false).unwrap();
+        let without = modrinth
+            .plan_install(&iris, &target(), false, &Overlay::default(), &[])
+            .unwrap();
         assert_eq!(without.selections.len(), 1);
         let [missing] = without.unresolved.as_slice() else {
             panic!(
@@ -1402,6 +1566,8 @@ mod tests {
                 &[Spec::parse("iris").unwrap(), Spec::parse("sodium").unwrap()],
                 &target(),
                 true,
+                &Overlay::default(),
+                &[],
             )
             .unwrap();
         let sodium = plan
@@ -1422,6 +1588,8 @@ mod tests {
                 &[Spec::parse("sodium").unwrap(), Spec::parse("iris").unwrap()],
                 &target(),
                 true,
+                &Overlay::default(),
+                &[],
             )
             .unwrap();
         let slugs: Vec<&str> = plan
@@ -1430,6 +1598,112 @@ mod tests {
             .map(|selection| selection.project.slug.as_str())
             .collect();
         assert_eq!(slugs, ["sodium", "iris"]);
+    }
+
+    /// The catalogue, plus Fabric API, Quilted Fabric API, which provides it, and a newer Sodium
+    /// that requires it. Forgified Fabric API, the other built-in stand-in for Fabric API, is
+    /// absent, as if Modrinth had removed it.
+    fn fabric_api_catalogue() -> FakeHttp {
+        let mut http = catalogue();
+        for (id, slug) in [("P7dR8mSH", "fabric-api"), ("qvIfYCYJ", "qsl")] {
+            http.route(
+                &format!("/project/{id}"),
+                json!({ "id": id, "slug": slug, "title": slug, "project_type": "mod",
+                        "client_side": "required", "server_side": "required" }),
+            );
+            http.route(
+                &format!("/project/{id}/version"),
+                json!([version(
+                    &format!("{slug}-1"),
+                    id,
+                    "1.0.0",
+                    "release",
+                    "2026-08-01T00:00:00Z",
+                    &format!("{slug}.jar"),
+                )]),
+            );
+        }
+        let mut sodium = version(
+            "S3",
+            "AANobbMI",
+            "0.9.0",
+            "release",
+            "2026-09-01T00:00:00Z",
+            "sodium-0.9.0.jar",
+        );
+        sodium.as_object_mut().unwrap().insert(
+            "dependencies".to_owned(),
+            json!([{ "project_id": "P7dR8mSH", "version_id": null, "dependency_type": "required" }]),
+        );
+        let versions = http
+            .json
+            .get_mut(&format!("{BASE}/project/AANobbMI/version"))
+            .and_then(Value::as_array_mut);
+        let Some(versions) = versions else {
+            panic!("sodium version fixture is missing");
+        };
+        versions.push(sodium);
+        http
+    }
+
+    #[test]
+    fn an_installed_stand_in_meets_requirements_and_excludes_the_original() {
+        fn slugs(plan: &super::InstallPlan) -> Vec<&str> {
+            plan.selections
+                .iter()
+                .map(|selection| selection.project.slug.as_str())
+                .collect()
+        }
+
+        let http = fabric_api_catalogue();
+        let modrinth = Modrinth::new(&http);
+        let overlay = Overlay::builtins().unwrap();
+        let sodium = [Spec::parse("sodium").unwrap()];
+
+        // Nothing stands in yet, so Fabric API is preferred over the fork that provides it, and
+        // the stand-in Modrinth no longer has does not fail resolution.
+        let fresh = modrinth
+            .plan_install(&sodium, &target(), true, &overlay, &[])
+            .unwrap();
+        assert_eq!(slugs(&fresh), ["sodium", "fabric-api"]);
+        assert!(fresh.substitutions.is_empty());
+
+        let quilted = [InstalledRelease {
+            project: "qvIfYCYJ".to_owned(),
+            version: "qsl-1".to_owned(),
+        }];
+        let substitution = Substitution {
+            project_id: "P7dR8mSH".to_owned(),
+            declared_by: "sodium".to_owned(),
+            supplied_by: "qvIfYCYJ".to_owned(),
+        };
+        let kept = modrinth
+            .plan_install(&sodium, &target(), true, &overlay, &quilted)
+            .unwrap();
+        assert_eq!(slugs(&kept), ["sodium", "qsl"]);
+        assert_eq!(
+            kept.selections
+                .iter()
+                .find(|selection| selection.project.slug == "qsl")
+                .and_then(|selection| selection.required_by.as_deref()),
+            Some("sodium")
+        );
+        assert_eq!(kept.substitutions, std::slice::from_ref(&substitution));
+
+        // Without walking dependencies, the installed fork is never fetched, yet it still meets
+        // the requirement instead of leaving it unresolved.
+        let bare = modrinth
+            .plan_install(&sodium, &target(), false, &overlay, &quilted)
+            .unwrap();
+        assert_eq!(slugs(&bare), ["sodium"]);
+        assert!(bare.unresolved.is_empty(), "{:?}", bare.unresolved);
+        assert_eq!(bare.substitutions, [substitution]);
+
+        let fabric_api = [Spec::parse("P7dR8mSH").unwrap()];
+        assert!(matches!(
+            modrinth.plan_install(&fabric_api, &target(), false, &overlay, &quilted),
+            Err(ModrinthError::Solver(_))
+        ));
     }
 
     #[test]

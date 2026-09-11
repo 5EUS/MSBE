@@ -108,6 +108,32 @@ These are one mechanism at four altitudes, which is why all four are worth havin
 without loader-level, a fork fragments the ecosystem; without mod-level, one abandoned
 mod blocks everything downstream of it.
 
+**API- and mod-level are implemented (M2).** A candidate release may `provides` or
+`replaces` other packages, and `msbe_core::solver` applies four rules:
+
+1. **A requirement without an exact release is met by the package or by anything that
+   supplies it.** Sodium requiring Fabric API is satisfied by Quilted Fabric API already in
+   the profile.
+2. **At most one selected package supplies a package**, the package itself included. Two
+   implementations of one API claim the same mod id, and Fabric and Quilt Loader refuse to
+   start with both, so asking for both is an explained conflict rather than a broken launch.
+3. **Preference, when nothing else decides:** a replacement over the abandoned original it
+   replaces, and the original over a package that merely provides it. A fork is chosen when
+   something asks for it by name, or when the original has no release for the Target.
+4. **Exact releases and roots are never substituted.** A pin names one release, and a mod the
+   user asked for by name is the mod they get.
+
+Each supplied package becomes a PubGrub package of its own whose versions are its possible
+suppliers, most preferred highest. Exclusivity and preference are therefore ordinary version
+solving, and a conflict keeps its derivation explanation.
+
+The facts come from the overlay ([10](10-registry.md)). MSBE ships entries for Quilted Fabric
+API and Forgified Fabric API, each checked against the `provides` in its own mod metadata.
+Mods already in a profile take part in resolution, pinned to their installed release, so
+adding a mod to a profile that has a reimplementation does not install a second copy. Reading
+`provides` straight from `fabric.mod.json` and `neoforge.mods.toml` waits on the artifact
+metadata reader.
+
 ## 5.6 Optional & soft constraints
 
 Three strengths, because modding needs all three:
