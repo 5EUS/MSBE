@@ -6,7 +6,6 @@
 //! fetched is recorded either way.
 
 use std::{
-    fs::File,
     io,
     path::{Path, PathBuf},
 };
@@ -15,7 +14,7 @@ use msbe_fsops::RelPath;
 use thiserror::Error;
 
 use crate::{
-    hashing::HashingWriter,
+    artifact::{ArtifactError, download as download_artifact},
     http::{HttpClient, HttpError},
 };
 
@@ -100,17 +99,11 @@ pub fn download(
     dir: &Path,
 ) -> Result<Downloaded, DirectError> {
     let path = dir.join(&source.file_name);
-    let io_error = |error| DirectError::Io {
-        path: path.clone(),
-        source: error,
-    };
-    let mut sink = HashingWriter::new(File::create_new(&path).map_err(io_error)?);
-    http.download(&source.url, &mut sink, DOWNLOAD_LIMIT)?;
-    sink.inner().sync_all().map_err(io_error)?;
+    let artifact = download_artifact(http, &source.url, &path, DOWNLOAD_LIMIT)?;
 
-    let sha512 = sink.sha512_hex();
+    let sha512 = artifact.sha512;
     let pinned = match &source.checksum {
-        Some(Checksum::Sha256(expected)) => Some(("SHA-256", expected, sink.sha256_hex())),
+        Some(Checksum::Sha256(expected)) => Some(("SHA-256", expected, artifact.sha256)),
         Some(Checksum::Sha512(expected)) => Some(("SHA-512", expected, sha512.clone())),
         None => None,
     };
@@ -127,7 +120,7 @@ pub fn download(
     Ok(Downloaded {
         path,
         sha512,
-        size: sink.written(),
+        size: artifact.bytes,
     })
 }
 
@@ -207,6 +200,15 @@ pub enum DirectError {
         #[source]
         source: io::Error,
     },
+}
+
+impl From<ArtifactError> for DirectError {
+    fn from(error: ArtifactError) -> Self {
+        match error {
+            ArtifactError::Http(error) => Self::Http(error),
+            ArtifactError::Io { path, source } => Self::Io { path, source },
+        }
+    }
 }
 
 #[cfg(test)]

@@ -21,20 +21,17 @@ use msbe_core::{
 };
 use msbe_fsops::{Backend, NoopObserver, Operation, RelPath};
 use msbe_providers::{
-    Catalog, HttpClient, HttpError, ManifestError,
+    Catalog, HttpClient, HttpError, MODRINTH, ProviderRegistry, RegistryError, ResolvedSource,
     direct::{self, DirectError, DirectSource},
     modrinth::{
-        InstallPlan, Modrinth, ModrinthError, Requirement, Spec, Target, Update, UpdateCheck,
-        Version, VersionFile,
+        InstallPlan, Modrinth, ModrinthError, Requirement, Target, Update, UpdateCheck, Version,
+        VersionFile,
     },
 };
 use serde::Serialize;
 
 #[cfg(test)]
 mod end_to_end_tests;
-
-/// The provider name recorded in a mod's provenance.
-const MODRINTH: &str = "modrinth";
 
 /// Opens a network client on first use, so commands that never touch the network never load
 /// the platform's certificates.
@@ -238,7 +235,7 @@ enum CliError {
     #[error(transparent)]
     Http(#[from] HttpError),
     #[error(transparent)]
-    Provider(#[from] ManifestError),
+    Provider(#[from] RegistryError),
     #[error(
         "instance {0} has no game version; set one with `msbe instance set {0} --game-version <version>`"
     )]
@@ -366,7 +363,7 @@ where
 }
 
 fn execute(cli: &Cli, console: &mut Console<'_>) -> Result<u8, CliError> {
-    let providers = Catalog::builtins()?;
+    let providers = Catalog::builtins().map_err(RegistryError::from)?;
     let home = match &cli.home {
         Some(dir) => Home::at(dir),
         None => Home::discover()?,
@@ -560,24 +557,20 @@ fn add(
     let mut artifacts = Vec::new();
     let mut specs = Vec::new();
     let mut urls = Vec::new();
+    let registry = ProviderRegistry::new(providers);
     for source in sources {
-        match providers.source(source) {
-            Ok(recognized) if recognized.provider().id == MODRINTH => {
-                specs.push(Spec::parse(recognized.reference())?);
+        match registry.source(source) {
+            Ok(ResolvedSource::Modrinth { spec, .. }) => specs.push(spec),
+            Ok(ResolvedSource::Direct { provider, source }) => {
+                urls.push((provider.id.as_str(), source));
             }
-            Ok(recognized) if recognized.provider().id == "url" => {
-                urls.push(DirectSource::parse(recognized.raw())?);
+            Err(RegistryError::Manifest(msbe_providers::ManifestError::UnknownSource(_))) => {
+                artifacts.push(Artifact {
+                    path: PathBuf::from(source),
+                    module: None,
+                    provider: None,
+                });
             }
-            Ok(recognized) => {
-                return Err(
-                    ManifestError::UnknownProvider(recognized.provider().id.clone()).into(),
-                );
-            }
-            Err(ManifestError::UnknownSource(_)) => artifacts.push(Artifact {
-                path: PathBuf::from(source),
-                module: None,
-                provider: None,
-            }),
             Err(error) => return Err(error.into()),
         }
     }
@@ -599,15 +592,11 @@ fn add(
             report: &mut report,
         };
         if !specs.is_empty() {
-            let modrinth = modrinth(providers, client.as_ref())?;
+            let modrinth = registry.modrinth(client.as_ref())?;
             let plan = modrinth.plan_install(&specs, &target(&opened)?, with_deps)?;
             fetch.modrinth(&modrinth, plan)?;
         }
-        fetch.urls(
-            client.as_ref(),
-            &urls,
-            providers.provider("url")?.id.as_str(),
-        )?;
+        fetch.urls(client.as_ref(), &urls)?;
     }
     report.added = opened.add_artifacts(&profile, &artifacts)?;
 
@@ -666,10 +655,9 @@ impl Fetch<'_> {
     fn urls(
         &mut self,
         http: &dyn HttpClient,
-        sources: &[DirectSource],
-        provider_id: &str,
+        sources: &[(&str, DirectSource)],
     ) -> Result<(), CliError> {
-        for source in sources {
+        for (provider_id, source) in sources {
             if let Some(name) = installed_from(self.existing, provider_id, &source.url) {
                 self.report.skipped.push(name.clone());
                 continue;
@@ -679,7 +667,7 @@ impl Fetch<'_> {
                 path: downloaded.path,
                 module: None,
                 provider: Some(Provenance {
-                    provider: provider_id.to_owned(),
+                    provider: (*provider_id).to_owned(),
                     project: source.url.clone(),
                     version: downloaded.sha512.clone(),
                     version_number: source.file_name.clone(),
@@ -715,7 +703,7 @@ fn update(
     if !tracked.is_empty() {
         let target = target(&opened)?;
         let client = (console.connect)()?;
-        let modrinth = modrinth(providers, client.as_ref())?;
+        let modrinth = ProviderRegistry::new(providers).modrinth(client.as_ref())?;
         let updates = find_updates(&modrinth, &tracked, &target, &mut report)?;
         report_relationships(&modrinth, &selection, &updates, &mut report)?;
         if !dry_run && !updates.is_empty() {
@@ -853,7 +841,9 @@ fn search(
     let opened = open(home, instance, console)?;
     let target = target(&opened)?;
     let client = (console.connect)()?;
-    let hits = modrinth(providers, client.as_ref())?.search(&query.join(" "), &target, limit)?;
+    let hits = ProviderRegistry::new(providers)
+        .modrinth(client.as_ref())?
+        .search(&query.join(" "), &target, limit)?;
     console.emit(&hits, |out, hits| {
         if hits.is_empty() {
             return writeln!(out, "No compatible mods found.");
@@ -993,14 +983,6 @@ fn target(instance: &Instance) -> Result<Target, CliError> {
         loaders: instance.loader_ids(),
         game_version,
     })
-}
-
-fn modrinth<'a>(providers: &Catalog, http: &'a dyn HttpClient) -> Result<Modrinth<'a>, CliError> {
-    let provider = providers.provider(MODRINTH)?;
-    let api_base = provider
-        .api_base()
-        .ok_or_else(|| ManifestError::MissingMetadata(provider.id.clone()))?;
-    Ok(Modrinth::with_base(http, api_base))
 }
 
 /// The mod in `profile` recorded as `project` from `provider`, if any.

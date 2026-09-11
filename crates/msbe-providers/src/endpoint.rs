@@ -27,7 +27,7 @@ impl<'a> JsonEndpoint<'a> {
     /// Creates an endpoint over `base`.
     ///
     /// Provider manifests validate the base URL before an adapter constructs this helper.
-    pub fn new(http: &'a dyn HttpClient, base: impl Into<String>, limit: u64) -> Self {
+    pub(crate) fn new(http: &'a dyn HttpClient, base: impl Into<String>, limit: u64) -> Self {
         Self {
             http,
             base: base.into(),

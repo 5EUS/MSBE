@@ -6,9 +6,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
-    fmt,
-    fs::File,
-    io,
+    fmt, io,
     path::{Path, PathBuf},
 };
 
@@ -18,7 +16,7 @@ use thiserror::Error;
 
 use crate::{
     EndpointError, JsonEndpoint,
-    hashing::HashingWriter,
+    artifact::{ArtifactError, download as download_artifact},
     http::{HttpClient, HttpError},
 };
 
@@ -302,8 +300,8 @@ impl<'a> Modrinth<'a> {
         Self::with_base(http, API_BASE)
     }
 
-    /// A client for another deployment of the API, such as staging.
-    pub fn with_base(http: &'a dyn HttpClient, base: impl Into<String>) -> Self {
+    /// A client for a manifest-validated deployment of the API, such as staging.
+    pub(crate) fn with_base(http: &'a dyn HttpClient, base: impl Into<String>) -> Self {
         Self {
             endpoint: JsonEndpoint::new(http, base, METADATA_LIMIT),
         }
@@ -485,24 +483,16 @@ impl<'a> Modrinth<'a> {
             .filter(|name| !name.as_str().contains('/'))
             .ok_or_else(|| ModrinthError::UnsafeFileName(file.filename.clone()))?;
         let path = dir.join(name.as_str());
-        let io_error = |source| ModrinthError::Io {
-            path: path.clone(),
-            source,
-        };
-        let mut sink = HashingWriter::new(File::create_new(&path).map_err(io_error)?);
-        self.endpoint
-            .http()
-            .download(&file.url, &mut sink, file.size)?;
-        sink.inner().sync_all().map_err(io_error)?;
+        let artifact = download_artifact(self.endpoint.http(), &file.url, &path, file.size)?;
 
-        if sink.written() != file.size {
+        if artifact.bytes != file.size {
             return Err(ModrinthError::SizeMismatch {
                 file: file.filename.clone(),
                 expected: file.size,
-                actual: sink.written(),
+                actual: artifact.bytes,
             });
         }
-        let actual = sink.sha512_hex();
+        let actual = artifact.sha512;
         if !actual.eq_ignore_ascii_case(&file.hashes.sha512) {
             return Err(ModrinthError::HashMismatch {
                 file: file.filename.clone(),
@@ -728,6 +718,15 @@ pub enum ModrinthError {
         #[source]
         source: io::Error,
     },
+}
+
+impl From<ArtifactError> for ModrinthError {
+    fn from(error: ArtifactError) -> Self {
+        match error {
+            ArtifactError::Http(error) => Self::Http(error),
+            ArtifactError::Io { path, source } => Self::Io { path, source },
+        }
+    }
 }
 
 /// Whether `raw` can be a slug, id or version number, and is safe as one URL path segment.

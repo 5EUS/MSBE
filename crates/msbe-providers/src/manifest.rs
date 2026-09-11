@@ -67,7 +67,10 @@ impl Catalog {
     /// # Errors
     ///
     /// Returns [`ManifestError::UnknownSource`] when no declared source recognizer accepts it.
-    pub fn source<'a>(&'a self, raw: &'a str) -> Result<Source<'a>, ManifestError> {
+    pub fn source<'catalog, 'raw>(
+        &'catalog self,
+        raw: &'raw str,
+    ) -> Result<Source<'catalog, 'raw>, ManifestError> {
         let provider = self
             .providers
             .values()
@@ -90,24 +93,24 @@ impl Catalog {
 
 /// A source recognized by a catalog provider.
 #[derive(Debug, Clone, Copy)]
-pub struct Source<'a> {
-    provider: &'a Provider,
-    raw: &'a str,
+pub struct Source<'catalog, 'raw> {
+    provider: &'catalog Provider,
+    raw: &'raw str,
 }
 
-impl Source<'_> {
+impl<'catalog, 'raw> Source<'catalog, 'raw> {
     /// The definition that recognized this source.
-    pub fn provider(&self) -> &Provider {
+    pub const fn provider(&self) -> &'catalog Provider {
         self.provider
     }
 
     /// The original source text.
-    pub fn raw(&self) -> &str {
+    pub const fn raw(&self) -> &'raw str {
         self.raw
     }
 
     /// The provider-specific source reference, without a declared prefix.
-    pub fn reference(&self) -> &str {
+    pub fn reference(&self) -> &'raw str {
         self.provider.source.reference(self.raw)
     }
 }

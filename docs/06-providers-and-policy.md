@@ -97,6 +97,14 @@ Manifest data routes sources and configures reviewed adapters. It does not repla
 semantics that cannot be described safely as mappings: Modrinth's dependency walk, release
 channel policy, and bulk update protocol remain a built-in adapter behind its manifest.
 
+The M1 runtime resolves every recognized source through a fail-closed reviewed-adapter registry.
+Only the built-in `modrinth` and `url` adapters are available; a registry manifest without a
+compiled adapter is rejected rather than interpreted generically. The registry checks manifest
+policy before an adapter can make a request. M1 has no credential or persisted-acknowledgement
+workflow, so providers declaring `requires_auth = true` or `ack_required = true` are refused
+with an explicit unsupported-workflow error. This permits future adapters to declare stronger
+requirements without accidentally weakening their policy on older clients.
+
 ## 6.4 What we will not do
 
 Stated here so it is never re-litigated in a PR:

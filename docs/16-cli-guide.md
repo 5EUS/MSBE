@@ -224,8 +224,10 @@ the launcher can find its sibling binary.
 The built-in provider catalog recognizes the `modrinth:` source prefix and HTTPS direct URLs.
 Provider manifests are versioned and constrained configuration, not downloaded code: they can
 describe source recognition, HTTPS metadata origins, policy, and a supported acquisition
-primitive. See [06 - Providers & policy](06-providers-and-policy.md#63-provider-manifests) for
-the contribution and safety model.
+primitive. M1 resolves them only through reviewed built-in adapters and rejects providers that
+require authentication or a persisted policy acknowledgement, because those workflows are not
+implemented yet. See [06 - Providers & policy](06-providers-and-policy.md#63-provider-manifests)
+for the contribution and safety model.
 
 For unsupported behavior, consult [09 - Interfaces](09-interfaces.md) for the intended
 full interface and [13 - Roadmap](13-roadmap.md) for its implementation status.

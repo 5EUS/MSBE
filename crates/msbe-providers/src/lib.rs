@@ -10,13 +10,16 @@
 //!
 //! See `docs/06-providers-and-policy.md`.
 
+mod artifact;
 pub mod direct;
 pub mod endpoint;
 mod hashing;
 mod http;
 pub mod manifest;
 pub mod modrinth;
+pub mod registry;
 
 pub use endpoint::{EndpointError, JsonEndpoint};
 pub use http::{HttpClient, HttpError};
 pub use manifest::{Catalog, ManifestError, Provider, Source};
+pub use registry::{DIRECT, MODRINTH, ProviderRegistry, RegistryError, ResolvedSource};
