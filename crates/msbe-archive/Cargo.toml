@@ -16,7 +16,7 @@ publish.workspace      = true
 workspace = true
 
 [dependencies]
-msbe-fsops          = { path = "../msbe-fsops" }
+msbe-fsops          = { version = "0.0.0", path = "../msbe-fsops" }
 thiserror.workspace = true
 zip.workspace       = true
 

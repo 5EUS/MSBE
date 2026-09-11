@@ -16,9 +16,9 @@ publish.workspace      = true
 workspace = true
 
 [dependencies]
-msbe-archive         = { path = "../msbe-archive" }
-msbe-fsops           = { path = "../msbe-fsops" }
-msbe-plan-schema     = { path = "../msbe-plan-schema" }
+msbe-archive         = { version = "0.0.0", path = "../msbe-archive" }
+msbe-fsops           = { version = "0.0.0", path = "../msbe-fsops" }
+msbe-plan-schema     = { version = "0.0.0", path = "../msbe-plan-schema" }
 json5.workspace      = true
 pubgrub.workspace    = true
 serde.workspace      = true

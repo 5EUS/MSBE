@@ -16,7 +16,7 @@ publish.workspace      = true
 workspace = true
 
 [dependencies]
-msbe-providers               = { path = "../msbe-providers" }
+msbe-providers               = { version = "0.0.0", path = "../msbe-providers" }
 rustls.workspace             = true
 rustls-native-certs.workspace = true
 ureq.workspace               = true

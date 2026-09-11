@@ -16,9 +16,9 @@ publish.workspace      = true
 workspace = true
 
 [dependencies]
-msbe-fsops           = { path = "../msbe-fsops" }
-msbe-core            = { path = "../msbe-core" }
-msbe-plan-schema     = { path = "../msbe-plan-schema" }
+msbe-fsops           = { version = "0.0.0", path = "../msbe-fsops" }
+msbe-core            = { version = "0.0.0", path = "../msbe-core" }
+msbe-plan-schema     = { version = "0.0.0", path = "../msbe-plan-schema" }
 serde.workspace      = true
 serde_json.workspace = true
 sha2.workspace       = true

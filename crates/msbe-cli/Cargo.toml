@@ -22,12 +22,12 @@ path = "src/main.rs"
 
 [dependencies]
 clap.workspace       = true
-msbe-core            = { path = "../msbe-core" }
-msbe-fsops           = { path = "../msbe-fsops" }
-msbe-http            = { path = "../msbe-http" }
-msbe-plan-schema     = { path = "../msbe-plan-schema" }
-msbe-providers       = { path = "../msbe-providers" }
-msbe-rpc-schema      = { path = "../msbe-rpc-schema" }
+msbe-core            = { version = "0.0.0", path = "../msbe-core" }
+msbe-fsops           = { version = "0.0.0", path = "../msbe-fsops" }
+msbe-http            = { version = "0.0.0", path = "../msbe-http" }
+msbe-plan-schema     = { version = "0.0.0", path = "../msbe-plan-schema" }
+msbe-providers       = { version = "0.0.0", path = "../msbe-providers" }
+msbe-rpc-schema      = { version = "0.0.0", path = "../msbe-rpc-schema" }
 serde.workspace      = true
 serde_json.workspace = true
 tempfile.workspace   = true
