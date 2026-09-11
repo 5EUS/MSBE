@@ -132,6 +132,9 @@ pub struct InstanceConfig {
     pub root: PathBuf,
     /// The loader this instance deploys with.
     pub loader: String,
+    /// The game version, used to choose compatible versions from providers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub game_version: Option<String>,
     /// The store shard, on the same volume as `root` where possible.
     pub store: PathBuf,
 }
@@ -151,6 +154,9 @@ pub struct Profile {
 pub struct ModEntry {
     /// The file name the mod was added from.
     pub origin: String,
+    /// Where the file came from, when a provider supplied it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<Provenance>,
     /// Every file the artifact contained.
     pub files: Vec<StoredFile>,
 }
@@ -163,6 +169,53 @@ pub struct StoredFile {
     pub source: RelPath,
     /// The stored contents.
     pub blob: Digest,
+}
+
+/// Where a mod came from, recorded so it can be verified, updated or fetched again.
+///
+/// Provider-agnostic on purpose: every provider identifies a project, a version of it, and
+/// the hash it published for the file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Provenance {
+    /// The provider, such as `modrinth`.
+    pub provider: String,
+    /// The provider's stable project id.
+    pub project: String,
+    /// The provider's stable version id.
+    pub version: String,
+    /// The human-readable version number.
+    pub version_number: String,
+    /// The SHA-512 the provider published for the file, verified when it was downloaded.
+    pub sha512: String,
+}
+
+/// A file or archive to add to a profile as one mod.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Artifact {
+    /// The local file or archive.
+    pub path: PathBuf,
+    /// The mod's name. Derived from the file stem when absent.
+    pub module: Option<Name>,
+    /// Where the file came from, when a provider supplied it.
+    pub provider: Option<Provenance>,
+}
+
+/// Everything needed to register an instance.
+#[derive(Debug, Clone, Copy)]
+pub struct NewInstance<'a> {
+    /// The instance's name.
+    pub name: &'a Name,
+    /// The game directory.
+    pub root: &'a Path,
+    /// The plan manifest.
+    pub plan: &'a Path,
+    /// The loader to deploy with, as declared by the plan.
+    pub loader: &'a str,
+    /// The game version, which providers need to choose compatible versions.
+    pub game_version: Option<&'a str>,
+    /// An explicit store location. Defaults to `.msbe/store` beside the game directory.
+    pub store: Option<&'a Path>,
 }
 
 /// What one live transaction deployed.
@@ -281,6 +334,8 @@ pub struct Status {
     pub plan_version: String,
     /// The loader.
     pub loader: String,
+    /// The game version providers match, if set.
+    pub game_version: Option<String>,
     /// The store shard.
     pub store: PathBuf,
     /// What the store shard can do in the game directory.
@@ -321,28 +376,26 @@ impl Instance {
     ///
     /// Returns [`InstanceError`] if the instance exists, the root is not a directory, the plan
     /// is invalid or lacks the loader, or the store would sit inside the root.
-    pub fn create(
-        home: &Home,
-        name: Name,
-        root: &Path,
-        plan_path: &Path,
-        loader: &str,
-        store: Option<&Path>,
-    ) -> Result<Self, InstanceError> {
-        let dir = home.instance(&name);
+    pub fn create(home: &Home, new: &NewInstance<'_>) -> Result<Self, InstanceError> {
+        let dir = home.instance(new.name);
         if dir.exists() {
-            return Err(InstanceError::InstanceExists(name));
+            return Err(InstanceError::InstanceExists(new.name.clone()));
         }
-        let root = fs::canonicalize(root).map_err(io_error("resolve instance root", root))?;
+        let root =
+            fs::canonicalize(new.root).map_err(io_error("resolve instance root", new.root))?;
         if !root.is_dir() {
             return Err(InstanceError::NotADirectory(root));
         }
-        let plan_text = fs::read_to_string(plan_path).map_err(io_error("read plan", plan_path))?;
-        let plan = parse_plan(&plan_text, plan_path)?;
-        if !plan.loaders.iter().any(|candidate| candidate.id == loader) {
-            return Err(ResolveError::UnknownLoader(loader.to_owned()).into());
+        let plan_text = fs::read_to_string(new.plan).map_err(io_error("read plan", new.plan))?;
+        let plan = parse_plan(&plan_text, new.plan)?;
+        if !plan
+            .loaders
+            .iter()
+            .any(|candidate| candidate.id == new.loader)
+        {
+            return Err(ResolveError::UnknownLoader(new.loader.to_owned()).into());
         }
-        let store = match store {
+        let store = match new.store {
             Some(path) => std::path::absolute(path).map_err(io_error("resolve store", path))?,
             None => default_store(&root)?,
         };
@@ -353,9 +406,10 @@ impl Instance {
         let profiles = dir.join("profiles");
         fs::create_dir_all(&profiles).map_err(io_error("create directory", &profiles))?;
         let config = InstanceConfig {
-            name,
+            name: new.name.clone(),
             root,
-            loader: loader.to_owned(),
+            loader: new.loader.to_owned(),
+            game_version: new.game_version.map(str::to_owned),
             store,
         };
         write_toml(&dir.join("instance.toml"), &config)?;
@@ -539,30 +593,40 @@ impl Instance {
         Ok(profile)
     }
 
-    /// Ingests local files or archives into the store and adds each to `profile` as a mod
-    /// named after its file stem. Either every file is added or none are.
+    /// Ingests files or archives into the store and adds each to `profile` as a mod. Either
+    /// every artifact is added or none are.
     ///
     /// # Errors
     ///
     /// Returns [`InstanceError::ModExists`] for a name already in the profile, or any ingest
     /// error.
-    pub fn add_mods(&self, profile: &Name, paths: &[PathBuf]) -> Result<Vec<Name>, InstanceError> {
+    pub fn add_artifacts(
+        &self,
+        profile: &Name,
+        artifacts: &[Artifact],
+    ) -> Result<Vec<Name>, InstanceError> {
         let mut selection = self.profile(profile)?;
         let mut added = Vec::new();
-        for path in paths {
-            let stem = path
-                .file_stem()
-                .map(|stem| stem.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            let module = Name::sanitize(&stem)?;
+        for artifact in artifacts {
+            let module = match &artifact.module {
+                Some(module) => module.clone(),
+                None => Name::sanitize(
+                    &artifact
+                        .path
+                        .file_stem()
+                        .map(|stem| stem.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                )?,
+            };
             if selection.mods.contains_key(&module) {
                 return Err(InstanceError::ModExists {
                     profile: profile.clone(),
                     module,
                 });
             }
-            let files = ingest(self.applier.store(), path, &Limits::default())?;
-            let origin = path
+            let files = ingest(self.applier.store(), &artifact.path, &Limits::default())?;
+            let origin = artifact
+                .path
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_default();
@@ -570,6 +634,7 @@ impl Instance {
                 module.clone(),
                 ModEntry {
                     origin,
+                    provider: artifact.provider.clone(),
                     files: files
                         .into_iter()
                         .map(|file| StoredFile {
@@ -583,6 +648,24 @@ impl Instance {
         }
         write_toml(&self.profile_path(profile), &selection)?;
         Ok(added)
+    }
+
+    /// Adds local files or archives as mods named after their file stems. Either every file is
+    /// added or none are.
+    ///
+    /// # Errors
+    ///
+    /// As for [`Instance::add_artifacts`].
+    pub fn add_mods(&self, profile: &Name, paths: &[PathBuf]) -> Result<Vec<Name>, InstanceError> {
+        let artifacts: Vec<Artifact> = paths
+            .iter()
+            .map(|path| Artifact {
+                path: path.clone(),
+                module: None,
+                provider: None,
+            })
+            .collect();
+        self.add_artifacts(profile, &artifacts)
     }
 
     /// Removes a mod from a profile. The deployment changes only when the profile is deployed
@@ -806,6 +889,7 @@ impl Instance {
             plan_id: self.plan.id.clone(),
             plan_version: self.plan.version.clone(),
             loader: self.config.loader.clone(),
+            game_version: self.config.game_version.clone(),
             store: self.config.store.clone(),
             capabilities,
             backend: capabilities.choose(&Backend::DEFAULT_CHAIN),
@@ -815,6 +899,36 @@ impl Instance {
             live_transactions: self.applier.journal().live_transactions().len(),
             recovered: self.recovered.clone(),
         })
+    }
+
+    /// Records the game version providers should match, or clears it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `instance.toml` cannot be written.
+    pub fn set_game_version(&mut self, version: Option<&str>) -> Result<(), InstanceError> {
+        self.config.game_version = version.map(str::to_owned);
+        write_toml(&self.dir.join("instance.toml"), &self.config)
+    }
+
+    /// The loader ids a provider may offer mods for: the instance's loader, then every API the
+    /// plan says that loader provides.
+    pub fn loader_ids(&self) -> Vec<String> {
+        let mut ids = vec![self.config.loader.clone()];
+        if let Some(loader) = self
+            .plan
+            .loaders
+            .iter()
+            .find(|loader| loader.id == self.config.loader)
+        {
+            ids.extend(loader.provides.iter().cloned());
+        }
+        ids
+    }
+
+    /// Scratch space on the store's volume, for downloads about to be ingested.
+    pub fn scratch_dir(&self) -> PathBuf {
+        self.applier.store().tmp_dir()
     }
 
     fn profile_path(&self, name: &Name) -> PathBuf {
@@ -1053,6 +1167,7 @@ version = "1.0.0"
 
 [[loaders]]
 id = "loader"
+provides = ["base-api"]
 bootstrap = "none"
 targets = [{ name = "mods", path = "mods" }]
 
@@ -1094,11 +1209,14 @@ flatten = true
         fn create(&self) -> Instance {
             Instance::create(
                 &self.home,
-                name("demo"),
-                &self.game,
-                &self.plan,
-                "loader",
-                None,
+                &super::NewInstance {
+                    name: &name("demo"),
+                    root: &self.game,
+                    plan: &self.plan,
+                    loader: "loader",
+                    game_version: Some("1.0"),
+                    store: None,
+                },
             )
             .unwrap()
         }
@@ -1274,6 +1392,68 @@ flatten = true
     }
 
     #[test]
+    fn provenance_game_version_and_loader_apis_survive_reopening() {
+        let fixture = Fixture::new();
+        let mut instance = fixture.create();
+        let default = name("default");
+        let provenance = super::Provenance {
+            provider: "example".to_owned(),
+            project: "P1".to_owned(),
+            version: "V1".to_owned(),
+            version_number: "1.0.0".to_owned(),
+            sha512: "ab".repeat(64),
+        };
+        instance
+            .add_artifacts(
+                &default,
+                &[super::Artifact {
+                    path: fixture.input("download.bin", b"remote"),
+                    module: Some(name("remote-mod")),
+                    provider: Some(provenance.clone()),
+                }],
+            )
+            .unwrap();
+        instance.set_game_version(Some("2.0")).unwrap();
+        drop(instance);
+
+        let reopened = fixture.reopen();
+        assert_eq!(reopened.config().game_version.as_deref(), Some("2.0"));
+        assert_eq!(reopened.loader_ids(), ["loader", "base-api"]);
+        let profile = reopened.profile(&default).unwrap();
+        assert_eq!(
+            profile
+                .mods
+                .get(&name("remote-mod"))
+                .and_then(|entry| entry.provider.as_ref()),
+            Some(&provenance)
+        );
+    }
+
+    #[test]
+    fn adding_artifacts_is_all_or_nothing() {
+        let fixture = Fixture::new();
+        let instance = fixture.create();
+        let default = name("default");
+        let result = instance.add_artifacts(
+            &default,
+            &[
+                super::Artifact {
+                    path: fixture.input("good.bin", b"good"),
+                    module: None,
+                    provider: None,
+                },
+                super::Artifact {
+                    path: fixture.inputs.join("does-not-exist.bin"),
+                    module: None,
+                    provider: None,
+                },
+            ],
+        );
+        assert!(result.is_err());
+        assert!(instance.profile(&default).unwrap().mods.is_empty());
+    }
+
+    #[test]
     fn mods_claiming_one_path_with_different_contents_conflict() {
         let fixture = Fixture::new();
         let instance = fixture.create();
@@ -1283,6 +1463,7 @@ flatten = true
         let second = store.put_bytes(b"version b").unwrap();
         let entry = |source: &str, blob| ModEntry {
             origin: format!("{source}.zip"),
+            provider: None,
             files: vec![StoredFile {
                 source: RelPath::new(source).unwrap(),
                 blob,

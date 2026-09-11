@@ -47,8 +47,11 @@ Toolchains are pinned: Rust in `rust-toolchain.toml`, the .NET SDK in
 
 ```sh
 cargo install --path crates/msbe-cli
-msbe instance add mc --root ~/.minecraft --plan plans/minecraft/plan.toml --loader fabric
-msbe add mc ~/Downloads/sodium.jar ~/Downloads/shader-pack.zip
+msbe instance add mc --root ~/.minecraft --plan plans/minecraft/plan.toml \
+  --loader fabric --game-version 1.21.1
+msbe search mc shaders                 # Modrinth, filtered to the loader and game version
+msbe add mc modrinth:iris --with-deps  # verified downloads, dependencies included
+msbe add mc ~/Downloads/my-mod.jar     # local files and .zip archives work too
 msbe deploy mc --dry-run   # what would change, and every file left out and why
 msbe deploy mc             # one journaled transaction
 msbe verify mc             # exits 7 if a deployed file changed or disappeared

@@ -86,21 +86,22 @@ Providers: local file, direct URL, then **Modrinth** — no auth, no browser, re
 profiles switch, `verify`, `rollback`, and `purge` returns the instance byte-identical to
 vanilla — on Linux, Windows and macOS, entirely from the CLI.
 
-**Status (2026-09-11): the local-file path works end to end.** Tested on Linux and
-lint-clean for Windows:
+**Status (2026-09-11): local files and Modrinth work end to end.** Tested on Linux, including
+live against api.modrinth.com; the crates that do not link `ring` are lint-clean for Windows:
 
 | Piece | State |
 |---|---|
 | `msbe-fsops`: store shard, capability probe, journaled applier, rollback, crash recovery | done, with crash injection at every checkpoint |
 | `msbe-plan-schema` and the resolver: loaders, extract and place steps, exclusion report | done |
 | `msbe-archive`: bare-file and `.zip` ingest, refusing unsafe paths, symlinks, bombs, oversized files and case collisions | done; not yet fuzzed |
-| `msbe-core::instance`: profiles, diff-based deploy (which is how profiles switch), conflict detection, verify, rollback, purge, and a two-phase commit with the journal | done |
-| `msbe-cli`: `instance`, `profile`, `add`, `remove`, `deploy [--dry-run]`, `rollback`, `purge`, `verify`, `status`, `--format json`, exit codes 0/1/2/4/7 | done; the end-to-end test purges to byte-identical vanilla |
+| `msbe-core::instance`: profiles, diff-based deploy (which is how profiles switch), conflict detection, verify, rollback, purge, provenance, and a two-phase commit with the journal | done |
+| `msbe-providers`: Modrinth search, version selection by loader (including provided APIs) and game version, size- and SHA-512-verified HTTPS downloads, and a required-dependency walk | done; the walk is not a solver |
+| `msbe-http`: HTTPS over rustls and `ring`, roots from the OS trust store, an identifying User-Agent, rate-limit reporting | done |
+| `msbe-cli`: `instance add\|set\|list`, `profile`, `add` (files, archives, `modrinth:<project>[@version]`, `--with-deps`), `search`, `remove`, `deploy [--dry-run]`, `rollback`, `purge`, `verify`, `status`, `--format json`, exit codes 0/1/2/4/7 | done; end-to-end tests purge to byte-identical vanilla |
 | `plans/minecraft/plan.toml` for Fabric, Quilt and NeoForge | done |
 
 Still open in M1:
 
-- **Modrinth provider.** Needs an HTTP and TLS stack whose licenses fit `deny.toml`.
 - **Windows read-only hardlinks.** Removing or rolling back a hardlinked file fails on Windows
   as written, because the read-only attribute is shared with the store blob.
 - **Plan-declared mutable paths** (`docs/04` §4.2). Every deployed file is currently treated
@@ -108,6 +109,9 @@ Still open in M1:
 - **Fuzz targets** for `msbe-archive`, **macOS** runs, and the **daemon**.
 - **State storage.** Profiles and deployment history are TOML and JSON files. SQLite is
   deferred until the daemon needs an index.
+
+The dependency walk gives each project its newest compatible version and does not detect
+conflicting version requirements between dependencies. The M2 PubGrub solver replaces it.
 
 ## M2 — Minecraft in depth → **v0.1** (8–10 weeks)
 

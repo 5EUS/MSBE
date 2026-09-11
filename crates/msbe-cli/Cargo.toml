@@ -24,10 +24,13 @@ path = "src/main.rs"
 clap.workspace       = true
 msbe-core            = { path = "../msbe-core" }
 msbe-fsops           = { path = "../msbe-fsops" }
+msbe-http            = { path = "../msbe-http" }
+msbe-providers       = { path = "../msbe-providers" }
 serde.workspace      = true
 serde_json.workspace = true
+tempfile.workspace   = true
 thiserror.workspace  = true
 
 [dev-dependencies]
-tempfile.workspace = true
-zip.workspace      = true
+sha2.workspace = true
+zip.workspace  = true

@@ -1,6 +1,6 @@
 [package]
-name        = "msbe-providers"
-description = "Mod source adapters and the provider policy layer."
+name        = "msbe-http"
+description = "The network transport for providers: HTTPS over rustls with the OS trust store."
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true
@@ -16,11 +16,7 @@ publish.workspace      = true
 workspace = true
 
 [dependencies]
-msbe-fsops           = { path = "../msbe-fsops" }
-serde.workspace      = true
-serde_json.workspace = true
-sha2.workspace       = true
-thiserror.workspace  = true
-
-[dev-dependencies]
-tempfile.workspace = true
+msbe-providers               = { path = "../msbe-providers" }
+rustls.workspace             = true
+rustls-native-certs.workspace = true
+ureq.workspace               = true

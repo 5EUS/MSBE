@@ -74,6 +74,19 @@ in `msbe-core` is a review blocker.
 - XML docs on every public and internal member; `this.` qualification; `using`
   directives outside the namespace, `System` first.
 
+## Checking Windows from Linux
+
+`ring`, which `msbe-http` uses for TLS, needs the MSVC toolchain to build for Windows, so a
+Linux machine cannot lint the crates that depend on it for that target. The others can be:
+
+```sh
+rustup target add x86_64-pc-windows-msvc
+cargo clippy -p msbe-fsops -p msbe-archive -p msbe-plan-schema -p msbe-core -p msbe-providers \
+  --all-targets --all-features --target x86_64-pc-windows-msvc -- -D warnings
+```
+
+CI's Windows runners build and test everything, including `msbe-http` and `msbe-cli`.
+
 ## Commits and PRs
 
 Toolchain bumps (`rust-toolchain.toml`, `global.json`, analyzer versions) go in their

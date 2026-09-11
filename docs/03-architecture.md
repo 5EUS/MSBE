@@ -51,7 +51,8 @@ crates/
   msbe-plan-host/     wasmtime host, capability enforcement, WIT bindings
   msbe-archive/       hardened extraction (zip/7z/rar/tar), path safety
   msbe-fsops/         CAS shards, capability probe, journaled applier (the only writer)
-  msbe-providers/     nexus, modrinth, curseforge, thunderstore, github, ckan, local
+  msbe-providers/     provider clients over an HttpClient trait (Modrinth today); no TLS
+  msbe-http/          the one crate that links TLS: ureq + rustls/ring, OS trust store
   msbe-daemon/        JSON-RPC server, job queue, session auth
   msbe-cli/           clap; --format json; stable exit codes
   msbe-rpc-schema/    the RPC contract; generates C# client + TS types + JSON Schema

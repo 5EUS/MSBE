@@ -29,13 +29,18 @@ normal, well-typed outcome — not an error and not an invitation to work around
 
 | Provider | Auth | Programmatic download | Notable constraints |
 |---|---|---|---|
-| **Modrinth** | none for public; token for private | ✓ open API | Friendliest. Real dependency graph. Start here. |
+| **Modrinth** | none for public; token for private | ✓ open API | **Implemented (M1).** Real dependency graph. Requires an identifying User-Agent; 300 requests a minute, surfaced as `RateLimited` with the reset time. Downloads are https-only and verified against the published size and SHA-512 before ingest. |
 | **Thunderstore** | none | ✓ | Clean SemVer, clean package format. |
 | **CurseForge** | API key required | ✓ *conditionally* | **Must honour `allowModDistribution: false`.** When false, third-party download is forbidden — return `Unavailable` and send the user to the mod page. Non-negotiable; this flag is why several managers got access revoked. |
 | **Nexus Mods** | personal API key / OAuth | premium: ✓ direct. free: ✗ | Free accounts have no programmatic file download. The *supported* path is the `nxm://` handler (see below). Rate limits published per-key; honour them and the `X-RL-*` response headers. |
 | **GitHub Releases** | optional token | ✓ | Watch unauthenticated rate limits. |
 | **CKAN repos** | none | ✓ | Consume the existing index; do not fork it. |
 | **Local / direct URL** | n/a | ✓ | Always available; the manual escape hatch. |
+
+TLS for every provider goes through `msbe-http`, which trusts the operating system's
+certificate store rather than a bundled list of roots. That respects system and corporate
+certificate authorities, and keeps `webpki-roots` (CDLA-Permissive-2.0, which `deny.toml`
+does not allow) out of the dependency graph.
 
 Encoded as data in `ProviderPolicy`, not as scattered `if` statements:
 
