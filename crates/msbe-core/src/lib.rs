@@ -8,6 +8,7 @@
 
 pub mod config;
 pub mod instance;
+pub mod solver;
 
 use msbe_fsops::{Applier, Digest, Observer, Operation, RelPath, Result as FsResult, TxnReport};
 use msbe_plan_schema::{ExtractStep, Hygiene, Loader, Plan, Step, ValidationError};

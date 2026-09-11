@@ -131,8 +131,9 @@ Use `--profile NAME` or `-p NAME` with `add` to add to a non-default profile.
 "$MSBE" add mc modrinth:sodium --profile performance
 ```
 
-`--with-deps` follows required Modrinth dependencies. It is not yet a general dependency
-solver; conflicting version requirements are M2 work.
+`--with-deps` collects the full target-compatible Modrinth dependency graph and resolves it
+with PubGrub. Exact Modrinth release requirements can backtrack to an older compatible release.
+Fabric/NeoForge dependency ranges embedded in artifacts are not yet read.
 
 ### 4.4 Update, remove, and deploy
 
@@ -198,8 +199,9 @@ in the current binary. Their names and arguments can change before implementatio
 | Steam Workshop            | Opt-in user-installed SteamCMD acquisition or local import; optional item-ID metadata | Future, subject to policy |
 | Game launch               | `launch`                                                                              | Future                    |
 
-M2 also adds PubGrub solving, loader bootstrap, structured config merge, pack import,
-lockfiles, and reproducible cross-platform deployment. Target pre-filtering is implemented.
+M2 also adds loader bootstrap, structured config merge, pack import, lockfiles, and reproducible
+cross-platform deployment. Target pre-filtering and the Modrinth PubGrub graph solver are
+implemented; artifact-derived Fabric/NeoForge range metadata remains pending.
 Later
 milestones add legacy Minecraft topologies, a No Man's Sky validation plan, the
 acquisition stack, the desktop UI, a signed registry, and Bethesda/KSP support. See
