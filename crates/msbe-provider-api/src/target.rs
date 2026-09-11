@@ -24,7 +24,7 @@ pub struct Target {
 
 impl Target {
     /// Loader identifiers that can satisfy a provider's loader requirement.
-    pub(crate) fn loader_ids(&self) -> impl Iterator<Item = &str> {
+    pub fn loader_ids(&self) -> impl Iterator<Item = &str> {
         std::iter::once(self.loader.as_str()).chain(self.provides.iter().map(String::as_str))
     }
 

@@ -1,152 +1,208 @@
-//! The reviewed runtime adapters available for validated provider manifests.
+//! The fail-closed mapping from provider manifests to reviewed adapters.
 
+use std::collections::BTreeMap;
+
+use msbe_provider_api::{
+    Adapter, AdapterError, Catalog, HttpClient, ManifestError, Overlay, OverlayError, Provider,
+    Registration, Target,
+    model::{Request, SearchResult},
+    resolve::{Adapters, ResolveError},
+};
 use thiserror::Error;
 
-use crate::{
-    Catalog, HttpClient, ManifestError, Provider, SearchResult, Target,
-    direct::DirectSource,
-    modrinth::{Modrinth, Spec},
-};
+/// The adapters MSBE ships. A new provider is a crate beside these and one line here.
+pub const BUILTIN: &[Registration] = &[
+    msbe_provider_direct::REGISTRATION,
+    msbe_provider_modrinth::REGISTRATION,
+];
 
-/// The stable identifier of the built-in direct URL provider.
-pub const DIRECT: &str = "url";
-/// The stable identifier of the built-in Modrinth provider.
-pub const MODRINTH: &str = "modrinth";
-
-/// A fail-closed mapping from provider manifests to reviewed runtime adapters.
-#[derive(Debug, Clone, Copy)]
-pub struct ProviderRegistry<'a> {
-    catalog: &'a Catalog,
+/// A user-entered source, routed to its provider and parsed by that provider's adapter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Routed {
+    /// The provider id.
+    pub provider: String,
+    /// What the source asks the provider for.
+    pub request: Request,
 }
 
-impl<'a> ProviderRegistry<'a> {
-    /// Creates a registry over a validated provider catalog.
-    pub const fn new(catalog: &'a Catalog) -> Self {
-        Self { catalog }
-    }
+/// Validated provider manifests, the adapters that serve them, and the overlay those adapters
+/// ship.
+#[derive(Debug)]
+pub struct Providers {
+    catalog: Catalog,
+    adapters: BTreeMap<String, Box<dyn Adapter>>,
+    overlay: Overlay,
+}
 
-    /// Parses a user-entered source using its reviewed provider adapter.
+impl Providers {
+    /// The providers MSBE ships.
     ///
     /// # Errors
     ///
-    /// Returns [`RegistryError`] when the source has no manifest, its provider is unavailable,
-    /// its policy prohibits use, or the provider-specific reference is invalid.
-    pub fn source(&self, raw: &str) -> Result<ResolvedSource<'a>, RegistryError> {
-        let source = self.catalog.source(raw)?;
-        let provider = source.provider();
-        Self::authorize(provider)?;
-        match provider.id.as_str() {
-            MODRINTH => Ok(ResolvedSource::Modrinth {
-                provider,
-                spec: Spec::parse(source.reference())?,
-            }),
-            DIRECT => Ok(ResolvedSource::Direct {
-                provider,
-                source: DirectSource::parse(source.raw())?,
-            }),
-            _ => Err(RegistryError::UnavailableAdapter(provider.id.clone())),
+    /// Returns [`RegistryError`] if a built-in manifest or overlay entry is invalid. This
+    /// indicates a build error in MSBE rather than user-provided input.
+    pub fn builtins() -> Result<Self, RegistryError> {
+        Self::new(BUILTIN, &[])
+    }
+
+    /// Registers `registrations`, plus `manifests` no compiled adapter serves, such as ones a
+    /// registry distributes. A source such a manifest recognizes is refused, never interpreted
+    /// generically.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RegistryError`] if a manifest or overlay entry is invalid, or a registration
+    /// builds an adapter for a provider other than its manifest's.
+    pub fn new(registrations: &[Registration], manifests: &[&str]) -> Result<Self, RegistryError> {
+        let documents: Vec<&str> = registrations
+            .iter()
+            .map(|registration| registration.manifest)
+            .chain(manifests.iter().copied())
+            .collect();
+        let catalog = Catalog::from_toml(&documents)?;
+        let mut adapters = BTreeMap::new();
+        let mut overlay = Vec::new();
+        for registration in registrations {
+            let provider = catalog.provider(registration.id)?;
+            let adapter = (registration.build)(provider)?;
+            if adapter.id() != provider.id {
+                return Err(RegistryError::MismatchedAdapter {
+                    manifest: provider.id.clone(),
+                    adapter: adapter.id().to_owned(),
+                });
+            }
+            adapters.insert(provider.id.clone(), adapter);
+            overlay.extend_from_slice(registration.overlay);
         }
+        Ok(Self {
+            catalog,
+            adapters,
+            overlay: Overlay::from_toml(&overlay)?,
+        })
     }
 
-    /// Opens the reviewed Modrinth adapter declared by the catalog.
+    /// The overlay entries every registered adapter ships.
+    pub const fn overlay(&self) -> &Overlay {
+        &self.overlay
+    }
+
+    /// Routes a user-entered source to its provider and parses it with that provider's adapter.
     ///
     /// # Errors
     ///
-    /// Returns [`RegistryError`] if Modrinth is absent, its manifest is incomplete, or its
-    /// declared policy prohibits use.
-    pub fn modrinth(&self, http: &'a dyn HttpClient) -> Result<Modrinth<'a>, RegistryError> {
-        let provider = self.catalog.provider(MODRINTH)?;
-        Self::authorize(provider)?;
-        let api_base = provider
-            .api_base()
-            .ok_or_else(|| ManifestError::MissingMetadata(provider.id.clone()))?;
-        Ok(Modrinth::with_base(http, api_base))
+    /// Returns [`RegistryError`] when no manifest recognizes the source, its provider has no
+    /// adapter or is prohibited by policy, or the adapter rejects the reference.
+    pub fn request(&self, raw: &str) -> Result<Routed, RegistryError> {
+        let source = self.catalog.source(raw)?;
+        let adapter = self.permitted(source.provider())?;
+        Ok(Routed {
+            provider: source.provider().id.clone(),
+            request: adapter.request(source.reference())?,
+        })
     }
 
-    /// Searches one reviewed provider and returns provider-neutral project records.
+    /// The adapter for provider `id`, once its declared policy has been checked.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RegistryError`] when the provider is unknown, has no adapter, or is prohibited
+    /// by policy.
+    pub fn adapter(&self, id: &str) -> Result<&dyn Adapter, RegistryError> {
+        self.permitted(self.catalog.provider(id)?)
+    }
+
+    /// The ids of permitted providers that can search, in id order.
+    pub fn searchable(&self) -> Vec<&str> {
+        self.adapters
+            .iter()
+            .filter(|(id, adapter)| adapter.as_search().is_some() && self.adapter(id).is_ok())
+            .map(|(id, _)| id.as_str())
+            .collect()
+    }
+
+    /// Searches one provider and returns provider-neutral project records.
     ///
     /// # Errors
     ///
     /// Returns [`RegistryError`] when the provider is unavailable, prohibited by policy, does
-    /// not support search, or its reviewed adapter cannot complete the request.
+    /// not support search, or its adapter cannot complete the request.
     pub fn search(
         &self,
-        provider_id: &str,
-        http: &'a dyn HttpClient,
+        id: &str,
+        http: &dyn HttpClient,
         query: &str,
         target: &Target,
         limit: u8,
     ) -> Result<Vec<SearchResult>, RegistryError> {
-        match provider_id {
-            MODRINTH => Ok(self
-                .modrinth(http)?
-                .search(query, target, limit)?
-                .into_iter()
-                .map(|hit| SearchResult {
-                    provider: MODRINTH.to_owned(),
-                    project: hit.project_id,
-                    reference: hit.slug,
-                    title: hit.title,
-                    description: hit.description,
-                    downloads: hit.downloads,
-                })
-                .collect()),
-            _ => Err(RegistryError::SearchUnavailable(provider_id.to_owned())),
-        }
+        let search = self
+            .adapter(id)?
+            .as_search()
+            .ok_or_else(|| RegistryError::SearchUnavailable(id.to_owned()))?;
+        Ok(search.search(http, query, target, limit)?)
     }
 
-    fn authorize(provider: &Provider) -> Result<(), RegistryError> {
-        if provider.policy.requires_auth {
-            return Err(RegistryError::AuthenticationRequired(provider.id.clone()));
-        }
-        if provider.policy.ack_required {
-            return Err(RegistryError::AcknowledgementRequired {
-                provider: provider.id.clone(),
-                terms: provider.policy.tos_url.clone(),
-            });
-        }
-        Ok(())
+    fn permitted(&self, provider: &Provider) -> Result<&dyn Adapter, RegistryError> {
+        authorize(provider)?;
+        self.adapters
+            .get(&provider.id)
+            .map(Box::as_ref)
+            .ok_or_else(|| RegistryError::UnavailableAdapter(provider.id.clone()))
     }
 }
 
-/// A user source parsed by its reviewed provider adapter.
-#[derive(Debug, Clone)]
-pub enum ResolvedSource<'a> {
-    /// A Modrinth project reference.
-    Modrinth {
-        /// The manifest governing this source.
-        provider: &'a Provider,
-        /// The parsed project reference.
-        spec: Spec,
-    },
-    /// A direct HTTPS URL.
-    Direct {
-        /// The manifest governing this source.
-        provider: &'a Provider,
-        /// The parsed URL and optional checksum.
-        source: DirectSource,
-    },
+impl Adapters for Providers {
+    fn lookup(&self, provider: &str) -> Result<&dyn Adapter, ResolveError> {
+        self.adapter(provider)
+            .map_err(|error| ResolveError::Unavailable {
+                provider: provider.to_owned(),
+                reason: error.to_string(),
+            })
+    }
 }
 
-/// Why a manifest could not be used through the reviewed adapter registry.
+fn authorize(provider: &Provider) -> Result<(), RegistryError> {
+    if provider.policy.requires_auth {
+        return Err(RegistryError::AuthenticationRequired(provider.id.clone()));
+    }
+    if provider.policy.ack_required {
+        return Err(RegistryError::AcknowledgementRequired {
+            provider: provider.id.clone(),
+            terms: provider.policy.tos_url.clone(),
+        });
+    }
+    Ok(())
+}
+
+/// Why a provider could not be used through the reviewed adapter registry.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum RegistryError {
-    /// The source or required provider is absent from the manifest catalog.
+    /// A manifest is invalid, or no manifest recognizes a source or names a provider.
     #[error(transparent)]
     Manifest(#[from] ManifestError),
+    /// An overlay entry an adapter ships is invalid.
+    #[error(transparent)]
+    Overlay(#[from] OverlayError),
     /// The manifest names a provider without a reviewed adapter in this MSBE release.
     #[error("provider {0:?} is declared but has no reviewed adapter in this MSBE release")]
     UnavailableAdapter(String),
-    /// The reviewed adapter does not expose provider search.
+    /// A registration built an adapter for a different provider than its manifest declares.
+    #[error("the {manifest:?} manifest is registered with an adapter for {adapter:?}")]
+    MismatchedAdapter {
+        /// The provider the manifest declares.
+        manifest: String,
+        /// The provider the adapter serves.
+        adapter: String,
+    },
+    /// The adapter does not support search.
     #[error("provider {0:?} does not support search")]
     SearchUnavailable(String),
-    /// The provider requires an authentication flow which M1 does not implement.
-    #[error("provider {0:?} requires authentication, which is not implemented in M1")]
+    /// The provider requires an authentication flow this release does not implement.
+    #[error("provider {0:?} requires authentication, which is not implemented in this release")]
     AuthenticationRequired(String),
-    /// The provider requires a persisted terms acknowledgement which M1 does not implement.
+    /// The provider requires a persisted terms acknowledgement this release does not implement.
     #[error(
-        "provider {provider:?} requires acknowledgement of {terms:?}, which is not implemented in M1"
+        "provider {provider:?} requires acknowledgement of {terms:?}, which is not implemented in this release"
     )]
     AcknowledgementRequired {
         /// The provider id.
@@ -154,12 +210,9 @@ pub enum RegistryError {
         /// The terms the user would need to acknowledge.
         terms: String,
     },
-    /// The reviewed Modrinth adapter rejected its reference.
+    /// The provider's adapter rejected a reference or failed a request.
     #[error(transparent)]
-    Modrinth(#[from] crate::modrinth::ModrinthError),
-    /// The reviewed direct URL adapter rejected its source.
-    #[error(transparent)]
-    Direct(#[from] crate::direct::DirectError),
+    Adapter(#[from] AdapterError),
 }
 
 #[cfg(test)]
@@ -167,10 +220,13 @@ mod tests {
     use std::io::Write;
 
     use msbe_plan_schema::Side;
+    use msbe_provider_api::{
+        AdapterError, HttpClient, HttpError, PackageId, Target, model::Request,
+    };
+    use msbe_provider_direct::DirectError;
     use serde_json::json;
 
-    use super::{MODRINTH, ProviderRegistry, RegistryError, ResolvedSource};
-    use crate::{Catalog, HttpClient, HttpError, Target};
+    use super::{Providers, RegistryError, Routed};
 
     struct SearchHttp;
 
@@ -210,26 +266,45 @@ mod tests {
     "#;
 
     #[test]
-    fn builtins_resolve_only_through_their_reviewed_adapters() -> Result<(), RegistryError> {
-        let catalog = Catalog::builtins()?;
-        let registry = ProviderRegistry::new(&catalog);
-        assert!(matches!(
-            registry.source("modrinth:sodium")?,
-            ResolvedSource::Modrinth { .. }
-        ));
-        assert!(matches!(
-            registry.source("https://example.test/mod.jar")?,
-            ResolvedSource::Direct { .. }
-        ));
+    fn builtins_route_sources_only_through_their_reviewed_adapters() -> Result<(), RegistryError> {
+        let providers = Providers::builtins()?;
+        let Routed { provider, request } = providers.request("modrinth:sodium")?;
+        assert_eq!(provider, "modrinth");
+        assert_eq!(
+            request,
+            Request::Project {
+                reference: "sodium".to_owned(),
+                version: None
+            }
+        );
+        let url = providers.request("https://example.test/mod.jar")?;
+        assert_eq!(url.provider, "url");
+        assert!(matches!(url.request, Request::File(_)));
+        assert_eq!(providers.searchable(), ["modrinth"]);
+        Ok(())
+    }
+
+    #[test]
+    fn builtins_load_the_overlay_their_adapters_ship() -> Result<(), RegistryError> {
+        let fabric_api = PackageId {
+            provider: "modrinth".to_owned(),
+            project: "P7dR8mSH".to_owned(),
+        };
+        assert_eq!(
+            Providers::builtins()?
+                .overlay()
+                .suppliers(&fabric_api)
+                .count(),
+            2
+        );
         Ok(())
     }
 
     #[test]
     fn declared_provider_without_an_adapter_is_rejected() {
-        let catalog = Catalog::from_toml(&[EXAMPLE]).unwrap();
-        let registry = ProviderRegistry::new(&catalog);
+        let providers = Providers::new(&[], &[EXAMPLE]).unwrap();
         assert!(matches!(
-            registry.source("example:mod"),
+            providers.request("example:mod"),
             Err(RegistryError::UnavailableAdapter(id)) if id == "example"
         ));
     }
@@ -237,10 +312,9 @@ mod tests {
     #[test]
     fn acknowledgement_required_providers_are_blocked_before_use() {
         let manifest = EXAMPLE.replace("ack_required = false", "ack_required = true");
-        let catalog = Catalog::from_toml(&[&manifest]).unwrap();
-        let registry = ProviderRegistry::new(&catalog);
+        let providers = Providers::new(&[], &[&manifest]).unwrap();
         assert!(matches!(
-            registry.source("example:mod"),
+            providers.request("example:mod"),
             Err(RegistryError::AcknowledgementRequired { .. })
         ));
     }
@@ -248,31 +322,29 @@ mod tests {
     #[test]
     fn authentication_required_providers_are_blocked_before_use() {
         let manifest = EXAMPLE.replace("requires_auth = false", "requires_auth = true");
-        let catalog = Catalog::from_toml(&[&manifest]).unwrap();
-        let registry = ProviderRegistry::new(&catalog);
+        let providers = Providers::new(&[], &[&manifest]).unwrap();
         assert!(matches!(
-            registry.source("example:mod"),
+            providers.request("example:mod"),
             Err(RegistryError::AuthenticationRequired(id)) if id == "example"
         ));
     }
 
     #[test]
     fn plain_http_reaches_the_direct_adapter_security_error() {
-        let catalog = Catalog::builtins().unwrap();
-        let registry = ProviderRegistry::new(&catalog);
-        assert!(matches!(
-            registry.source("http://example.test/mod.jar"),
-            Err(RegistryError::Direct(crate::direct::DirectError::Insecure(
-                _
-            )))
-        ));
+        let providers = Providers::builtins().unwrap();
+        match providers.request("http://example.test/mod.jar") {
+            Err(RegistryError::Adapter(AdapterError::Specific(error))) => assert!(matches!(
+                error.downcast_ref::<DirectError>(),
+                Some(DirectError::Insecure(_))
+            )),
+            other => panic!("expected the direct adapter's refusal, got {other:?}"),
+        }
     }
 
     #[test]
     fn search_returns_provider_neutral_records() -> Result<(), RegistryError> {
-        let catalog = Catalog::builtins()?;
-        let results = ProviderRegistry::new(&catalog).search(
-            MODRINTH,
+        let results = Providers::builtins()?.search(
+            "modrinth",
             &SearchHttp,
             "rendering",
             &Target {
@@ -287,7 +359,7 @@ mod tests {
         let [result] = results.as_slice() else {
             panic!("expected one result, got {results:?}");
         };
-        assert_eq!(result.provider, MODRINTH);
+        assert_eq!(result.provider, "modrinth");
         assert_eq!(result.project, "AANobbMI");
         assert_eq!(result.reference, "sodium");
         Ok(())

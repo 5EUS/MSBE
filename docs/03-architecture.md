@@ -51,7 +51,9 @@ crates/
   msbe-plan-host/     wasmtime host, capability enforcement, WIT bindings
   msbe-archive/       hardened extraction (zip/7z/rar/tar), path safety
   msbe-fsops/         CAS shards, capability probe, journaled applier (the only writer)
-  msbe-providers/     provider clients over an HttpClient trait (Modrinth today); no TLS
+  msbe-provider-api/  the adapter contract: neutral records, HttpClient, acquisition, resolution; no TLS
+  msbe-provider-*/    one crate per provider adapter (modrinth, direct); no TLS
+  msbe-providers/     the adapters MSBE ships, behind the policy gate; pack formats
   msbe-http/          the one crate that links TLS: ureq + rustls/ring, OS trust store
   msbe-daemon/        JSON-RPC server, job queue, session auth
   msbe-cli/           clap; --format json; stable exit codes

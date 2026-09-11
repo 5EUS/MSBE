@@ -1,6 +1,6 @@
 [package]
-name        = "msbe-http"
-description = "The network transport for providers: HTTPS over rustls with the OS trust store."
+name        = "msbe-provider-direct"
+description = "The direct HTTPS URL provider adapter."
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true
@@ -16,7 +16,10 @@ publish.workspace      = true
 workspace = true
 
 [dependencies]
-msbe-provider-api             = { version = "0.0.0", path = "../msbe-provider-api" }
-rustls.workspace             = true
-rustls-native-certs.workspace = true
-ureq.workspace               = true
+msbe-fsops          = { version = "0.0.0", path = "../msbe-fsops" }
+msbe-provider-api   = { version = "0.0.0", path = "../msbe-provider-api" }
+thiserror.workspace = true
+
+[dev-dependencies]
+sha2.workspace     = true
+tempfile.workspace = true

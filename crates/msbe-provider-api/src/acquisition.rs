@@ -4,19 +4,25 @@
 //! transfer rules so every reviewed adapter gets the same HTTPS, safe-name, size, digest, and
 //! create-new guarantees.
 
-use std::path::{Path, PathBuf};
+use std::{
+    io,
+    path::{Path, PathBuf},
+};
 
 use msbe_fsops::RelPath;
 use thiserror::Error;
 
 use crate::{
-    HttpClient,
+    HttpClient, HttpError,
     artifact::{ArtifactError, download},
 };
 
+/// The most bytes an artifact may be when its provider publishes no size.
+pub const DOWNLOAD_LIMIT: u64 = 2 << 30;
+
 /// A provider-published artifact that can be acquired without interaction.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ArtifactDescriptor {
+pub struct ArtifactDescriptor {
     /// The HTTPS URL for the exact bytes.
     pub url: String,
     /// The single file name under which to save the artifact.
@@ -33,14 +39,14 @@ pub(crate) struct ArtifactDescriptor {
 
 /// The verified local result of an artifact acquisition.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct AcquiredArtifact {
+pub struct AcquiredArtifact {
     /// The newly created file.
     pub path: PathBuf,
     /// The number of transferred bytes.
     pub size: u64,
-    /// SHA-256 of the transferred bytes.
+    /// SHA-256 of the transferred bytes, as lowercase hex.
     pub sha256: String,
-    /// SHA-512 of the transferred bytes.
+    /// SHA-512 of the transferred bytes, as lowercase hex.
     pub sha512: String,
 }
 
@@ -50,7 +56,7 @@ pub(crate) struct AcquiredArtifact {
 ///
 /// Returns [`AcquisitionError`] for an insecure URL or file name, a transfer failure, or a
 /// published size or digest mismatch. The caller owns `directory` and discards failed files.
-pub(crate) fn acquire(
+pub fn acquire(
     http: &dyn HttpClient,
     descriptor: &ArtifactDescriptor,
     directory: &Path,
@@ -112,24 +118,55 @@ fn verify(
 
 /// Why a direct artifact could not be acquired and verified.
 #[derive(Debug, Error)]
-pub(crate) enum AcquisitionError {
+#[non_exhaustive]
+pub enum AcquisitionError {
+    /// The transfer failed.
     #[error(transparent)]
-    Transfer(#[from] ArtifactError),
+    Http(#[from] HttpError),
+    /// The artifact could not be written.
+    #[error("cannot write {}: {source}", .path.display())]
+    Io {
+        /// The destination.
+        path: PathBuf,
+        /// The underlying error.
+        #[source]
+        source: io::Error,
+    },
+    /// The URL is not `https`.
     #[error("refusing to download over an insecure URL: {0}")]
     InsecureUrl(String),
+    /// The file name is not a single safe path component.
     #[error("refusing to write a download named {0:?}")]
     UnsafeFileName(String),
+    /// The artifact is not the size its provider published.
     #[error("{file} is {actual} bytes, but the provider published {expected}")]
     SizeMismatch {
+        /// The file name.
         file: String,
+        /// The published size.
         expected: u64,
+        /// The transferred size.
         actual: u64,
     },
+    /// The artifact does not match a digest its provider published.
     #[error("{file} failed {algorithm} verification: expected {expected}, got {actual}")]
     HashMismatch {
+        /// The file name.
         file: String,
+        /// The digest algorithm.
         algorithm: &'static str,
+        /// The published digest.
         expected: String,
+        /// The digest of what was transferred.
         actual: String,
     },
+}
+
+impl From<ArtifactError> for AcquisitionError {
+    fn from(error: ArtifactError) -> Self {
+        match error {
+            ArtifactError::Http(error) => Self::Http(error),
+            ArtifactError::Io { path, source } => Self::Io { path, source },
+        }
+    }
 }

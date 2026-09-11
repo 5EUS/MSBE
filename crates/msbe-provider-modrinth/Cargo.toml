@@ -1,0 +1,27 @@
+[package]
+name        = "msbe-provider-modrinth"
+description = "The Modrinth provider adapter."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+homepage.workspace     = true
+readme.workspace       = true
+keywords.workspace     = true
+categories.workspace   = true
+publish.workspace      = true
+
+[lints]
+workspace = true
+
+[dependencies]
+msbe-provider-api    = { version = "0.0.0", path = "../msbe-provider-api" }
+serde.workspace      = true
+serde_json.workspace = true
+thiserror.workspace  = true
+
+[dev-dependencies]
+msbe-plan-schema   = { version = "0.0.0", path = "../msbe-plan-schema" }
+sha2.workspace     = true
+tempfile.workspace = true

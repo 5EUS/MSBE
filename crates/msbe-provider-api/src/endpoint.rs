@@ -27,7 +27,7 @@ impl<'a> JsonEndpoint<'a> {
     /// Creates an endpoint over `base`.
     ///
     /// Provider manifests validate the base URL before an adapter constructs this helper.
-    pub(crate) fn new(http: &'a dyn HttpClient, base: impl Into<String>, limit: u64) -> Self {
+    pub fn new(http: &'a dyn HttpClient, base: impl Into<String>, limit: u64) -> Self {
         Self {
             http,
             base: base.into(),
@@ -75,10 +75,6 @@ impl<'a> JsonEndpoint<'a> {
             return Err(EndpointError::InvalidPath(path.to_owned()));
         }
         Ok(format!("{}{path}", self.base.trim_end_matches('/')))
-    }
-
-    pub(crate) fn http(&self) -> &dyn HttpClient {
-        self.http
     }
 }
 

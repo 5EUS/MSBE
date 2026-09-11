@@ -19,19 +19,6 @@ pub struct Catalog {
 }
 
 impl Catalog {
-    /// Loads the provider definitions shipped with MSBE.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ManifestError`] if a built-in definition is invalid. This indicates a build
-    /// error in MSBE rather than user-provided input.
-    pub fn builtins() -> Result<Self, ManifestError> {
-        Self::from_toml(&[
-            include_str!("manifests/direct.toml"),
-            include_str!("manifests/modrinth.toml"),
-        ])
-    }
-
     /// Parses and validates a catalog from independent TOML documents.
     ///
     /// # Errors
@@ -334,18 +321,29 @@ mod tests {
     use super::{Catalog, ManifestError};
 
     #[test]
-    fn builtins_recognize_their_declared_sources() -> Result<(), ManifestError> {
-        let catalog = Catalog::builtins()?;
-        let modrinth = catalog.source("modrinth:sodium")?;
-        assert_eq!(modrinth.provider().id, "modrinth");
-        assert_eq!(modrinth.reference(), "sodium");
-        assert_eq!(
-            catalog
-                .source("https://example.test/mod.jar")?
-                .provider()
-                .id,
-            "url"
-        );
+    fn prefixed_sources_are_recognized_and_their_prefix_removed() -> Result<(), ManifestError> {
+        let catalog = Catalog::from_toml(&[r#"
+            schema = 1
+            id = "example"
+            name = "Example"
+            [source]
+            type = "prefixed"
+            prefix = "example:"
+            [acquisition]
+            type = "direct_https"
+            [policy]
+            requires_auth = false
+            respects_distribution_flag = false
+            tos_url = ""
+            ack_required = false
+        "#])?;
+        let source = catalog.source("example:mod")?;
+        assert_eq!(source.provider().id, "example");
+        assert_eq!(source.reference(), "mod");
+        assert!(matches!(
+            catalog.source("other:mod"),
+            Err(ManifestError::UnknownSource(_))
+        ));
         Ok(())
     }
 

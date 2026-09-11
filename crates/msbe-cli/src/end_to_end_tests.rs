@@ -12,7 +12,7 @@ use std::{
     rc::Rc,
 };
 
-use msbe_providers::{HttpClient, HttpError};
+use msbe_provider_api::{HttpClient, HttpError};
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256, Sha512};
 use tempfile::TempDir;
@@ -596,7 +596,7 @@ fn update_moves_modrinth_mods_forward_on_their_channel_and_deploys_like_any_chan
     assert_eq!(at(&preview, "/not_from_modrinth"), &json!(["lithium"]));
     assert_eq!(
         at(&preview, "/unresolved"),
-        &json!([{ "project_id": "P7dR8mSH", "declared_by": "iris" }])
+        &json!([{ "provider": "modrinth", "project_id": "P7dR8mSH", "declared_by": "iris" }])
     );
     let show = || world.json(&["profile", "show", "mc"]);
     assert_eq!(
@@ -656,7 +656,7 @@ fn without_dependencies_a_missing_requirement_is_reported_not_installed() {
     assert_eq!(at(&added, "/added"), &json!(["iris"]));
     assert_eq!(
         at(&added, "/unresolved"),
-        &json!([{ "project_id": "AANobbMI", "declared_by": "iris" }])
+        &json!([{ "provider": "modrinth", "project_id": "AANobbMI", "declared_by": "iris" }])
     );
 }
 
@@ -778,7 +778,10 @@ fn a_fabric_api_reimplementation_in_the_profile_meets_requirements_on_fabric_api
     assert_eq!(at(&quilt, "/added"), &json!(["sodium"]));
     assert_eq!(
         at(&quilt, "/substituted"),
-        &json!([{ "project_id": "P7dR8mSH", "declared_by": "sodium", "supplied_by": "qvIfYCYJ" }])
+        &json!([{
+            "provider": "modrinth", "project_id": "P7dR8mSH", "declared_by": "sodium",
+            "supplied_by": { "provider": "modrinth", "project": "qvIfYCYJ" }
+        }])
     );
 
     // Nor can Fabric API be added beside it.

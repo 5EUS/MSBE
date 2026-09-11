@@ -11,7 +11,7 @@
 
 use std::{fmt, io, io::Write, sync::Arc, time::Duration};
 
-use msbe_providers::{HttpClient, HttpError};
+use msbe_provider_api::{HttpClient, HttpError};
 use ureq::{
     Agent, Body,
     http::{Response, StatusCode},
@@ -207,7 +207,7 @@ mod tests {
         thread,
     };
 
-    use msbe_providers::{HttpClient, HttpError};
+    use msbe_provider_api::{HttpClient, HttpError};
 
     use super::{USER_AGENT, UreqClient};
 

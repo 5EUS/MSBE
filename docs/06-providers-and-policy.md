@@ -107,37 +107,47 @@ requirements without accidentally weakening their policy on older clients.
 
 ### Adapter implementation contract
 
-A new provider is a reviewed Rust adapter, not a manifest template. Its implementation must
-obey these boundaries:
+A new provider is a reviewed Rust adapter crate, not a manifest template. The workspace keeps
+everything specific to one provider inside that provider's crate:
 
-1. **Registry-only entry.** The adapter is added to `ProviderRegistry` by stable manifest ID.
-   It may only use manifest-validated metadata origins and only after the registry policy gate
-   has accepted the provider. A source prefix alone never enables code or network access.
-2. **One compatibility input.** Selection and search accept the shared
-   `msbe_providers::Target` `{ game_version, loader, provides, loader_version, side }`. Native
-   provider metadata is translated into it before candidates leave the adapter. Missing side
-   metadata is incompatible; loader capabilities are explicit rather than inferred.
-3. **Bounded metadata.** API calls use `JsonEndpoint` with endpoint-relative paths and a fixed
+| Crate                | Holds                                                                                                                                                                  |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `msbe-provider-api`  | the `Adapter` trait and its capabilities, the neutral records in `model`, `HttpClient`, `JsonEndpoint`, verified acquisition, manifests, the overlay, and resolution |
+| `msbe-provider-<id>` | one provider: its manifest, the overlay entries MSBE ships about its projects, its wire records and their translation, and any policy only it has                     |
+| `msbe-providers`     | `BUILTIN`, the list of registrations, and `Providers`, the policy gate; pack formats live here until they get crates of their own                                     |
+
+Adding a provider is a new `msbe-provider-<id>` crate and one line in `BUILTIN`. The CLI, the
+daemon and `msbe-core` never name a provider. An adapter crate must obey these boundaries:
+
+1. **Registration-only entry.** The crate exports one `Registration`: its provider id,
+   manifest, overlay entries and constructor. `Providers` checks the manifest's policy before
+   the adapter parses a reference or makes a request, and refuses a manifest no registration
+   serves. A source prefix alone never enables code or network access.
+2. **Neutral records at the boundary.** Requests, projects, releases, files, dependencies,
+   search results and update checks cross the trait as `msbe_provider_api::model` types. Wire
+   records stay private to the adapter's crate.
+3. **One compatibility input.** Search, releases and updates accept the shared `Target`
+   `{ game_version, loader, provides, loader_version, side }`. Missing side metadata is
+   incompatible; loader capabilities are explicit rather than inferred.
+4. **Bounded metadata.** API calls use `JsonEndpoint` with endpoint-relative paths and a fixed
    response limit. Adapters do not construct URLs from untrusted identifiers or issue ad-hoc
    HTTP requests.
-4. **Verified acquisition.** Direct artifacts use the shared acquisition service, which owns
-   create-new streaming transfer, HTTPS-only URLs, safe output names, published size checks, and
-   SHA-256/SHA-512 verification. The adapter supplies only an inert descriptor and must provide
-   every integrity value it has.
-5. **Narrow extensions.** Dependency resolution, release-channel policy, and bulk update lookup
-   are provider-specific extensions. They must be named methods with tests, not hidden behavior
-   in the common search or acquisition path. An adapter without a sanctioned capability returns
-   an explicit unavailable outcome.
-6. **Normalized discovery.** Registry-dispatched search returns the stable `SearchResult`
-   `{ provider, project, reference, title, description, downloads }`, not an adapter result.
-   Adapter JSON request/response records and endpoint details stay private as each provider is
-   migrated to the normalized metadata model.
+5. **Verified acquisition.** The default `Adapter::acquire` runs the shared acquisition service,
+   which owns create-new streaming transfer, HTTPS-only URLs, safe output names, published size
+   checks, and SHA-256/SHA-512 verification. The adapter supplies every integrity value it has
+   in its release files.
+6. **Capabilities, not stubs.** `as_search`, `as_releases` and `as_updates` return `None` unless
+   the provider supports them, so a missing capability is known before a command starts.
+   Provider-specific protocols, such as Modrinth's bulk hash lookups and release-channel policy,
+   stay behind the capability they implement.
+7. **Shared resolution.** An adapter that implements `Releases` gets dependency resolution, the
+   overlay, installed-release pinning and PubGrub's explanations from `resolve::Resolver`; it
+   never walks a dependency graph itself. A requirement on one provider's project can be met by
+   another provider's project when the overlay says it stands in.
 
-Modrinth remains the reference adapter for the optional dependency-walk and bulk-update
-extensions. It uses the shared target model, endpoint, acquisition service, and registry policy;
-new providers begin with search/select/acquire and add extensions only when their public API and
-tests justify them. The remaining Modrinth project, release, and dependency records are the
-next solver-aligned migration; they are intentionally not forced into a premature common trait.
+Modrinth is the reference adapter and implements all three capabilities. The `url` adapter
+implements none: it returns a `Request::File` that needs no resolution, the shape an `nxm://`
+link will take too.
 
 ## 6.4 What we will not do
 

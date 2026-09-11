@@ -21,14 +21,16 @@ use msbe_core::{
 };
 use msbe_fsops::{Backend, NoopObserver, Operation, RelPath, Store};
 use msbe_plan_schema::Side;
-use msbe_providers::{
-    Catalog, HttpClient, HttpError, MODRINTH, Overlay, OverlayError, ProviderRegistry,
-    RegistryError, ResolvedSource, Target,
-    direct::{self, DirectError, DirectSource},
-    modrinth::{
-        InstallPlan, InstalledRelease, Modrinth, ModrinthError, Requirement, Substitution, Update,
-        UpdateCheck, Version, VersionFile,
+use msbe_provider_api::{
+    AdapterError, HttpClient, HttpError, ManifestError, PackageId, Target, Update, UpdateCheck,
+    model::{Request, Selection},
+    resolve::{
+        InstallPlan, InstalledRelease, ProjectRequest, Requirement, ResolveError, Resolver,
+        Substitution,
     },
+};
+use msbe_providers::{
+    Providers, RegistryError, Routed,
     pack::{self, ExportFile, PackError},
 };
 use serde::Serialize;
@@ -111,11 +113,11 @@ enum Command {
         /// The profile to add to.
         #[arg(long, short, default_value = DEFAULT_PROFILE)]
         profile: String,
-        /// Also add every required dependency of Modrinth mods.
+        /// Also add every required dependency of mods from providers that publish them.
         #[arg(long)]
         with_deps: bool,
     },
-    /// Search Modrinth for mods compatible with a profile target.
+    /// Search every provider that supports it for mods compatible with a profile target.
     Search {
         /// The instance.
         instance: String,
@@ -129,11 +131,11 @@ enum Command {
         #[arg(long, default_value_t = 10)]
         limit: u8,
     },
-    /// Move Modrinth mods to newer compatible versions, keeping each on its release channel.
+    /// Move mods to newer compatible releases from the providers they came from.
     Update {
         /// The instance.
         instance: String,
-        /// Mods to update. Defaults to every Modrinth mod in the profile.
+        /// Mods to update. Defaults to every mod in the profile a provider can update.
         #[arg(value_name = "MOD")]
         modules: Vec<String>,
         /// The profile to update.
@@ -305,15 +307,13 @@ enum CliError {
     #[error(transparent)]
     Instance(#[from] InstanceError),
     #[error(transparent)]
-    Modrinth(#[from] ModrinthError),
+    Adapter(#[from] AdapterError),
     #[error(transparent)]
-    Direct(#[from] DirectError),
+    Resolve(#[from] ResolveError),
     #[error(transparent)]
     Http(#[from] HttpError),
     #[error(transparent)]
     Provider(#[from] RegistryError),
-    #[error(transparent)]
-    Overlay(#[from] OverlayError),
     #[error(transparent)]
     Pack(#[from] PackError),
     #[error(transparent)]
@@ -388,6 +388,7 @@ struct UpdateReport {
     current: Vec<Name>,
     no_compatible_version: Vec<Name>,
     unlisted: Vec<Name>,
+    /// Mods no provider can update. The key predates other providers, and scripts read it.
     not_from_modrinth: Vec<Name>,
     unresolved: Vec<Requirement>,
     incompatible: Vec<Requirement>,
@@ -399,11 +400,11 @@ struct PackExportReport {
     files: usize,
 }
 
-/// A mod in a profile and the Modrinth provenance recorded for it.
+/// A mod in a profile and the provenance recorded for it.
 type Tracked<'p> = (&'p Name, &'p Provenance);
 
-/// A mod in a profile and the update chosen for it.
-type Pending<'p> = (&'p Name, Update);
+/// A mod in a profile, its provenance, and the update chosen for it.
+type Pending<'p> = (&'p Name, &'p Provenance, Update);
 
 /// Runs the CLI with `args`, which include the program name, and returns the exit code.
 pub fn run<I, T>(args: I, out: &mut dyn Write, err: &mut dyn Write) -> u8
@@ -452,7 +453,7 @@ where
 }
 
 fn execute(cli: &Cli, console: &mut Console<'_>) -> Result<u8, CliError> {
-    let providers = Catalog::builtins().map_err(RegistryError::from)?;
+    let providers = Providers::builtins()?;
     let home = match &cli.home {
         Some(dir) => Home::at(dir),
         None => Home::discover()?,
@@ -760,7 +761,7 @@ fn profile_command(
     reason = "the established command handler signature needs the catalog alongside command inputs"
 )]
 fn add(
-    providers: &Catalog,
+    providers: &Providers,
     home: &Home,
     instance: &str,
     profile: &str,
@@ -771,16 +772,23 @@ fn add(
     let opened = open(home, instance, console)?;
     let profile = Name::new(profile)?;
     let mut artifacts = Vec::new();
-    let mut specs = Vec::new();
-    let mut urls = Vec::new();
-    let registry = ProviderRegistry::new(providers);
+    let mut projects = Vec::new();
+    let mut files = Vec::new();
     for source in sources {
-        match registry.source(source) {
-            Ok(ResolvedSource::Modrinth { spec, .. }) => specs.push(spec),
-            Ok(ResolvedSource::Direct { provider, source }) => {
-                urls.push((provider.id.as_str(), source));
-            }
-            Err(RegistryError::Manifest(msbe_providers::ManifestError::UnknownSource(_))) => {
+        match providers.request(source) {
+            Ok(Routed {
+                provider,
+                request: Request::Project { reference, version },
+            }) => projects.push(ProjectRequest {
+                provider,
+                reference,
+                version,
+            }),
+            Ok(Routed {
+                request: Request::File(selection),
+                ..
+            }) => files.push(*selection),
+            Err(RegistryError::Manifest(ManifestError::UnknownSource(_))) => {
                 artifacts.push(Artifact {
                     path: PathBuf::from(source),
                     module: None,
@@ -793,7 +801,7 @@ fn add(
 
     let mut report = AddReport::default();
     // Downloads must outlive the ingest below, so the scratch directory lives until the end.
-    let scratch = if specs.is_empty() && urls.is_empty() {
+    let scratch = if projects.is_empty() && files.is_empty() {
         None
     } else {
         Some(tempfile::tempdir_in(opened.scratch_dir()).map_err(CliError::Scratch)?)
@@ -802,23 +810,25 @@ fn add(
         let existing = opened.profile(&profile)?;
         let client = (console.connect)()?;
         let mut fetch = Fetch {
+            providers,
+            http: client.as_ref(),
             existing: &existing,
             scratch: scratch.path(),
             artifacts: &mut artifacts,
             report: &mut report,
         };
-        if !specs.is_empty() {
-            let modrinth = registry.modrinth(client.as_ref())?;
-            let plan = modrinth.plan_install(
-                &specs,
-                &target(&opened, &profile)?,
-                with_deps,
-                &Overlay::builtins()?,
-                &installed_releases(&existing),
-            )?;
-            fetch.modrinth(&modrinth, plan)?;
+        if !projects.is_empty() {
+            let target = target(&opened, &profile)?;
+            let plan = Resolver {
+                adapters: providers,
+                http: client.as_ref(),
+                target: &target,
+                overlay: providers.overlay(),
+            }
+            .plan_install(&projects, with_deps, &installed_releases(&existing))?;
+            fetch.plan(plan)?;
         }
-        fetch.urls(client.as_ref(), &urls)?;
+        fetch.selections(&files)?;
     }
     report.added = opened.add_artifacts(&profile, &artifacts)?;
 
@@ -840,8 +850,10 @@ fn add(
         for substitution in &report.substituted {
             writeln!(
                 out,
-                "{} requires Modrinth project {}; Modrinth project {} stands in for it.",
-                substitution.declared_by, substitution.project_id, substitution.supplied_by
+                "{} requires {}; {} stands in for it.",
+                substitution.requirement.declared_by,
+                substitution.requirement.package(),
+                substitution.supplied_by
             )?;
         }
         print_requirements(
@@ -854,22 +866,31 @@ fn add(
     Ok(exit::OK)
 }
 
-/// The profile's Modrinth releases, which resolution keeps as they are.
+/// The profile's provider releases, which resolution keeps as they are.
 fn installed_releases(profile: &Profile) -> Vec<InstalledRelease> {
     profile
         .mods
         .values()
         .filter_map(|entry| entry.provider.as_ref())
-        .filter(|provenance| provenance.provider == MODRINTH)
         .map(|provenance| InstalledRelease {
-            project: provenance.project.clone(),
-            version: provenance.version.clone(),
+            package: package_of(provenance),
+            release: provenance.version.clone(),
         })
         .collect()
 }
 
-/// Downloads for `add`, collected as artifacts, skipping sources the profile already has.
+/// The identity of the project a mod came from.
+fn package_of(provenance: &Provenance) -> PackageId {
+    PackageId {
+        provider: provenance.provider.clone(),
+        project: provenance.project.clone(),
+    }
+}
+
+/// Downloads for `add`, collected as artifacts, skipping projects the profile already has.
 struct Fetch<'a> {
+    providers: &'a Providers,
+    http: &'a dyn HttpClient,
     existing: &'a Profile,
     scratch: &'a Path,
     artifacts: &'a mut Vec<Artifact>,
@@ -877,46 +898,32 @@ struct Fetch<'a> {
 }
 
 impl Fetch<'_> {
-    fn modrinth(&mut self, modrinth: &Modrinth<'_>, plan: InstallPlan) -> Result<(), CliError> {
-        for selection in &plan.selections {
-            if let Some(name) = installed_from(self.existing, MODRINTH, &selection.project.id) {
-                self.report.skipped.push(name.clone());
-                continue;
-            }
-            let path = modrinth.download(&selection.file, self.scratch)?;
-            self.artifacts.push(Artifact {
-                path,
-                module: Some(Name::sanitize(&selection.project.slug)?),
-                provider: Some(provenance(&selection.version, &selection.file)),
-            });
-        }
+    fn plan(&mut self, plan: InstallPlan) -> Result<(), CliError> {
+        self.selections(&plan.selections)?;
         self.report.unresolved = plan.unresolved;
         self.report.incompatible = plan.incompatible;
         self.report.substituted = plan.substitutions;
         Ok(())
     }
 
-    fn urls(
-        &mut self,
-        http: &dyn HttpClient,
-        sources: &[(&str, DirectSource)],
-    ) -> Result<(), CliError> {
-        for (provider_id, source) in sources {
-            if let Some(name) = installed_from(self.existing, provider_id, &source.url) {
+    fn selections(&mut self, selections: &[Selection]) -> Result<(), CliError> {
+        for selection in selections {
+            let project = &selection.project.id;
+            if let Some(name) = installed_from(self.existing, &project.provider, &project.project) {
                 self.report.skipped.push(name.clone());
                 continue;
             }
-            let downloaded = direct::download(http, source, self.scratch)?;
+            let adapter = self.providers.adapter(&project.provider)?;
+            let acquired = adapter.acquire(self.http, &selection.file, self.scratch)?;
             self.artifacts.push(Artifact {
-                path: downloaded.path,
-                module: None,
-                provider: Some(Provenance {
-                    provider: (*provider_id).to_owned(),
-                    project: source.url.clone(),
-                    version: downloaded.sha512.clone(),
-                    version_number: source.file_name.clone(),
-                    sha512: downloaded.sha512,
-                }),
+                provider: Some(adapter.provenance(&selection.release, &acquired)),
+                module: selection
+                    .project
+                    .slug
+                    .as_deref()
+                    .map(Name::sanitize)
+                    .transpose()?,
+                path: acquired.path,
             });
         }
         Ok(())
@@ -925,10 +932,10 @@ impl Fetch<'_> {
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "the established command handler signature needs the catalog alongside command inputs"
+    reason = "the established command handler signature needs the providers alongside command inputs"
 )]
 fn update(
-    providers: &Catalog,
+    providers: &Providers,
     home: &Home,
     instance: &str,
     profile: &str,
@@ -943,22 +950,29 @@ fn update(
         dry_run,
         ..UpdateReport::default()
     };
-    let tracked = tracked_mods(&selection, &profile, modules, &mut report)?;
+    let tracked = tracked_mods(providers, &selection, &profile, modules, &mut report)?;
     if !tracked.is_empty() {
         let target = target(&opened, &profile)?;
         let client = (console.connect)()?;
-        let modrinth = ProviderRegistry::new(providers).modrinth(client.as_ref())?;
-        let updates = find_updates(&modrinth, &tracked, &target, &mut report)?;
-        report_relationships(&modrinth, &selection, &updates, &mut report)?;
+        let resolver = Resolver {
+            adapters: providers,
+            http: client.as_ref(),
+            target: &target,
+            overlay: providers.overlay(),
+        };
+        let updates = find_updates(providers, &resolver, &tracked, &mut report)?;
+        report_relationships(&resolver, &selection, &updates, &mut report)?;
         if !dry_run && !updates.is_empty() {
             // Downloads must outlive the ingest below.
             let scratch = tempfile::tempdir_in(opened.scratch_dir()).map_err(CliError::Scratch)?;
             let mut artifacts = Vec::with_capacity(updates.len());
-            for (module, update) in &updates {
+            for (module, provenance, update) in &updates {
+                let adapter = providers.adapter(&provenance.provider)?;
+                let acquired = adapter.acquire(client.as_ref(), &update.file, scratch.path())?;
                 artifacts.push(Artifact {
-                    path: modrinth.download(&update.file, scratch.path())?,
+                    provider: Some(adapter.provenance(&update.release, &acquired)),
                     module: Some((*module).clone()),
-                    provider: Some(provenance(&update.version, &update.file)),
+                    path: acquired.path,
                 });
             }
             opened.replace_artifacts(&profile, &artifacts)?;
@@ -970,9 +984,10 @@ fn update(
     Ok(exit::OK)
 }
 
-/// The profile's Modrinth mods to check, limited to `modules` when any are named. Mods in
-/// scope that did not come from Modrinth are recorded in the report.
+/// The profile's mods to check, limited to `modules` when any are named. Mods in scope that no
+/// provider can update are recorded in the report.
 fn tracked_mods<'p>(
+    providers: &Providers,
     selection: &'p Profile,
     profile: &Name,
     modules: &[String],
@@ -998,11 +1013,12 @@ fn tracked_mods<'p>(
         if !wanted.is_empty() && !wanted.contains(module) {
             continue;
         }
-        match entry
-            .provider
-            .as_ref()
-            .filter(|provenance| provenance.provider == MODRINTH)
-        {
+        let updatable = entry.provider.as_ref().filter(|provenance| {
+            providers
+                .adapter(&provenance.provider)
+                .is_ok_and(|adapter| adapter.as_updates().is_some())
+        });
+        match updatable {
             Some(provenance) => tracked.push((module, provenance)),
             None => report.not_from_modrinth.push(module.clone()),
         }
@@ -1010,77 +1026,83 @@ fn tracked_mods<'p>(
     Ok(tracked)
 }
 
-/// Checks every tracked mod, returns those with an update, and records the rest.
+/// Checks every tracked mod with the provider it came from, returns those with an update, and
+/// records the rest.
 fn find_updates<'p>(
-    modrinth: &Modrinth<'_>,
+    providers: &Providers,
+    resolver: &Resolver<'_>,
     tracked: &[Tracked<'p>],
-    target: &Target,
     report: &mut UpdateReport,
 ) -> Result<Vec<Pending<'p>>, CliError> {
-    let hashes: Vec<String> = tracked
-        .iter()
-        .map(|(_, provenance)| provenance.sha512.clone())
-        .collect();
-    let checks = modrinth.check_updates(&hashes, target)?;
+    let mut by_provider: BTreeMap<&str, Vec<Tracked<'p>>> = BTreeMap::new();
+    for &(module, provenance) in tracked {
+        by_provider
+            .entry(provenance.provider.as_str())
+            .or_default()
+            .push((module, provenance));
+    }
+    let mut checks: BTreeMap<&Name, UpdateCheck> = BTreeMap::new();
+    for (provider, group) in by_provider {
+        let Some(updates) = providers.adapter(provider)?.as_updates() else {
+            continue;
+        };
+        let installed: Vec<&Provenance> = group.iter().map(|&(_, provenance)| provenance).collect();
+        let found = updates.check(resolver.http, &installed, resolver.target)?;
+        checks.extend(group.iter().map(|&(module, _)| module).zip(found));
+    }
     let mut updates = Vec::new();
-    for (module, provenance) in tracked {
-        let module = *module;
-        match checks.get(&provenance.sha512.to_ascii_lowercase()) {
+    for &(module, provenance) in tracked {
+        match checks.remove(module) {
             Some(UpdateCheck::Available(update)) => {
                 report.updated.push(ModUpdate {
                     module: module.clone(),
                     from: provenance.version_number.clone(),
-                    to: update.version.version_number.clone(),
+                    to: update.release.number.clone(),
                 });
-                updates.push((module, (**update).clone()));
+                updates.push((module, provenance, *update));
             }
-            Some(UpdateCheck::Current(_)) => report.current.push(module.clone()),
-            Some(UpdateCheck::Incompatible(_)) => report.no_compatible_version.push(module.clone()),
+            Some(UpdateCheck::Current) => report.current.push(module.clone()),
+            Some(UpdateCheck::Incompatible) => report.no_compatible_version.push(module.clone()),
             Some(UpdateCheck::Unlisted) | None => report.unlisted.push(module.clone()),
         }
     }
     Ok(updates)
 }
 
-/// Records requirements the new versions add that the profile does not meet.
+/// Records requirements the new releases add that the profile does not meet.
 fn report_relationships(
-    modrinth: &Modrinth<'_>,
+    resolver: &Resolver<'_>,
     selection: &Profile,
     updates: &[Pending<'_>],
     report: &mut UpdateReport,
 ) -> Result<(), CliError> {
-    let installed: BTreeSet<&str> = selection
+    let installed: BTreeSet<PackageId> = selection
         .mods
         .values()
         .filter_map(|entry| entry.provider.as_ref())
-        .filter(|provenance| provenance.provider == MODRINTH)
-        .map(|provenance| provenance.project.as_str())
+        .map(package_of)
         .collect();
     // A requirement is met by the required project, or by one that provides or replaces it.
-    let overlay = Overlay::builtins()?;
-    let met = |project: &str| {
-        let required = msbe_core::solver::PackageId {
-            provider: MODRINTH.to_owned(),
-            project: project.to_owned(),
-        };
-        installed.contains(project)
-            || overlay.suppliers(&required).any(|supplier| {
-                supplier.provider == MODRINTH && installed.contains(supplier.project.as_str())
-            })
+    let met = |required: &PackageId| {
+        installed.contains(required)
+            || resolver
+                .overlay
+                .suppliers(required)
+                .any(|supplier| installed.contains(supplier))
     };
-    for (module, update) in updates {
-        let relationships = modrinth.relationships(&update.version, module.as_str())?;
+    for (module, _, update) in updates {
+        let relationships = resolver.relationships(&update.release, module.as_str())?;
         report.unresolved.extend(
             relationships
                 .required
                 .into_iter()
-                .filter(|requirement| !met(&requirement.project_id)),
+                .filter(|requirement| !met(&requirement.package())),
         );
         report.incompatible.extend(
             relationships
                 .incompatible
                 .into_iter()
-                .filter(|requirement| installed.contains(requirement.project_id.as_str())),
+                .filter(|requirement| installed.contains(&requirement.package())),
         );
     }
     Ok(())
@@ -1091,7 +1113,7 @@ fn report_relationships(
     reason = "command handlers receive their parsed inputs separately"
 )]
 fn search(
-    providers: &Catalog,
+    providers: &Providers,
     home: &Home,
     instance: &str,
     profile: &str,
@@ -1103,13 +1125,11 @@ fn search(
     let profile = Name::new(profile)?;
     let target = target(&opened, &profile)?;
     let client = (console.connect)()?;
-    let hits = ProviderRegistry::new(providers).search(
-        MODRINTH,
-        client.as_ref(),
-        &query.join(" "),
-        &target,
-        limit,
-    )?;
+    let query = query.join(" ");
+    let mut hits = Vec::new();
+    for provider in providers.searchable() {
+        hits.extend(providers.search(provider, client.as_ref(), &query, &target, limit)?);
+    }
     console.emit(&hits, |out, hits| {
         if hits.is_empty() {
             return writeln!(out, "No compatible mods found.");
@@ -1289,17 +1309,6 @@ fn installed_from<'p>(profile: &'p Profile, provider: &str, project: &str) -> Op
         .map(|(name, _)| name)
 }
 
-/// The provenance recorded for a file installed from a Modrinth version.
-fn provenance(version: &Version, file: &VersionFile) -> Provenance {
-    Provenance {
-        provider: MODRINTH.to_owned(),
-        project: version.project_id.clone(),
-        version: version.id.clone(),
-        version_number: version.version_number.clone(),
-        sha512: file.hashes.sha512.clone(),
-    }
-}
-
 fn report(error: &CliError, err: &mut dyn Write) -> io::Result<()> {
     writeln!(err, "error: {error}")?;
     if let CliError::Instance(InstanceError::Conflicts(conflicts)) = error {
@@ -1400,8 +1409,11 @@ fn print_update(
             "No compatible version on their release channel",
             &report.no_compatible_version,
         ),
-        ("No longer listed on Modrinth", &report.unlisted),
-        ("Not from Modrinth, left alone", &report.not_from_modrinth),
+        ("No longer listed by their provider", &report.unlisted),
+        (
+            "No provider can update these, left alone",
+            &report.not_from_modrinth,
+        ),
     ] {
         if !names.is_empty() {
             writeln!(out, "{label}: {}", join(names))?;
@@ -1424,15 +1436,17 @@ fn print_requirements(
     for missing in unresolved {
         writeln!(
             out,
-            "{} requires Modrinth project {}; {hint}.",
-            missing.declared_by, missing.project_id
+            "{} requires {}; {hint}.",
+            missing.declared_by,
+            missing.package()
         )?;
     }
     for clash in incompatible {
         writeln!(
             out,
-            "Warning: {} declares Modrinth project {} incompatible, and both are selected.",
-            clash.declared_by, clash.project_id
+            "Warning: {} declares {} incompatible, and both are selected.",
+            clash.declared_by,
+            clash.package()
         )?;
     }
     Ok(())

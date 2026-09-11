@@ -1,6 +1,6 @@
 [package]
 name        = "msbe-providers"
-description = "Mod source adapters and the provider policy layer."
+description = "The providers MSBE ships: adapter registrations behind the policy gate, and pack formats."
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true
@@ -16,15 +16,15 @@ publish.workspace      = true
 workspace = true
 
 [dependencies]
-msbe-fsops           = { version = "0.0.0", path = "../msbe-fsops" }
-msbe-core            = { version = "0.0.0", path = "../msbe-core" }
-msbe-plan-schema     = { version = "0.0.0", path = "../msbe-plan-schema" }
-serde.workspace      = true
-serde_json.workspace = true
-sha2.workspace       = true
-thiserror.workspace  = true
-toml.workspace       = true
-zip.workspace        = true
+msbe-fsops             = { version = "0.0.0", path = "../msbe-fsops" }
+msbe-provider-api      = { version = "0.0.0", path = "../msbe-provider-api" }
+msbe-provider-direct   = { version = "0.0.0", path = "../msbe-provider-direct" }
+msbe-provider-modrinth = { version = "0.0.0", path = "../msbe-provider-modrinth" }
+serde.workspace        = true
+serde_json.workspace   = true
+thiserror.workspace    = true
+zip.workspace          = true
 
 [dev-dependencies]
+msbe-plan-schema   = { version = "0.0.0", path = "../msbe-plan-schema" }
 tempfile.workspace = true

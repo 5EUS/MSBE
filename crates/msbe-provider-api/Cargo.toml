@@ -1,6 +1,6 @@
 [package]
-name        = "msbe-cli"
-description = "The msbe command-line interface."
+name        = "msbe-provider-api"
+description = "The contract provider adapters build against: neutral records, transport, acquisition and resolution."
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true
@@ -15,25 +15,15 @@ publish.workspace      = true
 [lints]
 workspace = true
 
-# The crate is msbe-cli; the binary users type is `msbe`.
-[[bin]]
-name = "msbe"
-path = "src/main.rs"
-
 [dependencies]
-clap.workspace       = true
 msbe-core            = { version = "0.0.0", path = "../msbe-core" }
 msbe-fsops           = { version = "0.0.0", path = "../msbe-fsops" }
-msbe-http            = { version = "0.0.0", path = "../msbe-http" }
 msbe-plan-schema     = { version = "0.0.0", path = "../msbe-plan-schema" }
-msbe-provider-api    = { version = "0.0.0", path = "../msbe-provider-api" }
-msbe-providers       = { version = "0.0.0", path = "../msbe-providers" }
-msbe-rpc-schema      = { version = "0.0.0", path = "../msbe-rpc-schema" }
 serde.workspace      = true
 serde_json.workspace = true
-tempfile.workspace   = true
+sha2.workspace       = true
 thiserror.workspace  = true
+toml.workspace       = true
 
 [dev-dependencies]
-sha2.workspace = true
-zip.workspace  = true
+tempfile.workspace = true

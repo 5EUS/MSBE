@@ -61,8 +61,8 @@ impl<W: Write> Write for HashingWriter<W> {
     }
 }
 
-/// Lowercase hex.
-pub(crate) fn hex(bytes: &[u8]) -> String {
+/// Lowercase hex, the form providers publish digests in.
+pub fn hex(bytes: &[u8]) -> String {
     bytes
         .iter()
         .fold(String::with_capacity(bytes.len() * 2), |mut out, byte| {

@@ -1,33 +1,13 @@
-//! Mod source adapters and the provider policy layer.
+//! The providers MSBE ships, behind the policy gate.
 //!
-//! Providers are technically uniform and legally not. Policy is data on each provider,
-//! not scattered conditionals, and "we cannot fetch this for you" is a well-typed
-//! outcome rather than an error.
-//!
-//! Providers reach the network only through [`HttpClient`]. The real implementation lives in
-//! `msbe-http`, the one crate that links TLS; everything here is plain Rust that tests drive
-//! with in-memory fakes.
+//! Every provider is its own adapter crate built against `msbe-provider-api`. [`BUILTIN`] lists
+//! their registrations, and it is the one place outside those crates that names a provider.
+//! [`Providers`] validates their manifests, loads the overlay entries the adapters ship, and
+//! refuses a provider whose declared policy this release cannot honour before its adapter runs.
 //!
 //! See `docs/06-providers-and-policy.md`.
 
-mod acquisition;
-mod artifact;
-pub mod direct;
-pub mod endpoint;
-mod hashing;
-mod http;
-pub mod manifest;
-mod metadata;
-pub mod modrinth;
-pub mod overlay;
 pub mod pack;
-pub mod registry;
-mod target;
+mod registry;
 
-pub use endpoint::{EndpointError, JsonEndpoint};
-pub use http::{HttpClient, HttpError};
-pub use manifest::{Catalog, ManifestError, Provider, Source};
-pub use metadata::SearchResult;
-pub use overlay::{Overlay, OverlayError};
-pub use registry::{DIRECT, MODRINTH, ProviderRegistry, RegistryError, ResolvedSource};
-pub use target::{Availability, Target};
+pub use registry::{BUILTIN, Providers, RegistryError, Routed};

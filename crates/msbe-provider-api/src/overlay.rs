@@ -42,19 +42,6 @@ struct Document {
 }
 
 impl Overlay {
-    /// Loads the overlay entries shipped with MSBE.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`OverlayError`] if a built-in entry is invalid. This indicates a build error in
-    /// MSBE rather than user-provided input.
-    pub fn builtins() -> Result<Self, OverlayError> {
-        Self::from_toml(&[
-            include_str!("overlays/Aqlf1Shp.toml"),
-            include_str!("overlays/qvIfYCYJ.toml"),
-        ])
-    }
-
     /// Parses and validates an overlay from independent TOML documents, one per mod.
     ///
     /// # Errors
@@ -183,16 +170,6 @@ mod tests {
             provider: "modrinth".to_owned(),
             project: project.to_owned(),
         }
-    }
-
-    #[test]
-    fn builtin_fabric_api_reimplementations_provide_fabric_api() {
-        let overlay = Overlay::builtins().unwrap();
-        let suppliers: Vec<&str> = overlay
-            .suppliers(&modrinth("P7dR8mSH"))
-            .map(|package| package.project.as_str())
-            .collect();
-        assert_eq!(suppliers, ["Aqlf1Shp", "qvIfYCYJ"]);
     }
 
     #[test]

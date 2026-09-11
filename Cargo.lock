@@ -377,6 +377,7 @@ dependencies = [
  "msbe-fsops",
  "msbe-http",
  "msbe-plan-schema",
+ "msbe-provider-api",
  "msbe-providers",
  "msbe-rpc-schema",
  "serde",
@@ -429,7 +430,7 @@ dependencies = [
 name = "msbe-http"
 version = "0.0.0"
 dependencies = [
- "msbe-providers",
+ "msbe-provider-api",
  "rustls",
  "rustls-native-certs",
  "ureq",
@@ -449,7 +450,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "msbe-providers"
+name = "msbe-provider-api"
 version = "0.0.0"
 dependencies = [
  "msbe-core",
@@ -461,6 +462,45 @@ dependencies = [
  "tempfile",
  "thiserror",
  "toml",
+]
+
+[[package]]
+name = "msbe-provider-direct"
+version = "0.0.0"
+dependencies = [
+ "msbe-fsops",
+ "msbe-provider-api",
+ "sha2",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
+name = "msbe-provider-modrinth"
+version = "0.0.0"
+dependencies = [
+ "msbe-plan-schema",
+ "msbe-provider-api",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
+name = "msbe-providers"
+version = "0.0.0"
+dependencies = [
+ "msbe-fsops",
+ "msbe-plan-schema",
+ "msbe-provider-api",
+ "msbe-provider-direct",
+ "msbe-provider-modrinth",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
  "zip",
 ]
 

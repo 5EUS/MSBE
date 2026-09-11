@@ -1,25 +1,53 @@
 //! Direct downloads: an `https` URL, optionally pinned to a checksum.
 //!
-//! The manual escape hatch from `docs/06-providers-and-policy.md`. A direct URL has no
-//! metadata to trust, so the URL is the mod's identity. A checksum pinned in the fragment
-//! (`#sha256=...` or `#sha512=...`) is verified when present, and the SHA-512 of what was
-//! fetched is recorded either way.
-
-use std::{
-    io,
-    path::{Path, PathBuf},
-};
+//! The manual escape hatch from `docs/06-providers-and-policy.md`. A direct URL has no metadata
+//! to trust, so the URL is the mod's identity and the file it names is the whole request: nothing
+//! is resolved. A checksum pinned in the fragment (`#sha256=...` or `#sha512=...`) is verified
+//! when present, and the SHA-512 of what was fetched is recorded either way.
 
 use msbe_fsops::RelPath;
+use msbe_provider_api::{
+    AcquiredArtifact, Adapter, AdapterError, Availability, PackageId, Provenance, Registration,
+    model::{Channel, Project, Release, ReleaseFile, Request, Selection},
+};
 use thiserror::Error;
 
-use crate::{
-    acquisition::{AcquisitionError, ArtifactDescriptor, acquire},
-    http::{HttpClient, HttpError},
+/// The provider id the direct URL manifest declares.
+pub const ID: &str = "url";
+
+/// How direct URLs join MSBE.
+pub const REGISTRATION: Registration = Registration {
+    id: ID,
+    manifest: include_str!("../manifest.toml"),
+    overlay: &[],
+    build: |_| Ok(Box::new(Direct)),
 };
 
-/// The most bytes a direct download may be.
-pub const DOWNLOAD_LIMIT: u64 = 2 << 30;
+/// The direct URL adapter.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Direct;
+
+impl Adapter for Direct {
+    fn id(&self) -> &str {
+        ID
+    }
+
+    fn request(&self, reference: &str) -> Result<Request, AdapterError> {
+        let source = DirectSource::parse(reference).map_err(AdapterError::specific)?;
+        Ok(Request::File(Box::new(source.selection())))
+    }
+
+    /// A URL has no release id, so the SHA-512 of what was fetched stands in for one.
+    fn provenance(&self, release: &Release, acquired: &AcquiredArtifact) -> Provenance {
+        Provenance {
+            provider: ID.to_owned(),
+            project: release.project.project.clone(),
+            version: acquired.sha512.clone(),
+            version_number: release.number.clone(),
+            sha512: acquired.sha512.clone(),
+        }
+    }
+}
 
 /// A checksum pinned in a URL's fragment, as lowercase hex.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,53 +100,48 @@ impl DirectSource {
             checksum: fragment.map(parse_checksum).transpose()?,
         })
     }
-}
 
-/// A finished direct download.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Downloaded {
-    /// Where the file was saved.
-    pub path: PathBuf,
-    /// Its SHA-512, as lowercase hex.
-    pub sha512: String,
-    /// Its size in bytes.
-    pub size: u64,
-}
-
-/// Downloads `source` into `dir` and verifies its pinned checksum, if it has one.
-///
-/// A file that fails verification is left in `dir`, which the caller owns and discards.
-///
-/// # Errors
-///
-/// Returns [`DirectError`] for a transfer failure, a file that cannot be written, or a
-/// checksum mismatch.
-pub fn download(
-    http: &dyn HttpClient,
-    source: &DirectSource,
-    dir: &Path,
-) -> Result<Downloaded, DirectError> {
-    let descriptor = ArtifactDescriptor {
-        url: source.url.clone(),
-        file_name: source.file_name.clone(),
-        limit: DOWNLOAD_LIMIT,
-        size: None,
-        sha256: match &source.checksum {
-            Some(Checksum::Sha256(digest)) => Some(digest.clone()),
-            Some(Checksum::Sha512(_)) | None => None,
-        },
-        sha512: match &source.checksum {
-            Some(Checksum::Sha512(digest)) => Some(digest.clone()),
-            Some(Checksum::Sha256(_)) | None => None,
-        },
-    };
-    let artifact = acquire(http, &descriptor, dir)?;
-
-    Ok(Downloaded {
-        path: artifact.path,
-        sha512: artifact.sha512,
-        size: artifact.size,
-    })
+    /// The file this source names, as a selection that needs no resolution.
+    pub fn selection(&self) -> Selection {
+        let package = PackageId {
+            provider: ID.to_owned(),
+            project: self.url.clone(),
+        };
+        let (sha256, sha512) = match &self.checksum {
+            Some(Checksum::Sha256(digest)) => (Some(digest.clone()), None),
+            Some(Checksum::Sha512(digest)) => (None, Some(digest.clone())),
+            None => (None, None),
+        };
+        let file = ReleaseFile {
+            url: self.url.clone(),
+            name: self.file_name.clone(),
+            size: None,
+            sha256,
+            sha512,
+            primary: true,
+        };
+        Selection {
+            // A URL carries no side metadata; the user who entered it vouches for it.
+            project: Project {
+                id: package.clone(),
+                slug: None,
+                title: self.file_name.clone(),
+                client: Availability::Optional,
+                server: Availability::Optional,
+            },
+            release: Release {
+                id: self.url.clone(),
+                project: package,
+                number: self.file_name.clone(),
+                channel: Channel::Unknown,
+                published: String::new(),
+                files: vec![file.clone()],
+                dependencies: Vec::new(),
+            },
+            file,
+            required_by: None,
+        }
+    }
 }
 
 /// Decodes `%XX` escapes. Returns `None` for a malformed escape or a result that is not UTF-8.
@@ -153,7 +176,7 @@ fn parse_checksum(fragment: &str) -> Result<Checksum, DirectError> {
     }
 }
 
-/// Why a direct download failed.
+/// Why a direct URL was refused before anything was fetched.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum DirectError {
@@ -170,71 +193,16 @@ pub enum DirectError {
         "{0:?} is not a checksum; pin one as #sha256=<64 hex digits> or #sha512=<128 hex digits>"
     )]
     InvalidChecksum(String),
-
-    /// The request failed.
-    #[error(transparent)]
-    Http(#[from] HttpError),
-
-    /// The download does not match its pinned checksum.
-    #[error("{file} failed {algorithm} verification: expected {expected}, got {actual}")]
-    ChecksumMismatch {
-        /// The file name.
-        file: String,
-        /// The checksum algorithm.
-        algorithm: &'static str,
-        /// The pinned checksum.
-        expected: String,
-        /// The checksum of what was downloaded.
-        actual: String,
-    },
-
-    /// The download could not be written.
-    #[error("cannot write {}: {source}", .path.display())]
-    Io {
-        /// The destination.
-        path: PathBuf,
-        /// The underlying error.
-        #[source]
-        source: io::Error,
-    },
-}
-
-impl From<AcquisitionError> for DirectError {
-    fn from(error: AcquisitionError) -> Self {
-        match error {
-            AcquisitionError::Transfer(error) => match error {
-                crate::artifact::ArtifactError::Http(error) => Self::Http(error),
-                crate::artifact::ArtifactError::Io { path, source } => Self::Io { path, source },
-            },
-            AcquisitionError::InsecureUrl(url) => Self::Insecure(url),
-            AcquisitionError::UnsafeFileName(_) => unreachable!("DirectSource validates names"),
-            AcquisitionError::SizeMismatch { .. } => unreachable!("direct URLs publish no size"),
-            AcquisitionError::HashMismatch {
-                file,
-                algorithm,
-                expected,
-                actual,
-            } => Self::ChecksumMismatch {
-                file,
-                algorithm,
-                expected,
-                actual,
-            },
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::io::Write;
 
+    use msbe_provider_api::{AcquisitionError, Adapter, AdapterError, HttpClient, HttpError, hex};
     use sha2::{Digest as _, Sha256, Sha512};
 
-    use super::{Checksum, DirectError, DirectSource, download};
-    use crate::{
-        hashing::hex,
-        http::{HttpClient, HttpError},
-    };
+    use super::{Checksum, Direct, DirectError, DirectSource};
 
     /// Serves the same bytes for every download.
     struct Serves(&'static [u8]);
@@ -328,31 +296,38 @@ mod tests {
             "https://cdn.example/extra.jar#sha256={}",
             hex(&Sha256::digest(b"payload"))
         );
+        let selection = DirectSource::parse(&good).unwrap().selection();
         let dir = tempfile::tempdir().unwrap();
-        let downloaded = download(
-            &Serves(b"payload"),
-            &DirectSource::parse(&good).unwrap(),
-            dir.path(),
-        )
-        .unwrap();
-        assert_eq!(std::fs::read(&downloaded.path).unwrap(), b"payload");
-        assert_eq!(downloaded.sha512, hex(&Sha512::digest(b"payload")));
-        assert_eq!(downloaded.size, 7);
+        let acquired = Direct
+            .acquire(&Serves(b"payload"), &selection.file, dir.path())
+            .unwrap();
+        assert_eq!(std::fs::read(&acquired.path).unwrap(), b"payload");
+        assert_eq!(acquired.size, 7);
+        let provenance = Direct.provenance(&selection.release, &acquired);
+        assert_eq!(provenance.sha512, hex(&Sha512::digest(b"payload")));
+        assert_eq!(provenance.version, provenance.sha512);
+        assert_eq!(
+            (
+                provenance.project.as_str(),
+                provenance.version_number.as_str()
+            ),
+            ("https://cdn.example/extra.jar", "extra.jar")
+        );
 
         let bad = format!("https://cdn.example/extra.jar#sha512={}", "0".repeat(128));
         let other = tempfile::tempdir().unwrap();
-        let result = download(
+        let result = Direct.acquire(
             &Serves(b"payload"),
-            &DirectSource::parse(&bad).unwrap(),
+            &DirectSource::parse(&bad).unwrap().selection().file,
             other.path(),
         );
         assert!(
             matches!(
                 result,
-                Err(DirectError::ChecksumMismatch {
+                Err(AdapterError::Acquisition(AcquisitionError::HashMismatch {
                     algorithm: "SHA-512",
                     ..
-                })
+                }))
             ),
             "{result:?}"
         );
