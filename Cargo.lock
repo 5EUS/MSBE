@@ -157,6 +157,11 @@ version = "0.0.0"
 [[package]]
 name = "msbe-plan-schema"
 version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+]
 
 [[package]]
 name = "msbe-providers"
