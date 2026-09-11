@@ -529,6 +529,114 @@ mod tests {
         ));
     }
 
+    /// A deterministic xorshift generator, so a failing case is reproducible.
+    struct Xorshift(u64);
+
+    impl Xorshift {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+
+        fn below(&mut self, bound: usize) -> usize {
+            usize::try_from(self.next() % u64::try_from(bound).unwrap()).unwrap()
+        }
+    }
+
+    /// Every truncation, every single-byte flip, and a thousand random multi-byte mutations of
+    /// small valid archives, stored and deflated. Ingest must never panic, and anything it
+    /// accepts must be within the limits and fully stored. A stable-toolchain complement to the
+    /// cargo-fuzz targets, which need nightly.
+    #[test]
+    fn mutated_archives_never_panic_and_nothing_accepted_breaks_a_limit() {
+        let fx = fixture();
+        let limits = Limits {
+            max_entries: 8,
+            max_file_bytes: 512,
+            max_total_bytes: 768,
+            max_ratio: 1_000,
+        };
+        let payload: Vec<u8> = (0..400_u32).map(|i| u8::try_from(i % 7).unwrap()).collect();
+        let entries: [(&str, &[u8]); 3] = [
+            ("mods/a.jar", payload.as_slice()),
+            ("config/b.toml", b"key = 1\n"),
+            ("nested/dir/c.bin", b"c"),
+        ];
+        let mut rng = Xorshift(0x9E37_79B9_7F4A_7C15);
+        let case = fx.inputs.join("case.zip");
+        let mut checked = 0_usize;
+
+        for method in [CompressionMethod::Stored, CompressionMethod::Deflated] {
+            let seed = fx.inputs.join("seed.zip");
+            write_zip(&seed, &entries, method);
+            let original = fs::read(&seed).unwrap();
+            let mut mutants: Vec<Vec<u8>> = (0..original.len())
+                .map(|len| original.get(..len).unwrap().to_vec())
+                .collect();
+            for offset in 0..original.len() {
+                let mut bytes = original.clone();
+                *bytes.get_mut(offset).unwrap() ^= 0xFF;
+                mutants.push(bytes);
+            }
+            for _ in 0..1_000 {
+                let mut bytes = original.clone();
+                for _ in 0..=rng.below(8) {
+                    let offset = rng.below(bytes.len());
+                    *bytes.get_mut(offset).unwrap() = rng.next().to_le_bytes()[0];
+                }
+                mutants.push(bytes);
+            }
+
+            for bytes in mutants {
+                fs::write(&case, &bytes).unwrap();
+                if let Ok(files) = ingest(&fx.store, &case, &limits) {
+                    assert!(files.len() <= limits.max_entries);
+                    let total: u64 = files.iter().map(|file| file.size).sum();
+                    assert!(total <= limits.max_total_bytes);
+                    for file in &files {
+                        assert!(file.size <= limits.max_file_bytes);
+                        fx.store.verify(&file.blob).unwrap();
+                    }
+                }
+                checked += 1;
+            }
+        }
+        assert!(checked > 2_000, "only {checked} cases ran");
+    }
+
+    #[test]
+    fn a_header_that_understates_a_size_cannot_smuggle_bytes_past_the_limit() {
+        let fx = fixture();
+        let archive = fx.inputs.join("liar.zip");
+        let data = vec![b'x'; 64 * 1024];
+        write_zip(&archive, &[("big.bin", &data)], CompressionMethod::Deflated);
+
+        // Claim 16 bytes in the local header (offset 22) and the central directory (offset 24).
+        let mut bytes = fs::read(&archive).unwrap();
+        for (signature, offset) in [(0x0403_4b50_u32, 22), (0x0201_4b50_u32, 24)] {
+            let start = bytes
+                .windows(4)
+                .position(|window| window == signature.to_le_bytes())
+                .unwrap()
+                + offset;
+            bytes
+                .get_mut(start..start + 4)
+                .unwrap()
+                .copy_from_slice(&16_u32.to_le_bytes());
+        }
+        fs::write(&archive, &bytes).unwrap();
+
+        let limits = Limits {
+            max_file_bytes: 1024,
+            ..Limits::default()
+        };
+        let result = ingest(&fx.store, &archive, &limits);
+        assert!(result.is_err(), "{result:?}");
+        assert!(!fx.store.contains(&Digest::of_bytes(&data)));
+    }
+
     #[test]
     fn too_many_entries_are_refused_before_any_are_read() {
         let fx = fixture();

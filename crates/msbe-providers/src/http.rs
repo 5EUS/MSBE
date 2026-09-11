@@ -17,6 +17,14 @@ pub trait HttpClient {
     /// a body larger than `limit`.
     fn get(&self, url: &str, query: &[(&str, &str)], limit: u64) -> Result<Vec<u8>, HttpError>;
 
+    /// Sends `body` to `url` as a JSON `POST` and returns at most `limit` bytes of response
+    /// body. Used for queries too large for a URL, such as looking up many hashes at once.
+    ///
+    /// # Errors
+    ///
+    /// As for [`HttpClient::get`].
+    fn post_json(&self, url: &str, body: &[u8], limit: u64) -> Result<Vec<u8>, HttpError>;
+
     /// Streams the body of `url` into `sink` and returns the number of bytes written.
     ///
     /// # Errors

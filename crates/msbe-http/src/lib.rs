@@ -84,51 +84,29 @@ impl UreqClient {
             agent: Agent::new_with_config(config),
         })
     }
-
-    fn send(&self, url: &str, query: &[(&str, &str)]) -> Result<Response<Body>, HttpError> {
-        let response = self
-            .agent
-            .get(url)
-            .query_pairs(query.iter().copied())
-            .call()
-            .map_err(|error| transport(url, &error))?;
-        let status = response.status();
-        if status == StatusCode::TOO_MANY_REQUESTS {
-            let retry_after = header_seconds(&response, "retry-after")
-                .or_else(|| header_seconds(&response, "x-ratelimit-reset"));
-            return Err(HttpError::RateLimited {
-                url: url.to_owned(),
-                retry_after,
-            });
-        }
-        if !status.is_success() {
-            return Err(HttpError::Status {
-                url: url.to_owned(),
-                status: status.as_u16(),
-            });
-        }
-        Ok(response)
-    }
 }
 
 impl HttpClient for UreqClient {
     fn get(&self, url: &str, query: &[(&str, &str)], limit: u64) -> Result<Vec<u8>, HttpError> {
-        let body = self
-            .send(url, query)?
-            .into_body()
-            .into_with_config()
-            .limit(reader_limit(limit))
-            .read_to_vec()
-            .map_err(|error| transport(url, &error))?;
-        if body.len() as u64 > limit {
-            return Err(too_large(url, limit));
-        }
-        Ok(body)
+        let sent = self
+            .agent
+            .get(url)
+            .query_pairs(query.iter().copied())
+            .call();
+        read_limited(url, checked(url, sent)?, limit)
+    }
+
+    fn post_json(&self, url: &str, body: &[u8], limit: u64) -> Result<Vec<u8>, HttpError> {
+        let sent = self
+            .agent
+            .post(url)
+            .content_type("application/json")
+            .send(body);
+        read_limited(url, checked(url, sent)?, limit)
     }
 
     fn download(&self, url: &str, sink: &mut dyn Write, limit: u64) -> Result<u64, HttpError> {
-        let mut reader = self
-            .send(url, &[])?
+        let mut reader = checked(url, self.agent.get(url).call())?
             .into_body()
             .into_with_config()
             .limit(reader_limit(limit))
@@ -147,6 +125,43 @@ impl HttpClient for UreqClient {
 /// bodies, and enforce "at most `limit` bytes" here, where the rule is ours.
 const fn reader_limit(limit: u64) -> u64 {
     limit.saturating_add(1)
+}
+
+/// Maps a transport failure, rate limiting, or a non-success status to an [`HttpError`].
+fn checked(
+    url: &str,
+    sent: Result<Response<Body>, ureq::Error>,
+) -> Result<Response<Body>, HttpError> {
+    let response = sent.map_err(|error| transport(url, &error))?;
+    let status = response.status();
+    if status == StatusCode::TOO_MANY_REQUESTS {
+        let retry_after = header_seconds(&response, "retry-after")
+            .or_else(|| header_seconds(&response, "x-ratelimit-reset"));
+        return Err(HttpError::RateLimited {
+            url: url.to_owned(),
+            retry_after,
+        });
+    }
+    if !status.is_success() {
+        return Err(HttpError::Status {
+            url: url.to_owned(),
+            status: status.as_u16(),
+        });
+    }
+    Ok(response)
+}
+
+fn read_limited(url: &str, response: Response<Body>, limit: u64) -> Result<Vec<u8>, HttpError> {
+    let body = response
+        .into_body()
+        .into_with_config()
+        .limit(reader_limit(limit))
+        .read_to_vec()
+        .map_err(|error| transport(url, &error))?;
+    if body.len() as u64 > limit {
+        return Err(too_large(url, limit));
+    }
+    Ok(body)
 }
 
 fn too_large(url: &str, limit: u64) -> HttpError {
@@ -181,7 +196,7 @@ fn transport(url: &str, error: &ureq::Error) -> HttpError {
 #[cfg(test)]
 mod tests {
     use std::{
-        io::{BufRead, BufReader, Write},
+        io::{BufRead, BufReader, Read, Write},
         net::TcpListener,
         thread,
     };
@@ -191,27 +206,56 @@ mod tests {
     use super::{USER_AGENT, UreqClient};
 
     /// Serves one canned HTTP response on a loopback port. Returns the URL and a handle that
-    /// yields the request head the server received.
+    /// yields the request the server received: its head, then its body.
     fn serve_once(response: &'static str) -> (String, thread::JoinHandle<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}/path", listener.local_addr().unwrap());
         let handle = thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
-            let mut head = String::new();
+            let mut request = String::new();
+            let mut length = 0;
             loop {
                 let mut line = String::new();
                 reader.read_line(&mut line).unwrap();
                 if line.is_empty() || line == "\r\n" {
                     break;
                 }
-                head.push_str(&line);
+                if let Some((name, value)) = line.split_once(':')
+                    && name.eq_ignore_ascii_case("content-length")
+                {
+                    length = value.trim().parse().unwrap();
+                }
+                request.push_str(&line);
             }
+            let mut body = vec![0; length];
+            reader.read_exact(&mut body).unwrap();
+            request.push_str(&String::from_utf8(body).unwrap());
             // The client may hang up early, for example after a size limit trips.
             drop(stream.write_all(response.as_bytes()));
-            head
+            request
         });
         (url, handle)
+    }
+
+    #[test]
+    fn a_json_post_sends_its_body_and_content_type() {
+        let (url, server) =
+            serve_once("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
+        let client = UreqClient::connect().unwrap();
+        assert_eq!(
+            client.post_json(&url, br#"{"hashes":[]}"#, 64).unwrap(),
+            b"{}"
+        );
+
+        let request = server.join().unwrap();
+        let lowered = request.to_ascii_lowercase();
+        assert!(lowered.starts_with("post /path "), "{request}");
+        assert!(
+            lowered.contains("content-type: application/json"),
+            "{request}"
+        );
+        assert!(request.ends_with(r#"{"hashes":[]}"#), "{request}");
     }
 
     #[test]

@@ -5,7 +5,7 @@
 //! Its API requires a uniquely identifying `User-Agent`, which `msbe-http` sets.
 
 use std::{
-    collections::{BTreeSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     fmt::{self, Write as _},
     fs::File,
     io::{self, Write},
@@ -234,6 +234,52 @@ pub struct InstallPlan {
     pub incompatible: Vec<Requirement>,
 }
 
+/// A version that should replace an installed one, and the file to install from it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Update {
+    /// The installed version.
+    pub installed: Version,
+    /// The version to move to.
+    pub version: Version,
+    /// The file to install from it.
+    pub file: VersionFile,
+}
+
+/// What updating one installed file would do.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpdateCheck {
+    /// Modrinth does not list the file, so there is nothing to compare it with.
+    Unlisted,
+    /// The installed version is the newest compatible one on its channel.
+    Current(Box<Version>),
+    /// The installed version does not support the target, and nothing on its channel does.
+    Incompatible(Box<Version>),
+    /// Another version should replace the installed one.
+    Available(Box<Update>),
+}
+
+/// The projects a version requires, and the ones it declares incompatible.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
+pub struct Relationships {
+    /// Projects that must be installed too.
+    pub required: Vec<Requirement>,
+    /// Projects that must not be installed alongside.
+    pub incompatible: Vec<Requirement>,
+}
+
+/// The body of Modrinth's bulk lookups by file hash.
+#[derive(Serialize)]
+struct HashQuery<'q> {
+    hashes: &'q [&'q str],
+    algorithm: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    loaders: Option<&'q [String]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    game_versions: Option<[&'q str; 1]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version_types: Option<&'q [&'q str]>,
+}
+
 /// A Modrinth API client over any [`HttpClient`].
 pub struct Modrinth<'a> {
     http: &'a dyn HttpClient,
@@ -392,10 +438,8 @@ impl<'a> Modrinth<'a> {
                 ) {
                     continue;
                 }
-                let project_id = match (&dependency.project_id, &dependency.version_id) {
-                    (Some(id), _) => id.clone(),
-                    (None, Some(version)) => self.version(version)?.project_id,
-                    (None, None) => continue,
+                let Some(project_id) = self.dependency_project(dependency)? else {
+                    continue;
                 };
                 let requirement = Requirement {
                     project_id,
@@ -471,6 +515,118 @@ impl<'a> Modrinth<'a> {
         Ok(path)
     }
 
+    /// Checks installed files, identified by the SHA-512 Modrinth published for them, for
+    /// versions to replace them with. The result is keyed by lowercase hash.
+    ///
+    /// A file stays on its release channel or moves to a more stable one: a release is only
+    /// replaced by a release, and a beta by a beta or a release. A replacement is always newer
+    /// than the installed version, unless the installed version does not support `target`; then
+    /// the newest compatible version on its channel is offered, even if it is older.
+    ///
+    /// Costs one request for the installed versions and one per channel in use, however many
+    /// files are checked.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModrinthError`] for a request or decoding failure, or a replacement without
+    /// files.
+    pub fn check_updates(
+        &self,
+        sha512s: &[String],
+        target: &Target,
+    ) -> Result<BTreeMap<String, UpdateCheck>, ModrinthError> {
+        let hashes: BTreeSet<String> = sha512s
+            .iter()
+            .map(|hash| hash.to_ascii_lowercase())
+            .collect();
+        if hashes.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        let all: Vec<&str> = hashes.iter().map(String::as_str).collect();
+        let installed: BTreeMap<String, Version> = lowercase_keys(self.post_json(
+            "/version_files",
+            &HashQuery {
+                hashes: &all,
+                algorithm: "sha512",
+                loaders: None,
+                game_versions: None,
+                version_types: None,
+            },
+        )?);
+
+        let mut channels: BTreeMap<&'static [&'static str], Vec<&str>> = BTreeMap::new();
+        for (hash, version) in &installed {
+            channels
+                .entry(channel(version.version_type))
+                .or_default()
+                .push(hash);
+        }
+        let mut latest = BTreeMap::new();
+        for (version_types, group) in channels {
+            let found: BTreeMap<String, Version> = self.post_json(
+                "/version_files/update",
+                &HashQuery {
+                    hashes: &group,
+                    algorithm: "sha512",
+                    loaders: Some(&target.loaders),
+                    game_versions: Some([target.game_version.as_str()]),
+                    version_types: Some(version_types),
+                },
+            )?;
+            latest.extend(lowercase_keys(found));
+        }
+
+        hashes
+            .into_iter()
+            .map(|hash| {
+                let check = match installed.get(&hash) {
+                    Some(version) => decide(version, latest.get(&hash), target)?,
+                    None => UpdateCheck::Unlisted,
+                };
+                Ok((hash, check))
+            })
+            .collect()
+    }
+
+    /// The projects `version` requires and the ones it declares incompatible, attributed to
+    /// `declared_by`. A dependency that names only a version is looked up to find its project.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModrinthError`] if such a lookup fails.
+    pub fn relationships(
+        &self,
+        version: &Version,
+        declared_by: &str,
+    ) -> Result<Relationships, ModrinthError> {
+        let mut found = Relationships::default();
+        for dependency in &version.dependencies {
+            let list = match dependency.dependency_type {
+                DependencyType::Required => &mut found.required,
+                DependencyType::Incompatible => &mut found.incompatible,
+                DependencyType::Optional | DependencyType::Embedded | DependencyType::Unknown => {
+                    continue;
+                }
+            };
+            if let Some(project_id) = self.dependency_project(dependency)? {
+                list.push(Requirement {
+                    project_id,
+                    declared_by: declared_by.to_owned(),
+                });
+            }
+        }
+        Ok(found)
+    }
+
+    /// The project a dependency refers to, looking it up when only a version is named.
+    fn dependency_project(&self, dependency: &Dependency) -> Result<Option<String>, ModrinthError> {
+        Ok(match (&dependency.project_id, &dependency.version_id) {
+            (Some(id), _) => Some(id.clone()),
+            (None, Some(version)) => Some(self.version(version)?.project_id),
+            (None, None) => None,
+        })
+    }
+
     fn get_json<T: DeserializeOwned>(
         &self,
         path: &str,
@@ -478,11 +634,27 @@ impl<'a> Modrinth<'a> {
     ) -> Result<T, ModrinthError> {
         let url = format!("{}{path}", self.base);
         let body = self.http.get(&url, query, METADATA_LIMIT)?;
-        serde_json::from_slice(&body).map_err(|error| ModrinthError::Decode {
-            url,
-            reason: error.to_string(),
-        })
+        decode(url, &body)
     }
+
+    fn post_json<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        request: &impl Serialize,
+    ) -> Result<T, ModrinthError> {
+        let url = format!("{}{path}", self.base);
+        // Serializing these request types cannot fail.
+        let request = serde_json::to_vec(request).unwrap_or_default();
+        let body = self.http.post_json(&url, &request, METADATA_LIMIT)?;
+        decode(url, &body)
+    }
+}
+
+fn decode<T: DeserializeOwned>(url: String, body: &[u8]) -> Result<T, ModrinthError> {
+    serde_json::from_slice(body).map_err(|error| ModrinthError::Decode {
+        url,
+        reason: error.to_string(),
+    })
 }
 
 /// Why a Modrinth operation failed.
@@ -631,6 +803,52 @@ fn primary_file(version: &Version) -> Result<&VersionFile, ModrinthError> {
         })
 }
 
+/// The version types a file installed from `installed` may move to: its own, or more stable.
+const fn channel(installed: VersionType) -> &'static [&'static str] {
+    match installed {
+        VersionType::Release => &["release"],
+        VersionType::Beta => &["release", "beta"],
+        VersionType::Alpha | VersionType::Unknown => &["release", "beta", "alpha"],
+    }
+}
+
+fn supports(version: &Version, target: &Target) -> bool {
+    version.game_versions.contains(&target.game_version)
+        && version
+            .loaders
+            .iter()
+            .any(|loader| target.loaders.contains(loader))
+}
+
+/// Whether `latest`, the newest version on the installed version's channel, should replace it.
+fn decide(
+    installed: &Version,
+    latest: Option<&Version>,
+    target: &Target,
+) -> Result<UpdateCheck, ModrinthError> {
+    let fits = supports(installed, target);
+    let replacement = latest.filter(|candidate| {
+        candidate.id != installed.id
+            && supports(candidate, target)
+            && (!fits || candidate.date_published > installed.date_published)
+    });
+    Ok(match replacement {
+        Some(version) => UpdateCheck::Available(Box::new(Update {
+            installed: installed.clone(),
+            file: primary_file(version)?.clone(),
+            version: version.clone(),
+        })),
+        None if fits => UpdateCheck::Current(Box::new(installed.clone())),
+        None => UpdateCheck::Incompatible(Box::new(installed.clone())),
+    })
+}
+
+fn lowercase_keys<V>(map: BTreeMap<String, V>) -> BTreeMap<String, V> {
+    map.into_iter()
+        .map(|(key, value)| (key.to_ascii_lowercase(), value))
+        .collect()
+}
+
 fn hex(bytes: &[u8]) -> String {
     bytes
         .iter()
@@ -648,7 +866,9 @@ mod tests {
     use serde_json::{Value, json};
     use sha2::{Digest as _, Sha512};
 
-    use super::{Modrinth, ModrinthError, Spec, Target, VersionType, hex};
+    use super::{
+        Modrinth, ModrinthError, Requirement, Spec, Target, UpdateCheck, Version, VersionType, hex,
+    };
     use crate::http::{HttpClient, HttpError};
 
     const BASE: &str = "https://api.modrinth.com/v2";
@@ -664,6 +884,23 @@ mod tests {
         fn route(&mut self, path: &str, body: Value) {
             self.json.insert(format!("{BASE}{path}"), body);
         }
+
+        /// Answers a POST to `path` that asks for `version_types` (comma-separated, or empty
+        /// when the request names none).
+        fn route_post(&mut self, path: &str, version_types: &str, body: Value) {
+            self.json
+                .insert(format!("{BASE}{path}#{version_types}"), body);
+        }
+
+        fn answer(&self, key: &str, url: &str) -> Result<Vec<u8>, HttpError> {
+            self.json
+                .get(key)
+                .map(|body| serde_json::to_vec(body).unwrap())
+                .ok_or_else(|| HttpError::Status {
+                    url: url.to_owned(),
+                    status: 404,
+                })
+        }
     }
 
     impl HttpClient for FakeHttp {
@@ -677,13 +914,26 @@ mod tests {
             self.requests
                 .borrow_mut()
                 .push(format!("{url}?{}", rendered.join("&")));
-            self.json
-                .get(url)
-                .map(|body| serde_json::to_vec(body).unwrap())
-                .ok_or_else(|| HttpError::Status {
-                    url: url.to_owned(),
-                    status: 404,
+            self.answer(url, url)
+        }
+
+        fn post_json(&self, url: &str, body: &[u8], _limit: u64) -> Result<Vec<u8>, HttpError> {
+            let request: Value = serde_json::from_slice(body).unwrap();
+            let version_types = request
+                .get("version_types")
+                .and_then(Value::as_array)
+                .map(|types| {
+                    types
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(",")
                 })
+                .unwrap_or_default();
+            self.requests
+                .borrow_mut()
+                .push(format!("POST {url} {request}"));
+            self.answer(&format!("{url}#{version_types}"), url)
         }
 
         fn download(&self, url: &str, sink: &mut dyn Write, limit: u64) -> Result<u64, HttpError> {
@@ -929,6 +1179,122 @@ mod tests {
             Modrinth::new(&http).download(&escaping, bad.path()),
             Err(ModrinthError::UnsafeFileName(_))
         ));
+    }
+
+    #[test]
+    fn updates_stay_on_their_channel_and_only_go_back_to_regain_compatibility() {
+        let hash = |c: char| c.to_string().repeat(128);
+        let dated = |id: &str, kind: &str, date: &str, game_version: &str| {
+            let mut entry = version(id, "P", id, kind, date, &format!("{id}.jar"));
+            entry
+                .as_object_mut()
+                .unwrap()
+                .insert("game_versions".to_owned(), json!([game_version]));
+            entry
+        };
+        let mut http = FakeHttp::default();
+        http.route_post(
+            "/version_files",
+            "",
+            json!({
+                hash('a'): dated("R1", "release", "2026-07-01T00:00:00Z", "1.21.1"),
+                hash('b'): dated("B1", "beta", "2026-08-10T00:00:00Z", "1.21.1"),
+                hash('c'): dated("O1", "release", "2026-09-01T00:00:00Z", "1.20.1"),
+                hash('d'): dated("G1", "release", "2026-09-01T00:00:00Z", "1.20.1"),
+            }),
+        );
+        http.route_post(
+            "/version_files/update",
+            "release",
+            json!({
+                // Newer on the release channel: an update.
+                hash('a'): dated("R2", "release", "2026-08-01T00:00:00Z", "1.21.1"),
+                // Older, but the installed version does not support 1.21.1: still offered.
+                hash('c'): dated("O2", "release", "2026-01-01T00:00:00Z", "1.21.1"),
+            }),
+        );
+        http.route_post(
+            "/version_files/update",
+            "release,beta",
+            // Older than the installed beta, so not a downgrade target.
+            json!({ hash('b'): dated("R3", "release", "2026-08-01T00:00:00Z", "1.21.1") }),
+        );
+
+        let checks = Modrinth::new(&http)
+            .check_updates(
+                &[hash('A'), hash('b'), hash('c'), hash('d'), hash('e')],
+                &target(),
+            )
+            .unwrap();
+        let available = |key: char| match checks.get(&hash(key)) {
+            Some(UpdateCheck::Available(update)) => Some(update.version.id.as_str()),
+            _ => None,
+        };
+        assert_eq!(available('a'), Some("R2"));
+        assert!(
+            matches!(checks.get(&hash('b')), Some(UpdateCheck::Current(installed)) if installed.id == "B1")
+        );
+        assert_eq!(available('c'), Some("O2"));
+        assert!(matches!(
+            checks.get(&hash('d')),
+            Some(UpdateCheck::Incompatible(_))
+        ));
+        assert_eq!(checks.get(&hash('e')), Some(&UpdateCheck::Unlisted));
+
+        let requests = http.requests.borrow();
+        assert_eq!(requests.len(), 3, "{requests:?}");
+        assert!(
+            requests.iter().any(|request| {
+                request.contains(r#""version_types":["release","beta"]"#)
+                    && request.contains(r#""loaders":["fabric"]"#)
+                    && request.contains(r#""game_versions":["1.21.1"]"#)
+                    && request.contains(r#""algorithm":"sha512""#)
+            }),
+            "{requests:?}"
+        );
+    }
+
+    #[test]
+    fn relationships_resolve_dependencies_that_name_only_a_version() {
+        fn ids(list: &[Requirement]) -> Vec<&str> {
+            list.iter()
+                .map(|requirement| requirement.project_id.as_str())
+                .collect()
+        }
+
+        let mut http = FakeHttp::default();
+        http.route(
+            "/version/V9",
+            version(
+                "V9",
+                "QQQ",
+                "2.0",
+                "release",
+                "2026-01-01T00:00:00Z",
+                "q.jar",
+            ),
+        );
+        let mut iris: Version = serde_json::from_value(version(
+            "I1",
+            "YL57xq9U",
+            "1.8.0",
+            "release",
+            "2026-08-01T00:00:00Z",
+            "iris.jar",
+        ))
+        .unwrap();
+        iris.dependencies = serde_json::from_value(json!([
+            { "project_id": "AANobbMI", "dependency_type": "required" },
+            { "version_id": "V9", "dependency_type": "required" },
+            { "project_id": "XXX", "dependency_type": "incompatible" },
+            { "project_id": "YYY", "dependency_type": "optional" }
+        ]))
+        .unwrap();
+
+        let found = Modrinth::new(&http).relationships(&iris, "iris").unwrap();
+        assert_eq!(ids(&found.required), ["AANobbMI", "QQQ"]);
+        assert_eq!(ids(&found.incompatible), ["XXX"]);
+        assert!(found.required.iter().all(|r| r.declared_by == "iris"));
     }
 
     #[test]

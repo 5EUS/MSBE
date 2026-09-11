@@ -10,7 +10,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use crate::error::{Error, Result};
+use crate::error::{Error, IoResultExt, Result};
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -48,6 +48,18 @@ pub(crate) fn remove_file_if_exists(path: &Path) -> Result<bool> {
             source,
         }),
     }
+}
+
+/// Marks a file read-only: every write bit cleared on Unix, the read-only attribute on Windows.
+pub(crate) fn make_read_only(path: &Path) -> Result<()> {
+    let mut permissions = fs::metadata(path).at("stat", path)?.permissions();
+    permissions.set_readonly(true);
+    fs::set_permissions(path, permissions).at("set permissions", path)
+}
+
+/// Whether `path` is a regular file marked read-only. Anything unreadable counts as not.
+pub(crate) fn is_read_only_file(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file() && meta.permissions().readonly())
 }
 
 /// Removes a directory if it is empty. A missing or non-empty directory is left alone:

@@ -128,8 +128,8 @@ impl Applier {
     ///
     /// # Errors
     ///
-    /// Invalid operations (a missing blob, a directory in the way, a path that escapes the
-    /// root) are rejected before anything is journaled. Any later failure leaves the
+    /// Invalid operations (a missing or corrupt blob, a directory in the way, a path that
+    /// escapes the root) are rejected before anything is journaled. Any later failure leaves the
     /// transaction open, exactly as a crash would, for [`Applier::recover`] to undo.
     /// [`Error::RecoveryRequired`] means an earlier transaction is still open.
     pub fn apply(
@@ -231,15 +231,26 @@ impl Applier {
                         path: path.to_path(&self.root),
                     });
                 }
-                Operation::Materialize { blob, .. } if !self.store.contains(blob) => {
-                    return Err(Error::MissingBlob(*blob));
-                }
                 Operation::Materialize { .. } | Operation::Remove { .. } => {
                     planned.push(operation.clone());
                 }
             }
         }
+        self.verify_blobs(&planned)?;
         Ok(planned)
+    }
+
+    /// Re-hashes every distinct blob about to be placed. A blob damaged by an in-place write
+    /// through a hardlink must not spread into more files.
+    fn verify_blobs(&self, operations: &[Operation]) -> Result<()> {
+        let blobs: BTreeSet<Digest> = operations
+            .iter()
+            .filter_map(|operation| match operation {
+                Operation::Materialize { blob, .. } => Some(*blob),
+                Operation::CreateDir { .. } | Operation::Remove { .. } => None,
+            })
+            .collect();
+        blobs.iter().try_for_each(|blob| self.store.verify(blob))
     }
 
     /// Journals, then performs, one operation.
@@ -276,7 +287,7 @@ impl Applier {
                 let staged = sys::sibling(&target, &staging_tag(txn, index));
                 let used = materialize::stage(&self.store.blob_path(blob), &staged, wanted)?;
                 observer.checkpoint(Checkpoint::Staged { index })?;
-                atomic::rename_replace(&staged, &target)?;
+                atomic::rename_displacing(&staged, &target)?;
                 Some(used)
             }
             Operation::Remove { .. } => {
@@ -318,14 +329,23 @@ impl Applier {
             (Prior::File { .. }, Kind::Dir) => Err(Error::IsDirectory {
                 path: target.to_path_buf(),
             }),
-            (Prior::File { digest, executable }, current) => {
-                // Untouched original: identical bytes and mode, and not a read-only store
-                // blob, which would leave the instance sharing an inode with the store.
-                let untouched = current
-                    == Kind::File {
-                        executable: *executable,
-                        read_only: false,
-                    };
+            (
+                Prior::File {
+                    digest,
+                    executable,
+                    read_only,
+                },
+                current,
+            ) => {
+                // Untouched original: identical bytes and mode. A read-only file could be a
+                // store blob linked into place, which would leave the instance sharing an
+                // inode with the store, so one is always copied back.
+                let untouched = !*read_only
+                    && current
+                        == Kind::File {
+                            executable: *executable,
+                            read_only: false,
+                        };
                 if untouched && hash_file(target)? == *digest {
                     return Ok(());
                 }
@@ -335,7 +355,10 @@ impl Applier {
                 if *executable {
                     make_executable(&staged)?;
                 }
-                atomic::rename_replace(&staged, target)
+                if *read_only {
+                    sys::make_read_only(&staged)?;
+                }
+                atomic::rename_displacing(&staged, target)
             }
         }
     }
@@ -345,9 +368,13 @@ impl Applier {
         Ok(match stat(target)? {
             Kind::Absent => Prior::Absent,
             Kind::Dir => Prior::Dir,
-            Kind::File { executable, .. } => Prior::File {
+            Kind::File {
+                executable,
+                read_only,
+            } => Prior::File {
                 digest: self.store.put_file(target)?,
                 executable,
+                read_only,
             },
         })
     }
@@ -532,6 +559,76 @@ mod tests {
 
         applier.rollback(report.txn).unwrap();
         assert_eq!(snapshot(&fixture.root), original);
+    }
+
+    /// On Windows a hardlink shares the read-only attribute of its store blob, and replacing a
+    /// read-only file is refused, so this is the path that breaks there if anything does.
+    #[test]
+    fn read_only_files_and_linked_blobs_are_replaced_and_restored_exactly() {
+        let fixture = Fixture::new();
+        let original = snapshot(&fixture.root);
+        let mut applier = fixture.applier();
+        let first = applier.store().put_bytes(b"first").unwrap();
+        let second = applier.store().put_bytes(b"second").unwrap();
+        let deploy = |blob| {
+            [
+                place("data/packs/locked.pak", blob, false),
+                place("mods/linked.pak", blob, false),
+            ]
+        };
+
+        let one = applier.apply(&deploy(first), &mut NoopObserver).unwrap();
+        let two = applier.apply(&deploy(second), &mut NoopObserver).unwrap();
+        assert_eq!(
+            fs::read(fixture.root.join("mods/linked.pak")).unwrap(),
+            b"second"
+        );
+
+        applier.rollback(two.txn).unwrap();
+        assert_eq!(
+            fs::read(fixture.root.join("data/packs/locked.pak")).unwrap(),
+            b"first"
+        );
+        applier.rollback(one.txn).unwrap();
+        assert_eq!(snapshot(&fixture.root), original);
+        for blob in [first, second] {
+            applier.store().verify(&blob).unwrap();
+            let meta = fs::metadata(applier.store().blob_path(&blob)).unwrap();
+            assert!(
+                meta.permissions().readonly(),
+                "a store blob became writable"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_corrupt_blob_is_refused_until_its_content_is_added_again() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let fixture = Fixture::new();
+        let mut applier = fixture.applier();
+        let blob = applier.store().put_bytes(b"pristine").unwrap();
+        let path = applier.store().blob_path(&blob);
+        // What a game writing in place through a hardlink does to the shared blob.
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        fs::write(&path, b"tampered").unwrap();
+
+        let operations = [place("mods/module.pak", blob, false)];
+        let error = applier.apply(&operations, &mut NoopObserver).unwrap_err();
+        assert!(
+            matches!(error, Error::Corrupt { expected, .. } if expected == blob),
+            "{error:?}"
+        );
+        assert!(applier.journal().records().is_empty());
+        assert!(!fixture.root.join("mods").exists());
+
+        applier.store().put_bytes(b"pristine").unwrap();
+        applier.apply(&operations, &mut NoopObserver).unwrap();
+        assert_eq!(
+            fs::read(fixture.root.join("mods/module.pak")).unwrap(),
+            b"pristine"
+        );
     }
 
     #[test]

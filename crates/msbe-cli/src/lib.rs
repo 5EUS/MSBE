@@ -4,6 +4,7 @@
 //! stderr, so piped output stays clean. See `docs/09-interfaces.md`.
 
 use std::{
+    collections::BTreeSet,
     ffi::OsString,
     io::{self, Write},
     path::PathBuf,
@@ -21,7 +22,10 @@ use msbe_core::{
 use msbe_fsops::{Backend, NoopObserver, Operation};
 use msbe_providers::{
     HttpClient, HttpError,
-    modrinth::{Modrinth, ModrinthError, Requirement, Spec, Target},
+    modrinth::{
+        Modrinth, ModrinthError, Requirement, Spec, Target, Update, UpdateCheck, Version,
+        VersionFile,
+    },
 };
 use serde::Serialize;
 
@@ -104,6 +108,20 @@ enum Command {
         /// The most results to show.
         #[arg(long, default_value_t = 10)]
         limit: u8,
+    },
+    /// Move Modrinth mods to newer compatible versions, keeping each on its release channel.
+    Update {
+        /// The instance.
+        instance: String,
+        /// Mods to update. Defaults to every Modrinth mod in the profile.
+        #[arg(value_name = "MOD")]
+        modules: Vec<String>,
+        /// The profile to update.
+        #[arg(long, short, default_value = DEFAULT_PROFILE)]
+        profile: String,
+        /// Show what would change without downloading or changing anything.
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Remove a mod from a profile.
     Remove {
@@ -273,6 +291,31 @@ struct AddReport {
     incompatible: Vec<Requirement>,
 }
 
+#[derive(Serialize)]
+struct ModUpdate {
+    module: Name,
+    from: String,
+    to: String,
+}
+
+#[derive(Default, Serialize)]
+struct UpdateReport {
+    dry_run: bool,
+    updated: Vec<ModUpdate>,
+    current: Vec<Name>,
+    no_compatible_version: Vec<Name>,
+    unlisted: Vec<Name>,
+    not_from_modrinth: Vec<Name>,
+    unresolved: Vec<Requirement>,
+    incompatible: Vec<Requirement>,
+}
+
+/// A mod in a profile and the Modrinth provenance recorded for it.
+type Tracked<'p> = (&'p Name, &'p Provenance);
+
+/// A mod in a profile and the update chosen for it.
+type Pending<'p> = (&'p Name, Update);
+
 /// Runs the CLI with `args`, which include the program name, and returns the exit code.
 pub fn run<I, T>(args: I, out: &mut dyn Write, err: &mut dyn Write) -> u8
 where
@@ -338,6 +381,12 @@ fn execute(cli: &Cli, console: &mut Console<'_>) -> Result<u8, CliError> {
             query,
             limit,
         } => search(&home, instance, query, *limit, console),
+        Command::Update {
+            instance,
+            modules,
+            profile,
+            dry_run,
+        } => update(&home, instance, profile, modules, *dry_run, console),
         Command::Remove {
             instance,
             module,
@@ -530,13 +579,7 @@ fn add(
             artifacts.push(Artifact {
                 path,
                 module: Some(Name::sanitize(&selection.project.slug)?),
-                provider: Some(Provenance {
-                    provider: MODRINTH.to_owned(),
-                    project: selection.project.id.clone(),
-                    version: selection.version.id.clone(),
-                    version_number: selection.version.version_number.clone(),
-                    sha512: selection.file.hashes.sha512.clone(),
-                }),
+                provider: Some(provenance(&selection.version, &selection.file)),
             });
         }
         report.unresolved = plan.unresolved;
@@ -559,23 +602,160 @@ fn add(
         if !report.skipped.is_empty() {
             writeln!(out, "Already in the profile: {}", join(&report.skipped))?;
         }
-        for missing in &report.unresolved {
-            writeln!(
-                out,
-                "{} requires Modrinth project {}; add it too, or rerun with --with-deps.",
-                missing.declared_by, missing.project_id
-            )?;
-        }
-        for clash in &report.incompatible {
-            writeln!(
-                out,
-                "Warning: {} declares Modrinth project {} incompatible, and both were selected.",
-                clash.declared_by, clash.project_id
-            )?;
-        }
-        Ok(())
+        print_requirements(
+            out,
+            &report.unresolved,
+            &report.incompatible,
+            "add it too, or rerun with --with-deps",
+        )
     })?;
     Ok(exit::OK)
+}
+
+fn update(
+    home: &Home,
+    instance: &str,
+    profile: &str,
+    modules: &[String],
+    dry_run: bool,
+    console: &mut Console<'_>,
+) -> Result<u8, CliError> {
+    let opened = open(home, instance, console)?;
+    let profile = Name::new(profile)?;
+    let selection = opened.profile(&profile)?;
+    let mut report = UpdateReport {
+        dry_run,
+        ..UpdateReport::default()
+    };
+    let tracked = tracked_mods(&selection, &profile, modules, &mut report)?;
+    if !tracked.is_empty() {
+        let target = target(&opened)?;
+        let client = (console.connect)()?;
+        let modrinth = Modrinth::new(client.as_ref());
+        let updates = find_updates(&modrinth, &tracked, &target, &mut report)?;
+        report_relationships(&modrinth, &selection, &updates, &mut report)?;
+        if !dry_run && !updates.is_empty() {
+            // Downloads must outlive the ingest below.
+            let scratch = tempfile::tempdir_in(opened.scratch_dir()).map_err(CliError::Scratch)?;
+            let mut artifacts = Vec::with_capacity(updates.len());
+            for (module, update) in &updates {
+                artifacts.push(Artifact {
+                    path: modrinth.download(&update.file, scratch.path())?,
+                    module: Some((*module).clone()),
+                    provider: Some(provenance(&update.version, &update.file)),
+                });
+            }
+            opened.replace_artifacts(&profile, &artifacts)?;
+        }
+    }
+    console.emit(&report, |out, report| {
+        print_update(out, report, opened.name(), &profile)
+    })?;
+    Ok(exit::OK)
+}
+
+/// The profile's Modrinth mods to check, limited to `modules` when any are named. Mods in
+/// scope that did not come from Modrinth are recorded in the report.
+fn tracked_mods<'p>(
+    selection: &'p Profile,
+    profile: &Name,
+    modules: &[String],
+    report: &mut UpdateReport,
+) -> Result<Vec<Tracked<'p>>, CliError> {
+    let wanted = modules
+        .iter()
+        .map(String::as_str)
+        .map(Name::new)
+        .collect::<Result<BTreeSet<Name>, _>>()?;
+    if let Some(module) = wanted
+        .iter()
+        .find(|module| !selection.mods.contains_key(*module))
+    {
+        return Err(InstanceError::UnknownMod {
+            profile: profile.clone(),
+            module: module.clone(),
+        }
+        .into());
+    }
+    let mut tracked = Vec::new();
+    for (module, entry) in &selection.mods {
+        if !wanted.is_empty() && !wanted.contains(module) {
+            continue;
+        }
+        match entry
+            .provider
+            .as_ref()
+            .filter(|provenance| provenance.provider == MODRINTH)
+        {
+            Some(provenance) => tracked.push((module, provenance)),
+            None => report.not_from_modrinth.push(module.clone()),
+        }
+    }
+    Ok(tracked)
+}
+
+/// Checks every tracked mod, returns those with an update, and records the rest.
+fn find_updates<'p>(
+    modrinth: &Modrinth<'_>,
+    tracked: &[Tracked<'p>],
+    target: &Target,
+    report: &mut UpdateReport,
+) -> Result<Vec<Pending<'p>>, CliError> {
+    let hashes: Vec<String> = tracked
+        .iter()
+        .map(|(_, provenance)| provenance.sha512.clone())
+        .collect();
+    let checks = modrinth.check_updates(&hashes, target)?;
+    let mut updates = Vec::new();
+    for (module, provenance) in tracked {
+        let module = *module;
+        match checks.get(&provenance.sha512.to_ascii_lowercase()) {
+            Some(UpdateCheck::Available(update)) => {
+                report.updated.push(ModUpdate {
+                    module: module.clone(),
+                    from: provenance.version_number.clone(),
+                    to: update.version.version_number.clone(),
+                });
+                updates.push((module, (**update).clone()));
+            }
+            Some(UpdateCheck::Current(_)) => report.current.push(module.clone()),
+            Some(UpdateCheck::Incompatible(_)) => report.no_compatible_version.push(module.clone()),
+            Some(UpdateCheck::Unlisted) | None => report.unlisted.push(module.clone()),
+        }
+    }
+    Ok(updates)
+}
+
+/// Records requirements the new versions add that the profile does not meet.
+fn report_relationships(
+    modrinth: &Modrinth<'_>,
+    selection: &Profile,
+    updates: &[Pending<'_>],
+    report: &mut UpdateReport,
+) -> Result<(), CliError> {
+    let installed: BTreeSet<&str> = selection
+        .mods
+        .values()
+        .filter_map(|entry| entry.provider.as_ref())
+        .filter(|provenance| provenance.provider == MODRINTH)
+        .map(|provenance| provenance.project.as_str())
+        .collect();
+    for (module, update) in updates {
+        let relationships = modrinth.relationships(&update.version, module.as_str())?;
+        report.unresolved.extend(
+            relationships
+                .required
+                .into_iter()
+                .filter(|requirement| !installed.contains(requirement.project_id.as_str())),
+        );
+        report.incompatible.extend(
+            relationships
+                .incompatible
+                .into_iter()
+                .filter(|requirement| installed.contains(requirement.project_id.as_str())),
+        );
+    }
+    Ok(())
 }
 
 fn search(
@@ -734,6 +914,17 @@ fn installed_from_modrinth<'p>(profile: &'p Profile, project: &str) -> Option<&'
         .map(|(name, _)| name)
 }
 
+/// The provenance recorded for a file installed from a Modrinth version.
+fn provenance(version: &Version, file: &VersionFile) -> Provenance {
+    Provenance {
+        provider: MODRINTH.to_owned(),
+        project: version.project_id.clone(),
+        version: version.id.clone(),
+        version_number: version.version_number.clone(),
+        sha512: file.hashes.sha512.clone(),
+    }
+}
+
 fn report(error: &CliError, err: &mut dyn Write) -> io::Result<()> {
     writeln!(err, "error: {error}")?;
     if let CliError::Instance(InstanceError::Conflicts(conflicts)) = error {
@@ -780,6 +971,76 @@ fn print_deploy(out: &mut dyn Write, report: &DeployReport) -> io::Result<()> {
         writeln!(out, "  {count} file(s) via {}", backend_label(*backend))?;
     }
     print_excluded(out, &report.excluded)
+}
+
+fn print_update(
+    out: &mut dyn Write,
+    report: &UpdateReport,
+    instance: &Name,
+    profile: &Name,
+) -> io::Result<()> {
+    if report.updated.is_empty() {
+        writeln!(out, "No updates for {instance}/{profile}.")?;
+    } else {
+        let verb = if report.dry_run {
+            "Would update"
+        } else {
+            "Updated"
+        };
+        writeln!(
+            out,
+            "{verb} {} mod(s) in {instance}/{profile}:",
+            report.updated.len()
+        )?;
+        for update in &report.updated {
+            writeln!(out, "  {}  {} -> {}", update.module, update.from, update.to)?;
+        }
+        if !report.dry_run {
+            writeln!(out, "Deploy the profile to apply the update.")?;
+        }
+    }
+    for (label, names) in [
+        ("Up to date", &report.current),
+        (
+            "No compatible version on their release channel",
+            &report.no_compatible_version,
+        ),
+        ("No longer listed on Modrinth", &report.unlisted),
+        ("Not from Modrinth, left alone", &report.not_from_modrinth),
+    ] {
+        if !names.is_empty() {
+            writeln!(out, "{label}: {}", join(names))?;
+        }
+    }
+    print_requirements(
+        out,
+        &report.unresolved,
+        &report.incompatible,
+        "add it before deploying",
+    )
+}
+
+fn print_requirements(
+    out: &mut dyn Write,
+    unresolved: &[Requirement],
+    incompatible: &[Requirement],
+    hint: &str,
+) -> io::Result<()> {
+    for missing in unresolved {
+        writeln!(
+            out,
+            "{} requires Modrinth project {}; {hint}.",
+            missing.declared_by, missing.project_id
+        )?;
+    }
+    for clash in incompatible {
+        writeln!(
+            out,
+            "Warning: {} declares Modrinth project {} incompatible, and both are selected.",
+            clash.declared_by, clash.project_id
+        )?;
+    }
+    Ok(())
 }
 
 fn print_excluded(out: &mut dyn Write, excluded: &[ModExclusion]) -> io::Result<()> {

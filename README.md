@@ -52,6 +52,7 @@ msbe instance add mc --root ~/.minecraft --plan plans/minecraft/plan.toml \
 msbe search mc shaders                 # Modrinth, filtered to the loader and game version
 msbe add mc modrinth:iris --with-deps  # verified downloads, dependencies included
 msbe add mc ~/Downloads/my-mod.jar     # local files and .zip archives work too
+msbe update mc --dry-run               # newer compatible versions, same release channel
 msbe deploy mc --dry-run   # what would change, and every file left out and why
 msbe deploy mc             # one journaled transaction
 msbe verify mc             # exits 7 if a deployed file changed or disappeared

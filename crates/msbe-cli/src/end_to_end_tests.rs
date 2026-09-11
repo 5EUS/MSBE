@@ -37,12 +37,19 @@ impl FakeModrinth {
     /// Sodium, and Iris, which requires Sodium.
     fn catalogue() -> Self {
         let fake = Self::default();
-        fake.project("AANobbMI", "sodium", "sodium-fabric-0.8.12.jar", &json!([]));
-        fake.project(
-            "YL57xq9U",
+        fake.publish(
+            "sodium",
+            "0.8.12",
+            "release",
+            "2026-07-06T00:00:00Z",
+            &json!([]),
+        );
+        fake.publish(
             "iris",
-            "iris-fabric-1.8.0.jar",
-            &json!([{ "project_id": "AANobbMI", "version_id": null, "dependency_type": "required" }]),
+            "1.8.0",
+            "release",
+            "2026-07-06T00:00:00Z",
+            &requires("AANobbMI"),
         );
         fake.json.borrow_mut().insert(
             format!("{API}/search"),
@@ -52,15 +59,18 @@ impl FakeModrinth {
         fake
     }
 
-    fn project(&self, id: &str, slug: &str, file: &str, dependencies: &Value) {
-        let bytes = format!("{slug} jar bytes").into_bytes();
-        let project = json!({ "id": id, "slug": slug, "title": slug, "project_type": "mod" });
-        let versions = json!([{
-            "id": format!("{id}-v1"),
+    /// Publishes a version of a project, creating the project the first time. The file is
+    /// `<slug>-fabric-<number>.jar`, and its bytes name the project and version.
+    fn publish(&self, slug: &str, number: &str, kind: &str, date: &str, dependencies: &Value) {
+        let id = project_id(slug);
+        let file = format!("{slug}-fabric-{number}.jar");
+        let bytes = format!("{slug} {number} jar bytes").into_bytes();
+        let version = json!({
+            "id": format!("{id}-{number}"),
             "project_id": id,
-            "version_number": "0.8.12",
-            "version_type": "release",
-            "date_published": "2026-07-06T00:00:00Z",
+            "version_number": number,
+            "version_type": kind,
+            "date_published": date,
             "loaders": ["fabric"],
             "game_versions": ["1.21.1"],
             "files": [{
@@ -71,14 +81,34 @@ impl FakeModrinth {
                 "size": bytes.len()
             }],
             "dependencies": dependencies
-        }]);
+        });
+        let project = json!({ "id": id, "slug": slug, "title": slug, "project_type": "mod" });
         let mut json = self.json.borrow_mut();
         json.insert(format!("{API}/project/{slug}"), project.clone());
         json.insert(format!("{API}/project/{id}"), project);
-        json.insert(format!("{API}/project/{id}/version"), versions);
+        if let Some(versions) = json
+            .entry(format!("{API}/project/{id}/version"))
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+        {
+            versions.push(version);
+        }
+        drop(json);
         self.files
             .borrow_mut()
             .insert(format!("{CDN}/{file}"), bytes);
+    }
+
+    /// Every published version of every project.
+    fn versions(&self) -> Vec<Value> {
+        self.json
+            .borrow()
+            .iter()
+            .filter(|(url, _)| url.ends_with("/version"))
+            .filter_map(|(_, list)| list.as_array())
+            .flatten()
+            .cloned()
+            .collect()
     }
 
     /// Flips one bit of a hosted file without changing its size.
@@ -103,6 +133,37 @@ impl HttpClient for FakeModrinth {
             })
     }
 
+    /// Answers the bulk lookups from the published versions, as Modrinth does:
+    /// `/version_files` finds the version each hash belongs to, and `/version_files/update` the
+    /// newest version of that project with a requested type and the requested game version.
+    fn post_json(&self, url: &str, body: &[u8], _limit: u64) -> Result<Vec<u8>, HttpError> {
+        let request: Value = serde_json::from_slice(body).unwrap();
+        let versions = self.versions();
+        let latest = url.ends_with("/version_files/update");
+        let mut answer = serde_json::Map::new();
+        for hash in at(&request, "/hashes").as_array().unwrap() {
+            let Some(installed) = versions
+                .iter()
+                .find(|version| at(version, "/files/0/hashes/sha512") == hash)
+            else {
+                continue;
+            };
+            let found = if latest {
+                versions
+                    .iter()
+                    .filter(|version| at(version, "/project_id") == at(installed, "/project_id"))
+                    .filter(|version| matches_request(version, &request))
+                    .max_by_key(|version| at(version, "/date_published").to_string())
+            } else {
+                Some(installed)
+            };
+            if let Some(version) = found {
+                answer.insert(hash.as_str().unwrap().to_owned(), version.clone());
+            }
+        }
+        Ok(serde_json::to_vec(&answer).unwrap())
+    }
+
     fn download(&self, url: &str, sink: &mut dyn Write, _limit: u64) -> Result<u64, HttpError> {
         let files = self.files.borrow();
         let bytes = files.get(url).ok_or_else(|| HttpError::Status {
@@ -112,6 +173,32 @@ impl HttpClient for FakeModrinth {
         sink.write_all(bytes).unwrap();
         Ok(u64::try_from(bytes.len()).unwrap())
     }
+}
+
+/// Whether a version has a requested type, if any are requested, and the requested game
+/// version.
+fn matches_request(version: &Value, request: &Value) -> bool {
+    let wanted_type = request
+        .get("version_types")
+        .and_then(Value::as_array)
+        .is_none_or(|types| types.contains(at(version, "/version_type")));
+    let supported = at(version, "/game_versions")
+        .as_array()
+        .unwrap()
+        .contains(at(request, "/game_versions/0"));
+    wanted_type && supported
+}
+
+fn project_id(slug: &str) -> &'static str {
+    match slug {
+        "sodium" => "AANobbMI",
+        "iris" => "YL57xq9U",
+        _ => panic!("no id for test project {slug}"),
+    }
+}
+
+fn requires(project: &str) -> Value {
+    json!([{ "project_id": project, "version_id": null, "dependency_type": "required" }])
 }
 
 fn sha512_hex(bytes: &[u8]) -> String {
@@ -411,10 +498,113 @@ fn modrinth_mods_install_with_dependencies_record_provenance_and_purge_cleanly()
     assert_eq!(at(&world.json(&["deploy", "mc"]), "/placed"), 2);
     assert_eq!(
         fs::read(world.game.join("mods/sodium-fabric-0.8.12.jar")).unwrap(),
-        b"sodium jar bytes"
+        b"sodium 0.8.12 jar bytes"
     );
     world.json(&["purge", "mc"]);
     assert_eq!(snapshot(&world.game), vanilla);
+}
+
+#[test]
+fn update_moves_modrinth_mods_forward_on_their_channel_and_deploys_like_any_change() {
+    let world = World::new();
+    let vanilla = snapshot(&world.game);
+    world.add_instance(Some("1.21.1"));
+    let lithium = world.file("lithium.jar", b"managed lithium");
+    world.json(&[
+        "add",
+        "mc",
+        "modrinth:iris",
+        "--with-deps",
+        lithium.as_str(),
+    ]);
+    world.json(&["deploy", "mc"]);
+
+    // A newer release and an even newer beta: a mod installed from a release takes the release.
+    let modrinth = &world.modrinth;
+    modrinth.publish(
+        "sodium",
+        "0.8.13",
+        "release",
+        "2026-08-28T00:00:00Z",
+        &json!([]),
+    );
+    modrinth.publish(
+        "sodium",
+        "0.9.0-beta.1",
+        "beta",
+        "2026-09-01T00:00:00Z",
+        &json!([]),
+    );
+    // Iris's next release needs a project the profile does not have.
+    modrinth.publish(
+        "iris",
+        "1.9.0",
+        "release",
+        "2026-08-30T00:00:00Z",
+        &requires("P7dR8mSH"),
+    );
+
+    let preview = world.json(&["update", "mc", "--dry-run"]);
+    assert_eq!(
+        at(&preview, "/updated"),
+        &json!([
+            { "module": "iris", "from": "1.8.0", "to": "1.9.0" },
+            { "module": "sodium", "from": "0.8.12", "to": "0.8.13" }
+        ])
+    );
+    assert_eq!(at(&preview, "/not_from_modrinth"), &json!(["lithium"]));
+    assert_eq!(
+        at(&preview, "/unresolved"),
+        &json!([{ "project_id": "P7dR8mSH", "declared_by": "iris" }])
+    );
+    let show = || world.json(&["profile", "show", "mc"]);
+    assert_eq!(
+        at(&show(), "/mods/sodium/provider/version_number"),
+        "0.8.12"
+    );
+
+    // Update only Sodium, for real.
+    let updated = world.msbe(&["update", "mc", "sodium"]);
+    assert_eq!(updated.code, exit::OK, "{}", updated.err);
+    assert!(
+        updated.out.contains("sodium  0.8.12 -> 0.8.13"),
+        "{}",
+        updated.out
+    );
+    assert_eq!(
+        at(&show(), "/mods/sodium/provider/version_number"),
+        "0.8.13"
+    );
+    assert_eq!(at(&show(), "/mods/iris/provider/version_number"), "1.8.0");
+    assert_eq!(
+        at(&world.json(&["update", "mc", "sodium"]), "/current"),
+        &json!(["sodium"])
+    );
+
+    let deployed = world.json(&["deploy", "mc"]);
+    assert_eq!(
+        [at(&deployed, "/placed"), at(&deployed, "/removed")],
+        [&json!(1), &json!(1)]
+    );
+    assert_eq!(
+        fs::read(world.game.join("mods/sodium-fabric-0.8.13.jar")).unwrap(),
+        b"sodium 0.8.13 jar bytes"
+    );
+    assert!(!world.game.join("mods/sodium-fabric-0.8.12.jar").exists());
+    assert_eq!(world.msbe(&["verify", "mc"]).code, exit::OK);
+
+    world.json(&["rollback", "mc"]);
+    assert!(world.game.join("mods/sodium-fabric-0.8.12.jar").exists());
+    world.json(&["purge", "mc"]);
+    assert_eq!(snapshot(&world.game), vanilla);
+
+    let unknown = world.msbe(&["update", "mc", "nonexistent"]);
+    assert_eq!(unknown.code, exit::FAILURE);
+    assert!(
+        unknown.err.contains("no mod named nonexistent"),
+        "{}",
+        unknown.err
+    );
 }
 
 #[test]

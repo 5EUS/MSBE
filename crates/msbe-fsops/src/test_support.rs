@@ -10,8 +10,8 @@ use tempfile::TempDir;
 
 use crate::{Applier, Journal, RelPath, Store};
 
-/// A small instance with vanilla files, including an executable, plus a store and journal
-/// beside it on the same volume.
+/// A small instance with vanilla files, including an executable and a read-only file, plus a
+/// store and journal beside it on the same volume.
 pub(crate) struct Fixture {
     _dir: TempDir,
     pub(crate) root: PathBuf,
@@ -28,6 +28,8 @@ impl Fixture {
         fs::write(root.join("data/packs/base.pak"), b"base pack").unwrap();
         fs::write(root.join("data/packs/extra.pak"), b"extra pack").unwrap();
         fs::write(root.join("bin/run.sh"), b"#!/bin/sh\nexit 0\n").unwrap();
+        fs::write(root.join("data/packs/locked.pak"), b"locked pack").unwrap();
+        crate::sys::make_read_only(&root.join("data/packs/locked.pak")).unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
@@ -58,7 +60,11 @@ pub(crate) fn rel(path: &str) -> RelPath {
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Node {
     Dir,
-    File { bytes: Vec<u8>, executable: bool },
+    File {
+        bytes: Vec<u8>,
+        executable: bool,
+        read_only: bool,
+    },
 }
 
 /// Every entry under `root`, keyed by relative path. Leftover staging files appear as
@@ -87,6 +93,7 @@ fn walk(root: &Path, dir: &Path, entries: &mut BTreeMap<String, Node>) {
                 Node::File {
                     bytes: fs::read(&path).unwrap(),
                     executable: executable(&meta),
+                    read_only: meta.permissions().readonly(),
                 },
             );
         }

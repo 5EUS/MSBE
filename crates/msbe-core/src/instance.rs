@@ -605,24 +605,49 @@ impl Instance {
         profile: &Name,
         artifacts: &[Artifact],
     ) -> Result<Vec<Name>, InstanceError> {
+        self.store_artifacts(profile, artifacts, Placement::Add)
+    }
+
+    /// Replaces mods already in `profile` with new artifacts under the same names, such as
+    /// newer versions from a provider. Either every mod is replaced or none are. The deployment
+    /// changes only when the profile is deployed again.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InstanceError::UnknownMod`] for a name the profile does not have, or any
+    /// ingest error.
+    pub fn replace_artifacts(
+        &self,
+        profile: &Name,
+        artifacts: &[Artifact],
+    ) -> Result<Vec<Name>, InstanceError> {
+        self.store_artifacts(profile, artifacts, Placement::Replace)
+    }
+
+    fn store_artifacts(
+        &self,
+        profile: &Name,
+        artifacts: &[Artifact],
+        placement: Placement,
+    ) -> Result<Vec<Name>, InstanceError> {
         let mut selection = self.profile(profile)?;
         let mut added = Vec::new();
         for artifact in artifacts {
-            let module = match &artifact.module {
-                Some(module) => module.clone(),
-                None => Name::sanitize(
-                    &artifact
-                        .path
-                        .file_stem()
-                        .map(|stem| stem.to_string_lossy().into_owned())
-                        .unwrap_or_default(),
-                )?,
-            };
-            if selection.mods.contains_key(&module) {
-                return Err(InstanceError::ModExists {
-                    profile: profile.clone(),
-                    module,
-                });
+            let module = module_name(artifact)?;
+            match (placement, selection.mods.contains_key(&module)) {
+                (Placement::Add, true) => {
+                    return Err(InstanceError::ModExists {
+                        profile: profile.clone(),
+                        module,
+                    });
+                }
+                (Placement::Replace, false) => {
+                    return Err(InstanceError::UnknownMod {
+                        profile: profile.clone(),
+                        module,
+                    });
+                }
+                (Placement::Add, false) | (Placement::Replace, true) => {}
             }
             let files = ingest(self.applier.store(), &artifact.path, &Limits::default())?;
             let origin = artifact
@@ -1072,6 +1097,27 @@ pub fn parse_plan(text: &str, origin: &Path) -> Result<Plan, InstanceError> {
     Ok(plan)
 }
 
+/// Whether storing an artifact adds a new mod or replaces one of the same name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Placement {
+    Add,
+    Replace,
+}
+
+/// The artifact's explicit name, or one derived from its file stem.
+fn module_name(artifact: &Artifact) -> Result<Name, InstanceError> {
+    match &artifact.module {
+        Some(module) => Ok(module.clone()),
+        None => Name::sanitize(
+            &artifact
+                .path
+                .file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        ),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OnDisk {
     Missing,
@@ -1426,6 +1472,61 @@ flatten = true
                 .get(&name("remote-mod"))
                 .and_then(|entry| entry.provider.as_ref()),
             Some(&provenance)
+        );
+    }
+
+    #[test]
+    fn replacing_an_artifact_keeps_its_name_and_swaps_its_files_and_provenance() {
+        let fixture = Fixture::new();
+        let mut instance = fixture.create();
+        let default = name("default");
+        let artifact = |file: &str, bytes: &[u8], version: &str| super::Artifact {
+            path: fixture.input(file, bytes),
+            module: Some(name("remote-mod")),
+            provider: Some(super::Provenance {
+                provider: "example".to_owned(),
+                project: "P1".to_owned(),
+                version: version.to_owned(),
+                version_number: version.to_owned(),
+                sha512: "ab".repeat(64),
+            }),
+        };
+        instance
+            .add_artifacts(&default, &[artifact("remote-1.0.bin", b"one", "1.0")])
+            .unwrap();
+        instance.deploy(&default, &mut NoopObserver).unwrap();
+
+        instance
+            .replace_artifacts(&default, &[artifact("remote-2.0.bin", b"two", "2.0")])
+            .unwrap();
+        let entry = instance
+            .profile(&default)
+            .unwrap()
+            .mods
+            .remove(&name("remote-mod"))
+            .unwrap();
+        assert_eq!(entry.origin, "remote-2.0.bin");
+        assert_eq!(
+            entry.provider.map(|provider| provider.version),
+            Some("2.0".to_owned())
+        );
+
+        let report = instance.deploy(&default, &mut NoopObserver).unwrap();
+        assert_eq!((report.placed, report.removed), (1, 1));
+        assert_eq!(
+            fs::read(fixture.game.join("mods/remote-2.0.bin")).unwrap(),
+            b"two"
+        );
+        assert!(!fixture.game.join("mods/remote-1.0.bin").exists());
+
+        let absent = super::Artifact {
+            module: Some(name("absent")),
+            ..artifact("absent.bin", b"x", "1.0")
+        };
+        let result = instance.replace_artifacts(&default, &[absent]);
+        assert!(
+            matches!(result, Err(InstanceError::UnknownMod { .. })),
+            "{result:?}"
         );
     }
 

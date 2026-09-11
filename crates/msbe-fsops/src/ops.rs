@@ -53,6 +53,10 @@ pub enum Prior {
         digest: Digest,
         /// Whether an execute bit was set, so a restored native executable still runs.
         executable: bool,
+        /// Whether the file was read-only, so restoring it restores that too. Absent from
+        /// journals written before this was recorded.
+        #[serde(default)]
+        read_only: bool,
     },
     /// A directory was already there.
     Dir,

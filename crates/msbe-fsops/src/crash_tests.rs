@@ -33,8 +33,8 @@ impl Observer for CrashAt {
 }
 
 /// One transaction covering every operation kind and every prior state: a new file in new
-/// nested directories, overwrites of a vanilla file and of an executable, a removal, and a
-/// mutable (copied) file.
+/// nested directories, overwrites of a vanilla file, an executable and a read-only file, a
+/// removal, and a mutable (copied) file.
 fn scenario(applier: &Applier) -> Vec<Operation> {
     let store = applier.store();
     let module = store.put_bytes(b"new module").unwrap();
@@ -54,6 +54,11 @@ fn scenario(applier: &Applier) -> Vec<Operation> {
         Operation::Materialize {
             path: rel("bin/run.sh"),
             blob: replacement,
+            mutable: false,
+        },
+        Operation::Materialize {
+            path: rel("data/packs/locked.pak"),
+            blob: module,
             mutable: false,
         },
         Operation::Remove {

@@ -29,7 +29,7 @@ normal, well-typed outcome — not an error and not an invitation to work around
 
 | Provider | Auth | Programmatic download | Notable constraints |
 |---|---|---|---|
-| **Modrinth** | none for public; token for private | ✓ open API | **Implemented (M1).** Real dependency graph. Requires an identifying User-Agent; 300 requests a minute, surfaced as `RateLimited` with the reset time. Downloads are https-only and verified against the published size and SHA-512 before ingest. |
+| **Modrinth** | none for public; token for private | ✓ open API | **Implemented (M1).** Real dependency graph. Requires an identifying User-Agent; 300 requests a minute, surfaced as `RateLimited` with the reset time. Downloads are https-only and verified against the published size and SHA-512 before ingest. Updates are found with the bulk hash endpoints (`POST /version_files` and `/version_files/update`), at most four requests however many mods are installed. A mod stays on its release channel or moves to a more stable one, and never goes to an older version unless the installed one no longer supports the instance. |
 | **Thunderstore** | none | ✓ | Clean SemVer, clean package format. |
 | **CurseForge** | API key required | ✓ *conditionally* | **Must honour `allowModDistribution: false`.** When false, third-party download is forbidden — return `Unavailable` and send the user to the mod page. Non-negotiable; this flag is why several managers got access revoked. |
 | **Nexus Mods** | personal API key / OAuth | premium: ✓ direct. free: ✗ | Free accounts have no programmatic file download. The *supported* path is the `nxm://` handler (see below). Rate limits published per-key; honour them and the `X-RL-*` response headers. |

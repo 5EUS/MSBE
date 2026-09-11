@@ -168,22 +168,27 @@ impl Store {
         let digest = hasher.finish();
         let dest = self.blob_path(&digest);
         if dest.is_file() {
-            sys::remove_file_if_exists(&tmp)?;
-            return Ok(digest);
+            match self.verify(&digest) {
+                Ok(()) => {
+                    sys::remove_file_if_exists(&tmp)?;
+                    return Ok(digest);
+                }
+                // A damaged blob, or one removed since the check, is replaced by the bytes
+                // just hashed. This is how adding a file again repairs the store.
+                Err(Error::Corrupt { .. } | Error::MissingBlob(_)) => {}
+                Err(error) => {
+                    sys::remove_file_if_exists(&tmp)?;
+                    return Err(error);
+                }
+            }
         }
-        make_read_only(&tmp)?;
+        sys::make_read_only(&tmp)?;
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent).at("create directory", parent)?;
         }
-        atomic::rename_replace(&tmp, &dest)?;
+        atomic::rename_displacing(&tmp, &dest)?;
         Ok(digest)
     }
-}
-
-fn make_read_only(path: &Path) -> Result<()> {
-    let mut permissions = fs::metadata(path).at("stat", path)?.permissions();
-    permissions.set_readonly(true);
-    fs::set_permissions(path, permissions).at("set permissions", path)
 }
 
 #[cfg(test)]
@@ -272,5 +277,11 @@ mod tests {
             store.verify(&digest),
             Err(Error::Corrupt { expected, .. }) if expected == digest
         ));
+
+        // Adding the original content again repairs the blob in place.
+        assert_eq!(store.put_bytes(b"original").unwrap(), digest);
+        store.verify(&digest).unwrap();
+        assert!(fs::metadata(&path).unwrap().permissions().readonly());
+        assert_eq!(fs::read_dir(store.tmp_dir()).unwrap().count(), 0);
     }
 }

@@ -57,11 +57,22 @@ therefore the main case, and three rules are load-bearing rather than defensive:
 
 1. **Store blobs are read-only** (mode `0444`), so a well-behaved writer fails instead of
    silently changing every profile that shares the blob.
-2. **Verify before linking.** Deploy checks the blob hash before creating the link, and
-   `msbe verify` re-hashes deployed files.
+2. **Verify before linking.** Before a transaction is journaled, the applier re-hashes every
+   distinct blob it is about to place and refuses a corrupt one, so a damaged blob never
+   spreads into more files. Adding the same content again repairs the blob. `msbe verify`
+   re-hashes deployed files. *Implemented in M1.*
 3. **Mutable paths are never linked.** Files that a game or mod rewrites at runtime, such as
    configs and generated caches, are declared by the plan (`mutable = ["config/**"]`) and
    always materialized by copy. This is also what lets the user override layer in §4.6 work.
+
+**Read-only on Windows.** A hardlink shares its attributes with its store blob, so a deployed
+file is read-only too, and Windows refuses to rename anything over a read-only file. Clearing
+the attribute would make the blob writable, which rule 1 forbids. So when that rename is
+denied, the applier removes the read-only file first (Windows allows deleting one) and
+renames again. The two steps are not atomic, but the file's prior state is already in the
+journal, so a crash between them recovers like any other. Everywhere else the replacement
+stays one atomic rename. Rollback also restores a user's own read-only files with the
+attribute intact.
 
 The probe is a real probe: MSBE creates a temp file in the store and attempts an
 actual `FICLONE` / `clonefile` / `CreateHardLink` against the game directory, because
