@@ -79,14 +79,29 @@ impl Store {
     ///
     /// Returns [`Error::Io`] if the source cannot be read or the blob cannot be written.
     pub fn put_file(&self, src: &Path) -> Result<Digest> {
-        let mut input = File::open(src).at("open", src)?;
+        let input = File::open(src).at("open", src)?;
+        self.put_reader(input)
+    }
+
+    /// Streams everything `reader` yields into the store, hashing as it copies.
+    ///
+    /// A reader error aborts the ingest and leaves the store unchanged. Archive extraction
+    /// depends on this: its size-limiting reader fails on purpose to stop a decompression
+    /// bomb mid-stream.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Io`] if reading or writing fails.
+    pub fn put_reader(&self, mut reader: impl Read) -> Result<Digest> {
         self.ingest(|out, hasher| {
             let mut buf = vec![0_u8; 64 * 1024];
             loop {
-                let read = input.read(&mut buf)?;
-                if read == 0 {
-                    return Ok(());
-                }
+                let read = match reader.read(&mut buf) {
+                    Ok(0) => return Ok(()),
+                    Ok(read) => read,
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(e) => return Err(e),
+                };
                 let chunk = buf.get(..read).unwrap_or_default();
                 out.write_all(chunk)?;
                 hasher.update(chunk);
@@ -173,7 +188,10 @@ fn make_read_only(path: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{
+        fs,
+        io::{self, Read},
+    };
 
     use super::Store;
     use crate::{Digest, Error};
@@ -208,6 +226,27 @@ mod tests {
         let digest = store.put_file(&src).unwrap();
         assert_eq!(digest, Digest::of_bytes(&data));
         store.verify(&digest).unwrap();
+    }
+
+    /// A reader that always fails, like a size limit tripping mid-stream.
+    struct FailingReader;
+
+    impl Read for FailingReader {
+        fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::other("limit exceeded"))
+        }
+    }
+
+    #[test]
+    fn put_reader_ingests_streams_and_leaves_nothing_behind_on_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        assert_eq!(
+            store.put_reader(&b"streamed"[..]).unwrap(),
+            Digest::of_bytes(b"streamed")
+        );
+        assert!(store.put_reader(FailingReader).is_err());
+        assert_eq!(fs::read_dir(store.tmp_dir()).unwrap().count(), 0);
     }
 
     #[test]

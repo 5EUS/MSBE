@@ -1,17 +1,15 @@
 //! The `msbe` command-line interface.
 //!
-//! See `docs/09-interfaces.md`.
-#![expect(
-    clippy::print_stdout,
-    reason = "stdout is this binary's machine-readable interface; see docs/09-interfaces.md"
-)]
+//! All behaviour lives in the `msbe_cli` library; this only connects the real arguments,
+//! stdout and stderr. See `docs/09-interfaces.md`.
 
-use std::process::ExitCode;
+use std::{io, process::ExitCode};
 
 fn main() -> ExitCode {
-    println!(
-        "msbe {} - scaffolding only; see docs/13-roadmap.md (M1).",
-        env!("CARGO_PKG_VERSION")
+    let code = msbe_cli::run(
+        std::env::args_os(),
+        &mut io::stdout().lock(),
+        &mut io::stderr().lock(),
     );
-    ExitCode::SUCCESS
+    ExitCode::from(code)
 }

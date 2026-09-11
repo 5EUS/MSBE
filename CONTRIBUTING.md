@@ -43,6 +43,7 @@ stale suppressions cannot accumulate.
 | `disallowed-methods`: `fs::remove_file`, `fs::remove_dir_all`, `fs::rename` | Destructive and unjournaled. Emit an operation and let the applier run it, so it can be rolled back. |
 | `disallowed-methods`: `SystemTime::now` | Plan evaluation must be deterministic and lockfiles must not embed wall-clock time. Inject a clock. |
 | `disallowed-methods`: `process::Command::new` | Spawning a process is a capability, not an ambient ability. |
+| `disallowed-methods`: `env::var`, `env::var_os` | Configuration is read in one place, `msbe_core::config`, so precedence and platform defaults cannot fork. |
 | `print_stdout`, `print_stderr` | Libraries log; they do not print. The two binaries opt in with a reason. |
 
 ### C#

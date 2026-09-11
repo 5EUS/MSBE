@@ -79,6 +79,10 @@ Two rules make this safe rather than dangerous:
    dropped and why. Silent filtering is indistinguishable from a bug when a mod
    genuinely ships a `.txt` that *is* its config.
 
+When several rules match one file, the report names the most specific: a hygiene rule,
+then an explicit deny, then a quarantine pattern, and only then a miss against the allow
+list.
+
 The defaults therefore lean conservative — exclude what is unambiguously not content
 (OS metadata, VCS, symbols) — and leave genuinely game-specific judgements
 (`**/*.txt`, `Docs/`, loose `.dll`s) to the plan, where a human who knows the game

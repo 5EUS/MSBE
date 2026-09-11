@@ -6,6 +6,9 @@
 //!
 //! See `docs/00-overview.md` and `docs/02-plan-system.md`.
 
+pub mod config;
+pub mod instance;
+
 use msbe_fsops::{Applier, Digest, Observer, Operation, RelPath, Result as FsResult, TxnReport};
 use msbe_plan_schema::{ExtractStep, Hygiene, Plan, Step, ValidationError};
 use serde::{Deserialize, Serialize};
@@ -169,18 +172,13 @@ fn filter_files<'a>(
     (included, excluded)
 }
 
+/// The rule that excludes `path`, most specific first: hygiene, then an explicit deny or
+/// quarantine pattern, then a miss against the allow list. An explicit rule is the more useful
+/// explanation in an exclusion report, so it wins over a generic "not allowed".
 fn exclusion_reason(extract: &ExtractStep, path: &RelPath) -> Option<ExclusionReason> {
     let source = path.as_str();
     if extract.hygiene == Hygiene::Default && is_hygiene_path(source) {
         return Some(ExclusionReason::Hygiene);
-    }
-    if !extract.allow.is_empty()
-        && !extract
-            .allow
-            .iter()
-            .any(|pattern| matches_glob(pattern, source))
-    {
-        return Some(ExclusionReason::NotAllowed);
     }
     if let Some(pattern) = extract
         .deny
@@ -191,13 +189,21 @@ fn exclusion_reason(extract: &ExtractStep, path: &RelPath) -> Option<ExclusionRe
             pattern: pattern.clone(),
         });
     }
-    extract
+    if let Some(pattern) = extract
         .quarantine
         .iter()
         .find(|pattern| matches_glob(pattern, source))
-        .map(|pattern| ExclusionReason::Quarantined {
+    {
+        return Some(ExclusionReason::Quarantined {
             pattern: pattern.clone(),
-        })
+        });
+    }
+    let allowed = extract.allow.is_empty()
+        || extract
+            .allow
+            .iter()
+            .any(|pattern| matches_glob(pattern, source));
+    (!allowed).then_some(ExclusionReason::NotAllowed)
 }
 
 fn is_hygiene_path(path: &str) -> bool {
@@ -247,27 +253,18 @@ fn glob_segment_matches(pattern: &str, path: &str) -> bool {
     glob_chars_match(pattern.chars(), path.chars())
 }
 
-fn glob_chars_match(mut pattern: std::str::Chars<'_>, mut path: std::str::Chars<'_>) -> bool {
-    match pattern.next() {
+fn glob_chars_match(pattern: std::str::Chars<'_>, mut path: std::str::Chars<'_>) -> bool {
+    let mut rest = pattern.clone();
+    match rest.next() {
         None => path.next().is_none(),
+        // `*` matches nothing, or consumes one character and stays in effect. The retry must
+        // use `pattern`, which still starts with the star, not `rest`.
         Some('*') => {
-            if glob_chars_match(pattern.clone(), path.clone()) {
-                true
-            } else {
-                match path.next() {
-                    Some(_) => glob_chars_match(pattern, path),
-                    None => false,
-                }
-            }
+            glob_chars_match(rest, path.clone())
+                || (path.next().is_some() && glob_chars_match(pattern, path))
         }
-        Some('?') => match path.next() {
-            Some(_) => glob_chars_match(pattern, path),
-            None => false,
-        },
-        Some(character) => match path.next() {
-            Some(candidate) if candidate == character => glob_chars_match(pattern, path),
-            Some(_) | None => false,
-        },
+        Some('?') => path.next().is_some() && glob_chars_match(rest, path),
+        Some(character) => path.next() == Some(character) && glob_chars_match(rest, path),
     }
 }
 
@@ -409,6 +406,39 @@ mod tests {
                 .any(|file| file.source.as_str() == "symbols/EXAMPLE.PDB"
                     && file.reason == ExclusionReason::Hygiene)
         );
+    }
+
+    #[test]
+    fn an_explicit_deny_is_reported_over_a_missing_allow_match() {
+        let mut plan = plan(true);
+        plan.steps.insert(
+            0,
+            Step::Extract(ExtractStep {
+                allow: vec!["**/*.jar".to_owned()],
+                deny: vec!["**/*.exe".to_owned()],
+                quarantine: Vec::new(),
+                hygiene: Hygiene::Default,
+            }),
+        );
+        let resolved = resolve(&plan, "loader", &[file("tools/installer.exe")]).unwrap();
+        assert_eq!(
+            resolved.excluded.first().map(|excluded| &excluded.reason),
+            Some(&ExclusionReason::Denied {
+                pattern: "**/*.exe".to_owned()
+            })
+        );
+    }
+
+    #[test]
+    fn a_star_matches_any_run_of_characters_within_one_component() {
+        assert!(matches_glob("*.jar", "example.jar"));
+        assert!(matches_glob("*", "anything"));
+        assert!(matches_glob("a*b*c", "aXXbYYc"));
+        assert!(!matches_glob("a*b*c", "aXXbYY"));
+        assert!(matches_glob("?at.txt", "cat.txt"));
+        assert!(!matches_glob("*.jar", "example.jar.disabled"));
+        assert!(matches_glob("**", "any/depth/at/all"));
+        assert!(matches_glob("**/*.jar", "top-level.jar"));
     }
 
     #[test]

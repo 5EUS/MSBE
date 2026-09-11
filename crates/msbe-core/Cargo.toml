@@ -16,7 +16,13 @@ publish.workspace      = true
 workspace = true
 
 [dependencies]
-msbe-fsops       = { path = "../msbe-fsops" }
-msbe-plan-schema = { path = "../msbe-plan-schema" }
-serde.workspace  = true
-thiserror.workspace = true
+msbe-archive         = { path = "../msbe-archive" }
+msbe-fsops           = { path = "../msbe-fsops" }
+msbe-plan-schema     = { path = "../msbe-plan-schema" }
+serde.workspace      = true
+serde_json.workspace = true
+thiserror.workspace  = true
+toml.workspace       = true
+
+[dev-dependencies]
+tempfile.workspace = true

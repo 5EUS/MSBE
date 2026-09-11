@@ -17,12 +17,17 @@ publish      = false
 # Versions live here once; crates opt in with `dep.workspace = true`, mirroring
 # Directory.Packages.props on the .NET side.
 [workspace.dependencies]
+clap         = { version = "4.6.6", features = ["derive"] }
 reflink-copy = "0.1.30"
 serde        = { version = "1.0.229", features = ["derive"] }
 serde_json   = "1.0.151"
 sha2         = "0.11.0"
 tempfile     = "3.27.0"
 thiserror    = "2.0.20"
+toml         = "1.1.6"
+# Default features pull in `time` (banned in deny.toml), AES, bzip2, zstd and lzma.
+# Only pure-Rust deflate is needed to read the archives mods ship in.
+zip          = { version = "8.6.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 # ---------------------------------------------------------------------------
 # Lints are defined once here and inherited by every crate via `[lints]

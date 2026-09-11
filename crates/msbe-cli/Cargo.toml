@@ -19,3 +19,15 @@ workspace = true
 [[bin]]
 name = "msbe"
 path = "src/main.rs"
+
+[dependencies]
+clap.workspace       = true
+msbe-core            = { path = "../msbe-core" }
+msbe-fsops           = { path = "../msbe-fsops" }
+serde.workspace      = true
+serde_json.workspace = true
+thiserror.workspace  = true
+
+[dev-dependencies]
+tempfile.workspace = true
+zip.workspace      = true

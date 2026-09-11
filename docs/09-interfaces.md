@@ -8,6 +8,12 @@ from the CLI, and the test fails the build if one is not.
 
 Rust + `clap`. Nouns and verbs match the domain model exactly.
 
+> **Implemented so far (M1):** `instance add|list`, `profile new|list|show`, `add`, `remove`,
+> `deploy [--dry-run]`, `rollback`, `purge`, `verify` and `status`, with `--format json` and
+> `--home`. Exit codes 0, 1, 2, 4 and 7 behave as specified below; the rest of this surface
+> is still planned. Deploying a profile is also how profiles switch: it applies only the
+> difference from what is deployed, and it repairs drift.
+
 ```
 msbe game      list | show
 msbe instance  detect | add <path> | list | show | remove | use <name>

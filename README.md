@@ -43,6 +43,21 @@ sh scripts/development/check.sh               # everything CI checks, locally
 Toolchains are pinned: Rust in `rust-toolchain.toml`, the .NET SDK in
 `dotnet/global.json`. Bump either in its own commit.
 
+## Trying it
+
+```sh
+cargo install --path crates/msbe-cli
+msbe instance add mc --root ~/.minecraft --plan plans/minecraft/plan.toml --loader fabric
+msbe add mc ~/Downloads/sodium.jar ~/Downloads/shader-pack.zip
+msbe deploy mc --dry-run   # what would change, and every file left out and why
+msbe deploy mc             # one journaled transaction
+msbe verify mc             # exits 7 if a deployed file changed or disappeared
+msbe purge mc              # back to exactly how the directory was before MSBE
+```
+
+State lives in `$MSBE_HOME` (by default the platform data directory), never in the game
+directory. `--format json` makes every command scriptable.
+
 ## The compile-time posture
 
 Almost every rule in this repo exists because of a specific failure mode, and each is

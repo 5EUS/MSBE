@@ -14,3 +14,11 @@ publish.workspace      = true
 
 [lints]
 workspace = true
+
+[dependencies]
+msbe-fsops          = { path = "../msbe-fsops" }
+thiserror.workspace = true
+zip.workspace       = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -25,6 +25,7 @@ disallowed-methods = [
   { path = "std::fs::remove_dir_all", reason = "destructive and unjournaled — this is the call that deletes someone's save directory. Go through the applier." },
   { path = "std::fs::rename", reason = "use msbe_fsops::atomic (same-volume staging + rename) so a crash never leaves a half-written file at a real path." },
   { path = "std::env::var", reason = "read configuration through msbe_core::config so precedence, redaction and headless fallbacks stay in one place." },
+  { path = "std::env::var_os", reason = "read configuration through msbe_core::config, the one place that reads the environment, so precedence and platform defaults stay together." },
   { path = "std::env::set_var", reason = "process-global mutation; unsound alongside threads. Pass environment explicitly." },
   { path = "std::process::exit", reason = "skips destructors, so the journal may not be flushed. Return an ExitCode from main instead." },
   { path = "std::process::Command::new", reason = "spawning a process is a capability, not an ambient ability. Only the run-trusted-binary path may do this, with an #[expect] and a reason naming the hash-pinning." },

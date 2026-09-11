@@ -1,0 +1,44 @@
+# Minecraft with modern mod loaders.
+#
+# The M1 easy path (docs/13-roadmap.md): mods are .jar files placed flat into the loader's
+# mods directory. Archives are unpacked and only their jars are deployed; every other file
+# stays in the store and appears in the exclusion report.
+
+schema  = 1
+id      = "minecraft"
+name    = "Minecraft"
+version = "0.1.0"
+
+[[loaders]]
+id        = "fabric"
+bootstrap = "mc.fabric-installer"
+sides     = ["client", "server"]
+targets   = [{ name = "mods", path = "mods" }]
+
+[[loaders]]
+id        = "quilt"
+# A loader fork: Quilt targets accept Fabric mods.
+provides  = ["fabric"]
+bootstrap = "mc.quilt-installer"
+sides     = ["client", "server"]
+targets   = [{ name = "mods", path = "mods" }]
+
+[[loaders]]
+id        = "neoforge"
+bootstrap = "mc.neoforge-installer"
+sides     = ["client", "server"]
+targets   = [{ name = "mods", path = "mods" }]
+
+[[steps]]
+type = "extract"
+
+  [steps.with]
+  allow   = ["**/*.jar"]
+  hygiene = "default"
+
+[[steps]]
+type = "place"
+
+  [steps.with]
+  into    = "@loader.targets.mods"
+  flatten = true
