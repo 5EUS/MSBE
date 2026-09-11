@@ -182,6 +182,7 @@ plan preserve runtime changes rather than being overwritten or removed.
 | `remove INSTANCE MOD [-p PROFILE]`                                                                                                               | **Implemented** | Remove a selection from a profile.                 |
 | `deploy INSTANCE [-p PROFILE] [--dry-run]`                                                                                                       | **Implemented** | Apply a journaled profile diff.                    |
 | `lock INSTANCE [-p PROFILE]`                                                                                                                     | **Implemented** | Write `locks/<profile>.toml` with resolved state.  |
+| `pack export INSTANCE --output FILE [-p PROFILE]`                                                                                                | **Implemented** | Export verified files as `.mrpack` overrides.      |
 | `rollback INSTANCE`                                                                                                                              | **Implemented** | Undo the latest deployment.                        |
 | `purge INSTANCE`                                                                                                                                 | **Implemented** | Undo all deployment history.                       |
 | `verify INSTANCE`                                                                                                                                | **Implemented** | Report deployment drift.                           |
@@ -197,7 +198,7 @@ in the current binary. Their names and arguments can change before implementatio
 | Instance lifecycle        | `instance detect`, `instance show`, `instance remove`, `instance use`                 | Future M1/M2 follow-up    |
 | Profiles                  | `profile switch`, `copy`, `diff`, `export`, `import`, `remove`                        | M2                        |
 | Resolution                | `lock`, `sync`, `conflicts`, ordering controls                                        | M2                        |
-| Plans and registry        | `plan`, `registry`                                                                    | M7                        |
+| Plans and registry        | `pack import`, `plan`, `registry`                                                     | M7                        |
 | Diagnostics and store     | `doctor`, `store`, `bundle`, `bisect`                                                 | M2 and later              |
 | Daemon control            | `daemon start`, `stop`, `status`; Windows named-pipe transport                        | M1 follow-up              |
 | Credentials and downloads | `auth`, `download`, Nexus `nxm://`, browser assistance                                | M5                        |

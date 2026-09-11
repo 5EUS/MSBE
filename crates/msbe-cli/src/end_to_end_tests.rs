@@ -7,7 +7,7 @@ use std::{
     collections::BTreeMap,
     fmt::Write as _,
     fs,
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
     rc::Rc,
 };
@@ -512,6 +512,37 @@ fn modrinth_mods_install_with_dependencies_record_provenance_and_purge_cleanly()
     );
     world.json(&["purge", "mc"]);
     assert_eq!(snapshot(&world.game), vanilla);
+}
+
+#[test]
+fn pack_export_writes_verified_profile_files_as_overrides() {
+    let world = World::new();
+    world.add_instance(Some("1.21.1"));
+    let artifact = world.file("sodium.jar", b"verified sodium");
+    world.json(&["add", "mc", artifact.as_str()]);
+    let output = world.inputs.join("profile.mrpack");
+    let output_text = output.display().to_string();
+
+    let report = world.json(&["pack", "export", "mc", "--output", output_text.as_str()]);
+    assert_eq!(at(&report, "/files"), 1);
+    assert_eq!(at(&report, "/output"), &json!(output));
+
+    let mut archive = zip::ZipArchive::new(fs::File::open(output).unwrap()).unwrap();
+    let mut index = String::new();
+    archive
+        .by_name("modrinth.index.json")
+        .unwrap()
+        .read_to_string(&mut index)
+        .unwrap();
+    let index: Value = serde_json::from_str(&index).unwrap();
+    assert_eq!(at(&index, "/dependencies/minecraft"), "1.21.1");
+    let mut exported = Vec::new();
+    archive
+        .by_name("overrides/mods/sodium.jar")
+        .unwrap()
+        .read_to_end(&mut exported)
+        .unwrap();
+    assert_eq!(exported, b"verified sodium");
 }
 
 #[test]

@@ -7,16 +7,72 @@
 use std::{
     collections::BTreeMap,
     fs::File,
-    io::{self, Read},
-    path::Path,
+    io::{self, Read, Write},
+    path::{Path, PathBuf},
 };
 
-use serde::Deserialize;
+use msbe_fsops::RelPath;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use zip::ZipArchive;
+use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
 const INDEX: &str = "modrinth.index.json";
 const LIMIT: u64 = 16 << 20;
+
+/// A verified local file included in an exported pack as an override.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExportFile {
+    /// The portable destination relative to the game directory.
+    pub path: RelPath,
+    /// The local content-addressed blob to copy into the pack.
+    pub source: PathBuf,
+}
+
+/// Writes a Modrinth `.mrpack` with local files stored as portable overrides.
+///
+/// The caller supplies the selected game and loader versions as Modrinth dependency entries.
+/// Artifact download URLs are deliberately not synthesized from provider metadata.
+///
+/// # Errors
+///
+/// Returns [`PackError`] when an input file cannot be read, the output cannot be created, or
+/// the ZIP container cannot be written.
+pub fn export_modrinth(
+    output: &Path,
+    name: Option<&str>,
+    dependencies: BTreeMap<String, String>,
+    files: &[ExportFile],
+) -> Result<(), PackError> {
+    let file = File::create(output).map_err(|source| PackError::Io { source })?;
+    let mut archive = ZipWriter::new(file);
+    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    let index = ModrinthExportIndex {
+        format_version: 1,
+        game: "minecraft",
+        version_id: "1.0.0",
+        name,
+        dependencies,
+    };
+    archive
+        .start_file(INDEX, options)
+        .map_err(|error| PackError::Archive(error.to_string()))?;
+    let bytes = serde_json::to_vec_pretty(&index).map_err(PackError::Json)?;
+    archive
+        .write_all(&bytes)
+        .map_err(|source| PackError::Io { source })?;
+    for export in files {
+        let entry = format!("overrides/{}", export.path);
+        let mut source = File::open(&export.source).map_err(|source| PackError::Io { source })?;
+        archive
+            .start_file(entry, options)
+            .map_err(|error| PackError::Archive(error.to_string()))?;
+        io::copy(&mut source, &mut archive).map_err(|source| PackError::Io { source })?;
+    }
+    archive
+        .finish()
+        .map_err(|error| PackError::Archive(error.to_string()))?;
+    Ok(())
+}
 
 /// A locally imported pack manifest.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -147,6 +203,17 @@ struct ModrinthIndex {
     #[serde(default)]
     files: Vec<ModrinthIndexFile>,
 }
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModrinthExportIndex<'a> {
+    format_version: u32,
+    game: &'static str,
+    version_id: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<&'a str>,
+    dependencies: BTreeMap<String, String>,
+}
 #[derive(Deserialize)]
 struct ModrinthIndexFile {
     downloads: Vec<String>,
@@ -207,4 +274,66 @@ pub enum PackError {
     /// This Modrinth pack schema version is unsupported.
     #[error("unsupported Modrinth pack format version {0}")]
     UnsupportedVersion(u32),
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        collections::BTreeMap,
+        fs::{self, File},
+        io::Read,
+    };
+
+    use msbe_fsops::RelPath;
+
+    use super::{ExportFile, export_modrinth};
+
+    #[test]
+    fn export_writes_a_portable_modrinth_override_pack() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("sodium.jar");
+        let output = directory.path().join("profile.mrpack");
+        fs::write(&source, b"verified bytes").unwrap();
+
+        export_modrinth(
+            &output,
+            Some("Example profile"),
+            BTreeMap::from([
+                ("minecraft".to_owned(), "1.21.1".to_owned()),
+                ("fabric-loader".to_owned(), "0.16.10".to_owned()),
+            ]),
+            &[ExportFile {
+                path: RelPath::new("mods/sodium.jar").unwrap(),
+                source,
+            }],
+        )
+        .unwrap();
+
+        let file = File::open(output).unwrap();
+        let mut archive = zip::ZipArchive::new(file).unwrap();
+        let mut index = String::new();
+        archive
+            .by_name("modrinth.index.json")
+            .unwrap()
+            .read_to_string(&mut index)
+            .unwrap();
+        let index: serde_json::Value = serde_json::from_str(&index).unwrap();
+        assert_eq!(index.pointer("/formatVersion"), Some(&serde_json::json!(1)));
+        assert_eq!(
+            index.pointer("/dependencies/minecraft"),
+            Some(&serde_json::json!("1.21.1"))
+        );
+        assert_eq!(
+            index.pointer("/dependencies/fabric-loader"),
+            Some(&serde_json::json!("0.16.10"))
+        );
+
+        let mut override_file = Vec::new();
+        archive
+            .by_name("overrides/mods/sodium.jar")
+            .unwrap()
+            .read_to_end(&mut override_file)
+            .unwrap();
+        assert_eq!(override_file, b"verified bytes");
+    }
 }

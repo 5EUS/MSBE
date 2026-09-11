@@ -4,7 +4,7 @@
 //! stderr, so piped output stays clean. See `docs/09-interfaces.md`.
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     ffi::OsString,
     io::{self, Write},
     path::{Path, PathBuf},
@@ -19,7 +19,7 @@ use msbe_core::{
         Name, NewInstance, Profile, ProfileTarget, Provenance, Status,
     },
 };
-use msbe_fsops::{Backend, NoopObserver, Operation, RelPath};
+use msbe_fsops::{Backend, NoopObserver, Operation, RelPath, Store};
 use msbe_plan_schema::Side;
 use msbe_providers::{
     Catalog, HttpClient, HttpError, MODRINTH, Overlay, OverlayError, ProviderRegistry,
@@ -29,6 +29,7 @@ use msbe_providers::{
         InstallPlan, InstalledRelease, Modrinth, ModrinthError, Requirement, Substitution, Update,
         UpdateCheck, Version, VersionFile,
     },
+    pack::{self, ExportFile, PackError},
 };
 use serde::Serialize;
 
@@ -96,6 +97,9 @@ enum Command {
     /// Create, list and inspect profiles.
     #[command(subcommand)]
     Profile(ProfileCommand),
+    /// Import and export portable modpack manifests.
+    #[command(subcommand)]
+    Pack(PackCommand),
     /// Add mods to a profile from local files, .zip archives, Modrinth, or https URLs.
     Add {
         /// The instance.
@@ -187,6 +191,21 @@ enum Command {
     Status {
         /// The instance.
         instance: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum PackCommand {
+    /// Export a profile's verified files as a Modrinth .mrpack archive.
+    Export {
+        /// The instance.
+        instance: String,
+        /// Destination .mrpack archive.
+        #[arg(long, short)]
+        output: PathBuf,
+        /// The profile to export.
+        #[arg(long, short, default_value = DEFAULT_PROFILE)]
+        profile: String,
     },
 }
 
@@ -295,6 +314,10 @@ enum CliError {
     Provider(#[from] RegistryError),
     #[error(transparent)]
     Overlay(#[from] OverlayError),
+    #[error(transparent)]
+    Pack(#[from] PackError),
+    #[error(transparent)]
+    Fs(#[from] msbe_fsops::Error),
     #[error(
         "instance {0} has no game version; set one with `msbe instance set {0} --game-version <version>`"
     )]
@@ -370,6 +393,12 @@ struct UpdateReport {
     incompatible: Vec<Requirement>,
 }
 
+#[derive(Serialize)]
+struct PackExportReport {
+    output: PathBuf,
+    files: usize,
+}
+
 /// A mod in a profile and the Modrinth provenance recorded for it.
 type Tracked<'p> = (&'p Name, &'p Provenance);
 
@@ -431,6 +460,7 @@ fn execute(cli: &Cli, console: &mut Console<'_>) -> Result<u8, CliError> {
     match &cli.command {
         Command::Instance(command) => instance_command(&home, command, console),
         Command::Profile(command) => profile_command(&home, command, console),
+        Command::Pack(command) => pack_command(&home, command, console),
         Command::Add {
             instance,
             sources,
@@ -468,6 +498,80 @@ fn execute(cli: &Cli, console: &mut Console<'_>) -> Result<u8, CliError> {
         Command::Purge { instance } => purge(&home, instance, console),
         Command::Verify { instance } => verify(&home, instance, console),
         Command::Status { instance } => status(&home, instance, console),
+    }
+}
+
+fn pack_command(
+    home: &Home,
+    command: &PackCommand,
+    console: &mut Console<'_>,
+) -> Result<u8, CliError> {
+    match command {
+        PackCommand::Export {
+            instance,
+            output,
+            profile,
+        } => pack_export(home, instance, output, profile, console),
+    }
+}
+
+fn pack_export(
+    home: &Home,
+    instance: &str,
+    output: &Path,
+    profile: &str,
+    console: &mut Console<'_>,
+) -> Result<u8, CliError> {
+    let opened = open(home, instance, console)?;
+    let profile = Name::new(profile)?;
+    let lockfile = opened.lockfile(&profile)?;
+    let game_version = lockfile
+        .target
+        .game_version
+        .as_deref()
+        .ok_or_else(|| CliError::GameVersionRequired(opened.config().name.clone()))?;
+    let mut dependencies = BTreeMap::from([("minecraft".to_owned(), game_version.to_owned())]);
+    if let Some(loader_version) = &lockfile.target.loader_version {
+        dependencies.insert(
+            loader_dependency(&lockfile.target.loader),
+            loader_version.clone(),
+        );
+    }
+    let store = Store::open(opened.config().store.clone())?;
+    let files: Vec<ExportFile> = lockfile
+        .deployment
+        .into_iter()
+        .map(|(path, digest)| ExportFile {
+            source: store.blob_path(&digest),
+            path,
+        })
+        .collect();
+    pack::export_modrinth(
+        output,
+        Some(&format!("{}/{}", opened.config().name, profile)),
+        dependencies,
+        &files,
+    )?;
+    let report = PackExportReport {
+        output: output.to_path_buf(),
+        files: files.len(),
+    };
+    console.emit(&report, |out, report| {
+        writeln!(
+            out,
+            "Exported {} verified file(s) to {}.",
+            report.files,
+            report.output.display()
+        )
+    })?;
+    Ok(exit::OK)
+}
+
+fn loader_dependency(loader: &str) -> String {
+    match loader {
+        "fabric" => "fabric-loader".to_owned(),
+        "quilt" => "quilt-loader".to_owned(),
+        _ => loader.to_owned(),
     }
 }
 
