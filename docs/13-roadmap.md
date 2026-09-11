@@ -138,9 +138,10 @@ Where the domain gets hard, still without touching credentials.
   deployment and the separately persisted user override layer remain pending.
 - **Multiple deploy targets in one plan** — `mods/`, `config/`, `resourcepacks/`,
   `shaderpacks/`, per-world `datapacks/`.
-- **Pack import and export** — `.mrpack` and CurseForge `manifest.json` import is
-  metadata-only; `msbe pack export` writes a standard `.mrpack` with the profile's verified
-  files as local overrides. CurseForge _downloads_ wait for M5, and the distribution flag is
+- **Pack import and export** — **implemented for Modrinth**: `msbe pack import` acquires
+  target-compatible `.mrpack` files through the reviewed HTTPS/checksum path, and `msbe pack
+export` writes a standard `.mrpack` with verified files as local overrides. CurseForge
+  manifests remain metadata-only; downloads wait for M5 and their distribution policy is
   honoured from day one.
 - **Lockfiles and cross-platform reproducibility** — **implemented**: `msbe lock` writes a
   canonical TOML snapshot of the pinned plan, compatibility target, components, provider

@@ -196,6 +196,19 @@ enum Command {
 
 #[derive(Debug, Subcommand)]
 enum PackCommand {
+    /// Import target-compatible Modrinth pack files through reviewed acquisition.
+    Import {
+        /// The instance.
+        instance: String,
+        /// Source `.mrpack` or CurseForge `manifest.json`.
+        path: PathBuf,
+        /// The profile to add imported files to.
+        #[arg(long, short, default_value = DEFAULT_PROFILE)]
+        profile: String,
+        /// Also resolve required dependencies of imported files when provider metadata supports it.
+        #[arg(long)]
+        with_deps: bool,
+    },
     /// Export a profile's verified files as a Modrinth .mrpack archive.
     Export {
         /// The instance.
@@ -268,6 +281,13 @@ enum ProfileCommand {
         #[arg(long)]
         from: Option<String>,
     },
+    /// Delete an inactive profile.
+    Remove {
+        /// The instance.
+        instance: String,
+        /// The profile to delete.
+        name: String,
+    },
     /// List an instance's profiles; the deployed one is marked with `*`.
     List {
         /// The instance.
@@ -316,6 +336,14 @@ enum CliError {
     Pack(#[from] PackError),
     #[error(transparent)]
     Fs(#[from] msbe_fsops::Error),
+    #[error(
+        "CurseForge pack import is metadata-only until the official adapter can honour its distribution policy"
+    )]
+    CurseForgePackImport,
+    #[error("Modrinth pack file has no HTTPS download URL")]
+    PackDownloadMissing,
+    #[error("Modrinth pack file has no SHA-256 or SHA-512 checksum")]
+    PackHashMissing,
     #[error(
         "instance {0} has no game version; set one with `msbe instance set {0} --game-version <version>`"
     )]
@@ -459,7 +487,7 @@ fn execute(cli: &Cli, console: &mut Console<'_>) -> Result<u8, CliError> {
     match &cli.command {
         Command::Instance(command) => instance_command(&home, command, console),
         Command::Profile(command) => profile_command(&home, command, console),
-        Command::Pack(command) => pack_command(&home, command, console),
+        Command::Pack(command) => pack_command(&providers, &home, command, console),
         Command::Add {
             instance,
             sources,
@@ -501,17 +529,70 @@ fn execute(cli: &Cli, console: &mut Console<'_>) -> Result<u8, CliError> {
 }
 
 fn pack_command(
+    providers: &Providers,
     home: &Home,
     command: &PackCommand,
     console: &mut Console<'_>,
 ) -> Result<u8, CliError> {
     match command {
+        PackCommand::Import {
+            instance,
+            path,
+            profile,
+            with_deps,
+        } => pack_import(
+            providers, home, instance, path, profile, *with_deps, console,
+        ),
         PackCommand::Export {
             instance,
             output,
             profile,
         } => pack_export(home, instance, output, profile, console),
     }
+}
+
+fn pack_import(
+    providers: &Providers,
+    home: &Home,
+    instance: &str,
+    path: &Path,
+    profile: &str,
+    with_deps: bool,
+    console: &mut Console<'_>,
+) -> Result<u8, CliError> {
+    let pack = pack::import(path)?;
+    let opened = open(home, instance, console)?;
+    let target = opened.profile_target(&Name::new(profile)?)?;
+    let selected = match pack {
+        pack::Pack::CurseForge(_) => return Err(CliError::CurseForgePackImport),
+        pack::Pack::Modrinth(pack) => pack
+            .files
+            .into_iter()
+            .filter(|file| match target.side {
+                Side::Client => file.client,
+                Side::Server => file.server,
+            })
+            .map(pack_source)
+            .collect::<Result<Vec<_>, _>>()?,
+    };
+    add(
+        providers, home, instance, profile, &selected, with_deps, console,
+    )
+}
+
+fn pack_source(file: pack::ModrinthFile) -> Result<String, CliError> {
+    let url = file
+        .downloads
+        .into_iter()
+        .find(|url| url.starts_with("https://"))
+        .ok_or(CliError::PackDownloadMissing)?;
+    let (algorithm, digest) = file
+        .hashes
+        .get("sha512")
+        .map(|digest| ("sha512", digest))
+        .or_else(|| file.hashes.get("sha256").map(|digest| ("sha256", digest)))
+        .ok_or(CliError::PackHashMissing)?;
+    Ok(format!("{url}#{algorithm}={digest}"))
 }
 
 fn pack_export(
@@ -685,6 +766,12 @@ fn profile_command(
                     profile.mods.len()
                 )
             })?;
+        }
+        ProfileCommand::Remove { instance, name } => {
+            let opened = open(home, instance, console)?;
+            let name = Name::new(name)?;
+            opened.remove_profile(&name)?;
+            console.emit(&name, |out, name| writeln!(out, "Deleted profile {name}."))?;
         }
         ProfileCommand::List { instance } => {
             let opened = open(home, instance, console)?;

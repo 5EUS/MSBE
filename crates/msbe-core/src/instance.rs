@@ -812,6 +812,34 @@ impl Instance {
         Ok(profile)
     }
 
+    /// Deletes an inactive profile and its derived lockfile.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the profile is active, missing, or its state files cannot be
+    /// removed.
+    pub fn remove_profile(&self, profile: &Name) -> Result<(), InstanceError> {
+        if self.deployed_profile() == Some(profile) {
+            return Err(InstanceError::ProfileDeployed(profile.clone()));
+        }
+        let path = self.profile_path(profile);
+        if !path.is_file() {
+            return Err(InstanceError::UnknownProfile(profile.clone()));
+        }
+        fs::remove_file(&path).map_err(io_error("remove", &path))?;
+        let lockfile = self.dir.join("locks").join(format!("{profile}.toml"));
+        if let Err(error) = fs::remove_file(&lockfile)
+            && error.kind() != io::ErrorKind::NotFound
+        {
+            return Err(InstanceError::Io {
+                op: "remove",
+                path: lockfile,
+                source: error,
+            });
+        }
+        Ok(())
+    }
+
     /// Ingests files or archives into the store and adds each to `profile` as a mod. Either
     /// every artifact is added or none are.
     ///
@@ -1565,6 +1593,10 @@ pub enum InstanceError {
     /// A profile with this name already exists.
     #[error("profile {0} already exists")]
     ProfileExists(Name),
+
+    /// A profile cannot be removed while it is deployed.
+    #[error("profile {0} is currently deployed; deploy another profile or purge first")]
+    ProfileDeployed(Name),
 
     /// No profile has this name.
     #[error("no profile named {0}")]

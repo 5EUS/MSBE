@@ -376,6 +376,64 @@ fn pack_export_writes_verified_profile_files_as_overrides() {
 }
 
 #[test]
+fn pack_import_acquires_target_compatible_verified_modrinth_files() {
+    let world = World::new();
+    world.add_instance(Some("1.21.1"));
+    let url = "https://cdn.modrinth.test/imported.jar";
+    let bytes = b"imported bytes";
+    world
+        .modrinth
+        .files
+        .borrow_mut()
+        .insert(url.to_owned(), bytes.to_vec());
+    let index = json!({
+        "formatVersion": 1,
+        "files": [{
+            "downloads": [url],
+            "hashes": { "sha512": sha512_hex(bytes) },
+            "env": { "client": true, "server": false }
+        }]
+    });
+    let pack = world.zip(
+        "import.mrpack",
+        &[(
+            "modrinth.index.json",
+            serde_json::to_string(&index).unwrap().as_bytes(),
+        )],
+    );
+
+    let imported = world.json(&["pack", "import", "mc", pack.as_str()]);
+    assert_eq!(at(&imported, "/added"), &json!(["imported"]));
+    assert_eq!(world.msbe(&["deploy", "mc"]).code, exit::OK);
+    assert_eq!(
+        fs::read(world.game.join("mods/imported.jar")).unwrap(),
+        bytes
+    );
+}
+
+#[test]
+fn profile_remove_deletes_inactive_profiles_but_protects_active_ones() {
+    let world = World::new();
+    world.add_instance(Some("1.21.1"));
+    assert_eq!(
+        world.msbe(&["profile", "new", "mc", "temporary"]).code,
+        exit::OK
+    );
+    assert_eq!(
+        world.msbe(&["profile", "remove", "mc", "temporary"]).code,
+        exit::OK
+    );
+    world.json(&["deploy", "mc"]);
+    let rejected = world.msbe(&["profile", "remove", "mc", "default"]);
+    assert_eq!(rejected.code, exit::FAILURE);
+    assert!(
+        rejected.err.contains("currently deployed"),
+        "{}",
+        rejected.err
+    );
+}
+
+#[test]
 fn update_moves_modrinth_mods_forward_on_their_channel_and_deploys_like_any_change() {
     let world = World::new();
     let vanilla = snapshot(&world.game);
