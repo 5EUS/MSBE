@@ -7,7 +7,7 @@ use std::{
     collections::BTreeSet,
     ffi::OsString,
     io::{self, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -19,12 +19,13 @@ use msbe_core::{
         Name, NewInstance, Profile, Provenance, Status,
     },
 };
-use msbe_fsops::{Backend, NoopObserver, Operation};
+use msbe_fsops::{Backend, NoopObserver, Operation, RelPath};
 use msbe_providers::{
     HttpClient, HttpError,
+    direct::{self, DirectError, DirectSource},
     modrinth::{
-        Modrinth, ModrinthError, Requirement, Spec, Target, Update, UpdateCheck, Version,
-        VersionFile,
+        InstallPlan, Modrinth, ModrinthError, Requirement, Spec, Target, Update, UpdateCheck,
+        Version, VersionFile,
     },
 };
 use serde::Serialize;
@@ -37,6 +38,9 @@ const MODRINTH_PREFIX: &str = "modrinth:";
 
 /// The provider name recorded in a mod's provenance.
 const MODRINTH: &str = "modrinth";
+
+/// The provider name recorded for a direct download.
+const DIRECT: &str = "url";
 
 /// Opens a network client on first use, so commands that never touch the network never load
 /// the platform's certificates.
@@ -84,11 +88,12 @@ enum Command {
     /// Create, list and inspect profiles.
     #[command(subcommand)]
     Profile(ProfileCommand),
-    /// Add mods to a profile from local files, .zip archives, or Modrinth.
+    /// Add mods to a profile from local files, .zip archives, Modrinth, or https URLs.
     Add {
         /// The instance.
         instance: String,
-        /// Files, .zip archives, or modrinth:<project>[@<version>] references.
+        /// Files, .zip archives, modrinth:<project>[@<version>] references, or https:// URLs,
+        /// optionally pinned with #sha256=<hex> or #sha512=<hex>.
         #[arg(required = true, value_name = "SOURCE")]
         sources: Vec<String>,
         /// The profile to add to.
@@ -234,6 +239,8 @@ enum CliError {
     Instance(#[from] InstanceError),
     #[error(transparent)]
     Modrinth(#[from] ModrinthError),
+    #[error(transparent)]
+    Direct(#[from] DirectError),
     #[error(transparent)]
     Http(#[from] HttpError),
     #[error(
@@ -546,44 +553,43 @@ fn add(
     let profile = Name::new(profile)?;
     let mut artifacts = Vec::new();
     let mut specs = Vec::new();
+    let mut urls = Vec::new();
     for source in sources {
-        match source.strip_prefix(MODRINTH_PREFIX) {
-            Some(reference) => specs.push(Spec::parse(reference)?),
-            None => artifacts.push(Artifact {
+        if let Some(reference) = source.strip_prefix(MODRINTH_PREFIX) {
+            specs.push(Spec::parse(reference)?);
+        } else if source.starts_with("https://") || source.starts_with("http://") {
+            urls.push(DirectSource::parse(source)?);
+        } else {
+            artifacts.push(Artifact {
                 path: PathBuf::from(source),
                 module: None,
                 provider: None,
-            }),
+            });
         }
     }
 
     let mut report = AddReport::default();
     // Downloads must outlive the ingest below, so the scratch directory lives until the end.
-    let scratch = if specs.is_empty() {
+    let scratch = if specs.is_empty() && urls.is_empty() {
         None
     } else {
         Some(tempfile::tempdir_in(opened.scratch_dir()).map_err(CliError::Scratch)?)
     };
     if let Some(scratch) = &scratch {
         let existing = opened.profile(&profile)?;
-        let target = target(&opened)?;
         let client = (console.connect)()?;
-        let modrinth = Modrinth::new(client.as_ref());
-        let plan = modrinth.plan_install(&specs, &target, with_deps)?;
-        for selection in &plan.selections {
-            if let Some(name) = installed_from_modrinth(&existing, &selection.project.id) {
-                report.skipped.push(name.clone());
-                continue;
-            }
-            let path = modrinth.download(&selection.file, scratch.path())?;
-            artifacts.push(Artifact {
-                path,
-                module: Some(Name::sanitize(&selection.project.slug)?),
-                provider: Some(provenance(&selection.version, &selection.file)),
-            });
+        let mut fetch = Fetch {
+            existing: &existing,
+            scratch: scratch.path(),
+            artifacts: &mut artifacts,
+            report: &mut report,
+        };
+        if !specs.is_empty() {
+            let modrinth = Modrinth::new(client.as_ref());
+            let plan = modrinth.plan_install(&specs, &target(&opened)?, with_deps)?;
+            fetch.modrinth(&modrinth, plan)?;
         }
-        report.unresolved = plan.unresolved;
-        report.incompatible = plan.incompatible;
+        fetch.urls(client.as_ref(), &urls)?;
     }
     report.added = opened.add_artifacts(&profile, &artifacts)?;
 
@@ -610,6 +616,56 @@ fn add(
         )
     })?;
     Ok(exit::OK)
+}
+
+/// Downloads for `add`, collected as artifacts, skipping sources the profile already has.
+struct Fetch<'a> {
+    existing: &'a Profile,
+    scratch: &'a Path,
+    artifacts: &'a mut Vec<Artifact>,
+    report: &'a mut AddReport,
+}
+
+impl Fetch<'_> {
+    fn modrinth(&mut self, modrinth: &Modrinth<'_>, plan: InstallPlan) -> Result<(), CliError> {
+        for selection in &plan.selections {
+            if let Some(name) = installed_from(self.existing, MODRINTH, &selection.project.id) {
+                self.report.skipped.push(name.clone());
+                continue;
+            }
+            let path = modrinth.download(&selection.file, self.scratch)?;
+            self.artifacts.push(Artifact {
+                path,
+                module: Some(Name::sanitize(&selection.project.slug)?),
+                provider: Some(provenance(&selection.version, &selection.file)),
+            });
+        }
+        self.report.unresolved = plan.unresolved;
+        self.report.incompatible = plan.incompatible;
+        Ok(())
+    }
+
+    fn urls(&mut self, http: &dyn HttpClient, sources: &[DirectSource]) -> Result<(), CliError> {
+        for source in sources {
+            if let Some(name) = installed_from(self.existing, DIRECT, &source.url) {
+                self.report.skipped.push(name.clone());
+                continue;
+            }
+            let downloaded = direct::download(http, source, self.scratch)?;
+            self.artifacts.push(Artifact {
+                path: downloaded.path,
+                module: None,
+                provider: Some(Provenance {
+                    provider: DIRECT.to_owned(),
+                    project: source.url.clone(),
+                    version: downloaded.sha512.clone(),
+                    version_number: source.file_name.clone(),
+                    sha512: downloaded.sha512,
+                }),
+            });
+        }
+        Ok(())
+    }
 }
 
 fn update(
@@ -861,8 +917,16 @@ fn verify(home: &Home, instance: &str, console: &mut Console<'_>) -> Result<u8, 
     let opened = open(home, instance, console)?;
     let report = opened.verify()?;
     console.emit(&report, |out, report| {
-        if report.is_clean() {
+        if report.is_clean() && report.changed_at_runtime.is_empty() {
             return writeln!(out, "All {} deployed file(s) match.", report.checked);
+        }
+        if report.is_clean() {
+            return writeln!(
+                out,
+                "No drift in {} deployed file(s); {} mutable file(s) changed at runtime, as expected.",
+                report.checked,
+                report.changed_at_runtime.len()
+            );
         }
         for path in &report.missing {
             writeln!(out, "missing   {path}")?;
@@ -902,13 +966,14 @@ fn target(instance: &Instance) -> Result<Target, CliError> {
     })
 }
 
-fn installed_from_modrinth<'p>(profile: &'p Profile, project: &str) -> Option<&'p Name> {
+/// The mod in `profile` recorded as `project` from `provider`, if any.
+fn installed_from<'p>(profile: &'p Profile, provider: &str, project: &str) -> Option<&'p Name> {
     profile
         .mods
         .iter()
         .find(|(_, entry)| {
-            entry.provider.as_ref().is_some_and(|provider| {
-                provider.provider == MODRINTH && provider.project == project
+            entry.provider.as_ref().is_some_and(|recorded| {
+                recorded.provider == provider && recorded.project == project
             })
         })
         .map(|(name, _)| name)
@@ -956,9 +1021,21 @@ fn print_plan(out: &mut dyn Write, plan: &DeployPlan) -> io::Result<()> {
             Operation::Materialize { path, .. } => writeln!(out, "  + {path}")?,
             Operation::Remove { path } => writeln!(out, "  - {path}")?,
             Operation::CreateDir { path } => writeln!(out, "  + {path}/")?,
+            Operation::RemoveDir { path } => writeln!(out, "  - {path}/")?,
         }
     }
+    print_kept(out, &plan.kept)?;
     print_excluded(out, &plan.excluded)
+}
+
+fn print_kept(out: &mut dyn Write, kept: &[RelPath]) -> io::Result<()> {
+    for path in kept {
+        writeln!(
+            out,
+            "  kept {path}: it changed on disk, so its mod's new default was not applied"
+        )?;
+    }
+    Ok(())
 }
 
 fn print_deploy(out: &mut dyn Write, report: &DeployReport) -> io::Result<()> {
@@ -970,6 +1047,14 @@ fn print_deploy(out: &mut dyn Write, report: &DeployReport) -> io::Result<()> {
     for (backend, count) in &report.backends {
         writeln!(out, "  {count} file(s) via {}", backend_label(*backend))?;
     }
+    if report.removed_dirs > 0 {
+        writeln!(
+            out,
+            "  {} empty directory(ies) MSBE had created were removed",
+            report.removed_dirs
+        )?;
+    }
+    print_kept(out, &report.kept)?;
     print_excluded(out, &report.excluded)
 }
 

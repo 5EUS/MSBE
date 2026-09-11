@@ -34,7 +34,7 @@ impl Observer for CrashAt {
 
 /// One transaction covering every operation kind and every prior state: a new file in new
 /// nested directories, overwrites of a vanilla file, an executable and a read-only file, a
-/// removal, and a mutable (copied) file.
+/// removal, a mutable (copied) file, and removing an empty directory.
 fn scenario(applier: &Applier) -> Vec<Operation> {
     let store = applier.store();
     let module = store.put_bytes(b"new module").unwrap();
@@ -69,6 +69,7 @@ fn scenario(applier: &Applier) -> Vec<Operation> {
             blob: settings,
             mutable: true,
         },
+        Operation::RemoveDir { path: rel("logs") },
     ]
 }
 

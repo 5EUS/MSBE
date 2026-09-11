@@ -195,6 +195,10 @@ impl Applier {
         let mut planned = Vec::with_capacity(operations.len());
         let mut dirs = BTreeSet::new();
         for operation in operations {
+            if let Operation::RemoveDir { path } = operation {
+                self.plan_remove_dir(path, &mut planned)?;
+                continue;
+            }
             let path = operation.path();
             for ancestor in path.ancestors() {
                 if dirs.contains(&ancestor) {
@@ -234,10 +238,28 @@ impl Applier {
                 Operation::Materialize { .. } | Operation::Remove { .. } => {
                     planned.push(operation.clone());
                 }
+                // Planned above, before its ancestors could gain directory creation steps.
+                Operation::RemoveDir { .. } => {}
             }
         }
+        check_removed_dirs(&self.root, &planned)?;
         self.verify_blobs(&planned)?;
         Ok(planned)
+    }
+
+    /// Plans removing a directory that exists. An absent one needs nothing; a file there is
+    /// an error.
+    fn plan_remove_dir(&self, path: &RelPath, planned: &mut Vec<Operation>) -> Result<()> {
+        match stat(&self.resolve(path)?)? {
+            Kind::Dir => planned.push(Operation::RemoveDir { path: path.clone() }),
+            Kind::Absent => {}
+            Kind::File { .. } => {
+                return Err(Error::NotADirectory {
+                    path: path.to_path(&self.root),
+                });
+            }
+        }
+        Ok(())
     }
 
     /// Re-hashes every distinct blob about to be placed. A blob damaged by an in-place write
@@ -247,7 +269,9 @@ impl Applier {
             .iter()
             .filter_map(|operation| match operation {
                 Operation::Materialize { blob, .. } => Some(*blob),
-                Operation::CreateDir { .. } | Operation::Remove { .. } => None,
+                Operation::CreateDir { .. }
+                | Operation::Remove { .. }
+                | Operation::RemoveDir { .. } => None,
             })
             .collect();
         blobs.iter().try_for_each(|blob| self.store.verify(blob))
@@ -297,6 +321,12 @@ impl Applier {
                 }
                 None
             }
+            Operation::RemoveDir { .. } => {
+                if prior == Prior::Dir && sys::remove_dir_if_empty(&target)? {
+                    atomic::sync_parent(&target)?;
+                }
+                None
+            }
         };
         observer.checkpoint(Checkpoint::Applied { index })?;
         Ok(backend)
@@ -317,7 +347,14 @@ impl Applier {
     /// Returns `target` to `prior`, whatever state an interrupted operation left it in.
     fn restore(&self, target: &Path, prior: &Prior) -> Result<()> {
         match (prior, stat(target)?) {
-            (Prior::Dir, _) | (Prior::Absent, Kind::Absent) => Ok(()),
+            (Prior::Dir, Kind::Dir) | (Prior::Absent, Kind::Absent) => Ok(()),
+            (Prior::Dir, Kind::Absent) => {
+                fs::create_dir_all(target).at("create directory", target)?;
+                atomic::sync_parent(target)
+            }
+            (Prior::Dir, Kind::File { .. }) => Err(Error::NotADirectory {
+                path: target.to_path_buf(),
+            }),
             (Prior::Absent, Kind::Dir) => {
                 sys::remove_dir_if_empty(target)?;
                 Ok(())
@@ -425,6 +462,42 @@ fn stat(target: &Path) -> Result<Kind> {
             path: target.to_path_buf(),
             source,
         }),
+    }
+}
+
+/// Refuses a transaction that removes a directory while also creating or placing something
+/// inside it. Removing files inside it is allowed: that is how a directory gets emptied.
+fn check_removed_dirs(root: &Path, planned: &[Operation]) -> Result<()> {
+    let removed: BTreeSet<&RelPath> = planned
+        .iter()
+        .filter_map(|operation| match operation {
+            Operation::RemoveDir { path } => Some(path),
+            Operation::CreateDir { .. }
+            | Operation::Materialize { .. }
+            | Operation::Remove { .. } => None,
+        })
+        .collect();
+    let conflict = planned
+        .iter()
+        .filter(|operation| {
+            matches!(
+                operation,
+                Operation::CreateDir { .. } | Operation::Materialize { .. }
+            )
+        })
+        .map(Operation::path)
+        .find(|path| {
+            removed.contains(*path)
+                || path
+                    .ancestors()
+                    .iter()
+                    .any(|ancestor| removed.contains(ancestor))
+        });
+    match conflict {
+        Some(path) => Err(Error::DirectoryInUse {
+            path: path.to_path(root),
+        }),
+        None => Ok(()),
     }
 }
 
@@ -629,6 +702,50 @@ mod tests {
             fs::read(fixture.root.join("mods/module.pak")).unwrap(),
             b"pristine"
         );
+    }
+
+    #[test]
+    fn empty_directories_are_removed_and_restored_but_never_ones_with_contents() {
+        let fixture = Fixture::new();
+        let original = snapshot(&fixture.root);
+        let mut applier = fixture.applier();
+        let report = applier
+            .apply(
+                &[
+                    Operation::RemoveDir { path: rel("logs") },
+                    Operation::RemoveDir {
+                        path: rel("data/packs"),
+                    },
+                    Operation::RemoveDir {
+                        path: rel("never-existed"),
+                    },
+                ],
+                &mut NoopObserver,
+            )
+            .unwrap();
+        assert!(!fixture.root.join("logs").exists());
+        assert!(fixture.root.join("data/packs/base.pak").is_file());
+
+        applier.rollback(report.txn).unwrap();
+        assert_eq!(snapshot(&fixture.root), original);
+    }
+
+    #[test]
+    fn a_transaction_cannot_write_inside_a_directory_it_removes() {
+        let fixture = Fixture::new();
+        let mut applier = fixture.applier();
+        let blob = applier.store().put_bytes(b"x").unwrap();
+        let error = applier
+            .apply(
+                &[
+                    Operation::RemoveDir { path: rel("logs") },
+                    place("logs/new.log", blob, false),
+                ],
+                &mut NoopObserver,
+            )
+            .unwrap_err();
+        assert!(matches!(error, Error::DirectoryInUse { .. }), "{error:?}");
+        assert!(applier.journal().records().is_empty());
     }
 
     #[test]

@@ -56,6 +56,13 @@ pub enum Error {
         path: PathBuf,
     },
 
+    /// A transaction removes a directory while also creating or placing something inside it.
+    #[error("{} is inside a directory the same transaction removes", .path.display())]
+    DirectoryInUse {
+        /// The path inside the removed directory.
+        path: PathBuf,
+    },
+
     /// A blob's contents no longer match its digest.
     #[error("blob {expected} is corrupt: its contents hash to {actual}")]
     Corrupt {

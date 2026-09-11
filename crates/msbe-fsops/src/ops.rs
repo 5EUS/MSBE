@@ -28,15 +28,22 @@ pub enum Operation {
         /// The file.
         path: RelPath,
     },
+    /// Removes a directory if it is empty. One that still holds anything is left in place, so
+    /// nothing unmanaged inside it is ever deleted.
+    RemoveDir {
+        /// The directory.
+        path: RelPath,
+    },
 }
 
 impl Operation {
     /// The path the operation acts on.
     pub fn path(&self) -> &RelPath {
         match self {
-            Self::CreateDir { path } | Self::Materialize { path, .. } | Self::Remove { path } => {
-                path
-            }
+            Self::CreateDir { path }
+            | Self::Materialize { path, .. }
+            | Self::Remove { path }
+            | Self::RemoveDir { path } => path,
         }
     }
 }

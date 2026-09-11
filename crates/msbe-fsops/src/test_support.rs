@@ -10,8 +10,8 @@ use tempfile::TempDir;
 
 use crate::{Applier, Journal, RelPath, Store};
 
-/// A small instance with vanilla files, including an executable and a read-only file, plus a
-/// store and journal beside it on the same volume.
+/// A small instance with vanilla files, including an executable and a read-only file, and an
+/// empty directory, plus a store and journal beside it on the same volume.
 pub(crate) struct Fixture {
     _dir: TempDir,
     pub(crate) root: PathBuf,
@@ -25,6 +25,7 @@ impl Fixture {
         let root = dir.path().join("instance");
         fs::create_dir_all(root.join("data/packs")).unwrap();
         fs::create_dir_all(root.join("bin")).unwrap();
+        fs::create_dir_all(root.join("logs")).unwrap();
         fs::write(root.join("data/packs/base.pak"), b"base pack").unwrap();
         fs::write(root.join("data/packs/extra.pak"), b"extra pack").unwrap();
         fs::write(root.join("bin/run.sh"), b"#!/bin/sh\nexit 0\n").unwrap();

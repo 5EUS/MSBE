@@ -14,6 +14,7 @@ use crate::{
     atomic,
     error::{Error, IoResultExt, Result},
     ops::{Operation, Prior},
+    relpath::RelPath,
 };
 
 /// Identifies one transaction. Assigned in increasing order and never reused.
@@ -199,6 +200,24 @@ impl Journal {
         live.into_iter().collect()
     }
 
+    /// Directories that live transactions created where nothing existed, so a caller can prune
+    /// them once nothing needs them. A directory that was already there is never included.
+    pub fn created_dirs(&self) -> BTreeSet<RelPath> {
+        let live: BTreeSet<TxnId> = self.live_transactions().into_iter().collect();
+        self.records
+            .iter()
+            .filter_map(|record| match record {
+                Record::Op {
+                    txn,
+                    operation: Operation::CreateDir { path },
+                    prior: Prior::Absent,
+                    ..
+                } if live.contains(txn) => Some(path.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// The operations recorded for `txn`, in the order they ran.
     pub(crate) fn operations(&self, txn: TxnId) -> Vec<(usize, Operation, Prior)> {
         self.records
@@ -288,6 +307,40 @@ mod tests {
             Journal::open(&path),
             Err(Error::JournalCorrupt { line: 1, .. })
         ));
+    }
+
+    #[test]
+    fn created_dirs_come_only_from_live_transactions_where_nothing_existed() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut journal = Journal::open(dir.path().join("journal.jsonl")).unwrap();
+        let create = |txn, path: &str, prior| Record::Op {
+            txn: TxnId(txn),
+            index: 0,
+            operation: Operation::CreateDir {
+                path: RelPath::new(path).unwrap(),
+            },
+            prior,
+        };
+        for record in [
+            Record::Begin { txn: TxnId(1) },
+            create(1, "made", Prior::Absent),
+            create(1, "already-there", Prior::Dir),
+            Record::Commit { txn: TxnId(1) },
+            Record::Begin { txn: TxnId(2) },
+            create(2, "undone", Prior::Absent),
+            Record::Commit { txn: TxnId(2) },
+            Record::RolledBack { txn: TxnId(2) },
+            Record::Begin { txn: TxnId(3) },
+            create(3, "never-committed", Prior::Absent),
+        ] {
+            journal.append(record).unwrap();
+        }
+        let created: Vec<String> = journal
+            .created_dirs()
+            .iter()
+            .map(|path| path.as_str().to_owned())
+            .collect();
+        assert_eq!(created, ["made"]);
     }
 
     #[test]

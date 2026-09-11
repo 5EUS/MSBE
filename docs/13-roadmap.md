@@ -86,18 +86,18 @@ Providers: local file, direct URL, then **Modrinth** — no auth, no browser, re
 profiles switch, `verify`, `rollback`, and `purge` returns the instance byte-identical to
 vanilla — on Linux, Windows and macOS, entirely from the CLI.
 
-**Status (2026-09-11): local files and Modrinth work end to end.** Tested on Linux, including
+**Status (2026-09-11): local files, direct URLs and Modrinth work end to end.** Tested on Linux, including
 live against api.modrinth.com; the crates that do not link `ring` are lint-clean for Windows:
 
 | Piece | State |
 |---|---|
-| `msbe-fsops`: store shard, capability probe, journaled applier, rollback, crash recovery, verify-before-link with store repair, read-only-safe replacement | done, with crash injection at every checkpoint; the Windows path is tested with simulated Windows semantics but has not run on Windows |
-| `msbe-plan-schema` and the resolver: loaders, extract and place steps, exclusion report | done |
+| `msbe-fsops`: store shard, capability probe, journaled applier, rollback, crash recovery, verify-before-link with store repair, read-only-safe replacement, empty-directory removal | done, with crash injection at every checkpoint; the Windows path is tested with simulated Windows semantics but has not run on Windows |
+| `msbe-plan-schema` and the resolver: loaders, extract and place steps, exclusion report, `[deploy] mutable` paths | done |
 | `msbe-archive`: bare-file and `.zip` ingest, refusing unsafe paths, symlinks, bombs, oversized files and case collisions | done; a deterministic mutation suite (every truncation and byte flip, plus random mutations, plus lying size headers) runs on stable, cargo-fuzz targets not yet |
-| `msbe-core::instance`: profiles, diff-based deploy (which is how profiles switch), conflict detection, verify, rollback, purge, provenance, and a two-phase commit with the journal | done |
-| `msbe-providers`: Modrinth search, version selection by loader (including provided APIs) and game version, size- and SHA-512-verified HTTPS downloads, a required-dependency walk, and update checks through the bulk hash endpoints that keep each mod on its release channel | done; the walk is not a solver |
-| `msbe-http`: HTTPS over rustls and `ring`, roots from the OS trust store, an identifying User-Agent, rate-limit reporting | done |
-| `msbe-cli`: `instance add\|set\|list`, `profile`, `add` (files, archives, `modrinth:<project>[@version]`, `--with-deps`), `search`, `update [<mod>...] [--dry-run]`, `remove`, `deploy [--dry-run]`, `rollback`, `purge`, `verify`, `status`, `--format json`, exit codes 0/1/2/4/7 | done; end-to-end tests purge to byte-identical vanilla |
+| `msbe-core::instance`: profiles, diff-based deploy (which is how profiles switch), conflict detection, verify, rollback, purge, provenance, mutable files that keep runtime changes, removal of directories MSBE created once nothing needs them, and a two-phase commit with the journal | done |
+| `msbe-providers`: direct https URLs with pinned checksums; Modrinth search, version selection by loader (including provided APIs) and game version, size- and SHA-512-verified HTTPS downloads, a required-dependency walk, and update checks through the bulk hash endpoints that keep each mod on its release channel | done; the walk is not a solver |
+| `msbe-http`: HTTPS over rustls and `ring`, roots from the OS trust store, https only (redirects included), an identifying User-Agent, rate-limit reporting | done |
+| `msbe-cli`: `instance add\|set\|list`, `profile`, `add` (files, archives, `https://` URLs, `modrinth:<project>[@version]`, `--with-deps`), `search`, `update [<mod>...] [--dry-run]`, `remove`, `deploy [--dry-run]`, `rollback`, `purge`, `verify`, `status`, `--format json`, exit codes 0/1/2/4/7 | done; end-to-end tests purge to byte-identical vanilla |
 | `plans/minecraft/plan.toml` for Fabric, Quilt and NeoForge | done |
 
 Still open in M1:
@@ -105,8 +105,6 @@ Still open in M1:
 - **A Windows run.** Replacing a read-only hardlink, which Windows refuses for a plain rename,
   is now handled (`docs/04` §4.2), and removal already works through the standard library.
   The tests simulate Windows semantics, but the suite has not yet run on Windows itself.
-- **Plan-declared mutable paths** (`docs/04` §4.2). Every deployed file is currently treated
-  as immutable.
 - **Fuzz targets** for `msbe-archive` (a stable-toolchain mutation suite covers the gap for
   now), **macOS** runs, and the **daemon**.
 - **State storage.** Profiles and deployment history are TOML and JSON files. SQLite is

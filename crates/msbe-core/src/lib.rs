@@ -10,7 +10,7 @@ pub mod config;
 pub mod instance;
 
 use msbe_fsops::{Applier, Digest, Observer, Operation, RelPath, Result as FsResult, TxnReport};
-use msbe_plan_schema::{ExtractStep, Hygiene, Plan, Step, ValidationError};
+use msbe_plan_schema::{ExtractStep, Hygiene, Loader, Plan, Step, ValidationError};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -100,6 +100,7 @@ pub fn resolve(
         .ok_or_else(|| ResolveError::UnknownLoader(loader_id.to_owned()))?;
 
     let (files, excluded) = filter_files(plan, files);
+    let mutable_globs = mutable_globs(plan, loader);
     let mut operations = Vec::new();
     for step in &plan.steps {
         let Step::Place(place) = step else {
@@ -125,10 +126,14 @@ pub fn resolve(
                 file.source.as_str()
             };
             let path = RelPath::new(&format!("{}/{}", target.path, source))?;
+            let mutable = file.mutable
+                || mutable_globs
+                    .iter()
+                    .any(|glob| matches_glob(glob, path.as_str()));
             operations.push(Operation::Materialize {
                 path,
                 blob: file.blob,
-                mutable: file.mutable,
+                mutable,
             });
         }
     }
@@ -136,6 +141,28 @@ pub fn resolve(
         operations,
         excluded,
     })
+}
+
+/// The plan's mutable globs with `@loader.targets.<name>` expanded for `loader`. A glob naming
+/// a target this loader does not declare cannot match anything it places, so it is dropped.
+fn mutable_globs(plan: &Plan, loader: &Loader) -> Vec<String> {
+    plan.deploy
+        .mutable
+        .iter()
+        .filter_map(|pattern| {
+            let Some(reference) = pattern.strip_prefix("@loader.targets.") else {
+                return Some(pattern.clone());
+            };
+            let (name, rest) = reference
+                .split_once('/')
+                .map_or((reference, None), |(name, rest)| (name, Some(rest)));
+            let target = loader.targets.iter().find(|target| target.name == name)?;
+            Some(rest.map_or_else(
+                || target.path.clone(),
+                |rest| format!("{}/{rest}", target.path),
+            ))
+        })
+        .collect()
 }
 
 fn filter_files<'a>(
@@ -297,7 +324,8 @@ pub enum ResolveError {
 mod tests {
     use msbe_fsops::{Digest, Operation, RelPath};
     use msbe_plan_schema::{
-        ExtractStep, Hygiene, Loader, NamedPath, PlaceStep, Plan, SCHEMA_VERSION, Side, Step,
+        Deploy, ExtractStep, Hygiene, Loader, NamedPath, PlaceStep, Plan, SCHEMA_VERSION, Side,
+        Step,
     };
 
     use super::{ExclusionReason, ResolveError, ResolvedFile, matches_glob, resolve};
@@ -308,6 +336,7 @@ mod tests {
             id: "example".to_owned(),
             name: "Example".to_owned(),
             version: "1.0.0".to_owned(),
+            deploy: Deploy::default(),
             loaders: vec![Loader {
                 id: "loader".to_owned(),
                 provides: Vec::new(),
@@ -349,6 +378,30 @@ mod tests {
             panic!("expected one materialize operation");
         };
         assert_eq!(path.as_str(), "mods/release/example.jar");
+    }
+
+    #[test]
+    fn plan_declared_mutable_globs_mark_placed_files_by_their_destination() {
+        let mut plan = plan(true);
+        plan.deploy.mutable = vec!["@loader.targets.mods/*.cfg".to_owned()];
+        let resolved = resolve(
+            &plan,
+            "loader",
+            &[file("release/example.jar"), file("release/settings.cfg")],
+        )
+        .unwrap();
+        let flags: Vec<(&str, bool)> = resolved
+            .operations
+            .iter()
+            .filter_map(|operation| match operation {
+                Operation::Materialize { path, mutable, .. } => Some((path.as_str(), *mutable)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            flags,
+            [("mods/example.jar", false), ("mods/settings.cfg", true)]
+        );
     }
 
     #[test]

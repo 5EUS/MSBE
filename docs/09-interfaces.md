@@ -9,7 +9,8 @@ from the CLI, and the test fails the build if one is not.
 Rust + `clap`. Nouns and verbs match the domain model exactly.
 
 > **Implemented so far (M1):** `instance add|set|list`, `profile new|list|show`, `add`
-> (local files, `.zip` archives, and `modrinth:<project>[@<version>]` with `--with-deps`),
+> (local files, `.zip` archives, `https://` URLs optionally pinned with `#sha256=` or
+> `#sha512=`, and `modrinth:<project>[@<version>]` with `--with-deps`),
 > `search`, `update [<mod>...] [--dry-run]` (Modrinth mods, staying on each mod's release
 > channel), `remove`, `deploy [--dry-run]`, `rollback`, `purge`, `verify` and `status`, with
 > `--format json` and `--home`. Exit codes 0, 1, 2, 4 and 7 behave as specified below; the

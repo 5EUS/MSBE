@@ -6,18 +6,20 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
-    fmt::{self, Write as _},
+    fmt,
     fs::File,
-    io::{self, Write},
+    io,
     path::{Path, PathBuf},
 };
 
 use msbe_fsops::RelPath;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use sha2::{Digest as _, Sha512};
 use thiserror::Error;
 
-use crate::http::{HttpClient, HttpError};
+use crate::{
+    hashing::HashingWriter,
+    http::{HttpClient, HttpError},
+};
 
 /// Modrinth's production API.
 pub const API_BASE: &str = "https://api.modrinth.com/v2";
@@ -488,23 +490,18 @@ impl<'a> Modrinth<'a> {
             path: path.clone(),
             source,
         };
-        let output = File::create_new(&path).map_err(io_error)?;
-        let mut sink = HashingWriter {
-            inner: output,
-            hasher: Sha512::new(),
-            written: 0,
-        };
+        let mut sink = HashingWriter::new(File::create_new(&path).map_err(io_error)?);
         self.http.download(&file.url, &mut sink, file.size)?;
-        sink.inner.sync_all().map_err(io_error)?;
+        sink.inner().sync_all().map_err(io_error)?;
 
-        if sink.written != file.size {
+        if sink.written() != file.size {
             return Err(ModrinthError::SizeMismatch {
                 file: file.filename.clone(),
                 expected: file.size,
-                actual: sink.written,
+                actual: sink.written(),
             });
         }
-        let actual = hex(&sink.hasher.finalize());
+        let actual = sink.sha512_hex();
         if !actual.eq_ignore_ascii_case(&file.hashes.sha512) {
             return Err(ModrinthError::HashMismatch {
                 file: file.filename.clone(),
@@ -742,26 +739,6 @@ pub enum ModrinthError {
     },
 }
 
-/// Hashes everything written through it.
-struct HashingWriter<W> {
-    inner: W,
-    hasher: Sha512,
-    written: u64,
-}
-
-impl<W: Write> Write for HashingWriter<W> {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let accepted = self.inner.write(buf)?;
-        self.hasher.update(buf.get(..accepted).unwrap_or_default());
-        self.written += accepted as u64;
-        Ok(accepted)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.inner.flush()
-    }
-}
-
 /// Whether `raw` can be a slug, id or version number, and is safe as one URL path segment.
 fn is_reference(raw: &str) -> bool {
     !raw.is_empty()
@@ -849,16 +826,6 @@ fn lowercase_keys<V>(map: BTreeMap<String, V>) -> BTreeMap<String, V> {
         .collect()
 }
 
-fn hex(bytes: &[u8]) -> String {
-    bytes
-        .iter()
-        .fold(String::with_capacity(bytes.len() * 2), |mut out, byte| {
-            // Formatting into a String cannot fail.
-            let _ = write!(out, "{byte:02x}");
-            out
-        })
-}
-
 #[cfg(test)]
 mod tests {
     use std::{cell::RefCell, collections::BTreeMap, io::Write};
@@ -867,9 +834,12 @@ mod tests {
     use sha2::{Digest as _, Sha512};
 
     use super::{
-        Modrinth, ModrinthError, Requirement, Spec, Target, UpdateCheck, Version, VersionType, hex,
+        Modrinth, ModrinthError, Requirement, Spec, Target, UpdateCheck, Version, VersionType,
     };
-    use crate::http::{HttpClient, HttpError};
+    use crate::{
+        hashing::hex,
+        http::{HttpClient, HttpError},
+    };
 
     const BASE: &str = "https://api.modrinth.com/v2";
 

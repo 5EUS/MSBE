@@ -25,6 +25,9 @@ pub struct Plan {
     pub name: String,
     /// The plan's own version.
     pub version: String,
+    /// How resolved files are deployed.
+    #[serde(default)]
+    pub deploy: Deploy,
     /// The loading regimes supported by the game.
     #[serde(default)]
     pub loaders: Vec<Loader>,
@@ -58,6 +61,58 @@ impl Plan {
 
         for step in &self.steps {
             step.validate()?;
+        }
+        self.deploy.validate(&self.loaders)
+    }
+}
+
+/// The prefix that addresses a loader's deployment targets.
+const TARGET_PREFIX: &str = "@loader.targets.";
+
+/// Deployment settings that apply to every placed file. Stored as the `[deploy]` table.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Deploy {
+    /// Globs over deployed, instance-relative paths that the game or its mods rewrite at
+    /// runtime, such as `config/**`. A glob may start with `@loader.targets.<name>`, which
+    /// stands for that target's directory under the instance's loader. Matching files are
+    /// always copied, never linked, and runtime changes to them are not drift.
+    #[serde(default)]
+    pub mutable: Vec<String>,
+}
+
+impl Deploy {
+    fn validate(&self, loaders: &[Loader]) -> Result<(), ValidationError> {
+        for pattern in &self.mutable {
+            let invalid = |reason: &'static str| ValidationError::InvalidMutablePattern {
+                pattern: pattern.clone(),
+                reason,
+            };
+            let glob = match pattern.strip_prefix(TARGET_PREFIX) {
+                Some(reference) => {
+                    let (name, rest) = reference
+                        .split_once('/')
+                        .map_or((reference, None), |(name, rest)| (name, Some(rest)));
+                    let declared = loaders
+                        .iter()
+                        .any(|loader| loader.targets.iter().any(|target| target.name == name));
+                    if !declared {
+                        return Err(invalid("it names a target no loader declares"));
+                    }
+                    rest
+                }
+                None if pattern.starts_with('@') => {
+                    return Err(invalid(
+                        "only @loader.targets.<name> references are supported",
+                    ));
+                }
+                None => Some(pattern.as_str()),
+            };
+            if glob.is_some_and(|glob| !is_relative_path(glob)) {
+                return Err(invalid(
+                    "it must be a relative path without empty, '.' or '..' parts, '\\' or ':'",
+                ));
+            }
         }
         Ok(())
     }
@@ -233,6 +288,14 @@ pub enum ValidationError {
     /// A glob rule was blank.
     #[error("archive filter patterns must not be empty")]
     EmptyPattern,
+    /// A mutable path pattern is malformed.
+    #[error("invalid mutable path pattern {pattern:?}: {reason}")]
+    InvalidMutablePattern {
+        /// The pattern.
+        pattern: String,
+        /// The rule it broke.
+        reason: &'static str,
+    },
 }
 
 fn require_text(field: &'static str, value: &str) -> Result<(), ValidationError> {
@@ -254,7 +317,10 @@ fn is_relative_path(path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{Hygiene, Loader, NamedPath, PlaceStep, Plan, SCHEMA_VERSION, Side, Step};
+    use super::{
+        Deploy, Hygiene, Loader, NamedPath, PlaceStep, Plan, SCHEMA_VERSION, Side, Step,
+        ValidationError,
+    };
 
     fn minecraft_plan() -> Plan {
         Plan {
@@ -262,6 +328,7 @@ mod tests {
             id: "minecraft".to_owned(),
             name: "Minecraft".to_owned(),
             version: "1.0.0".to_owned(),
+            deploy: Deploy::default(),
             loaders: vec![Loader {
                 id: "fabric".to_owned(),
                 provides: Vec::new(),
@@ -310,6 +377,35 @@ mod tests {
             sides: vec![Side::Client],
         });
         assert!(plan.validate().is_err());
+    }
+
+    #[test]
+    fn mutable_patterns_are_relative_and_reference_only_declared_targets() {
+        let mut plan = minecraft_plan();
+        plan.deploy.mutable = vec![
+            "config/**".to_owned(),
+            "@loader.targets.mods/*.cfg".to_owned(),
+        ];
+        plan.validate().unwrap();
+
+        for bad in [
+            "",
+            "../config/**",
+            "/etc/**",
+            "config\\x",
+            "@loader.targets.config/**",
+            "@paths.mods/**",
+        ] {
+            let mut plan = minecraft_plan();
+            plan.deploy.mutable = vec![bad.to_owned()];
+            assert!(
+                matches!(
+                    plan.validate(),
+                    Err(ValidationError::InvalidMutablePattern { .. })
+                ),
+                "{bad:?}"
+            );
+        }
     }
 
     #[test]

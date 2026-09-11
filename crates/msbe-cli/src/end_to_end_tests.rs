@@ -14,7 +14,7 @@ use std::{
 
 use msbe_providers::{HttpClient, HttpError};
 use serde_json::{Value, json};
-use sha2::{Digest as _, Sha512};
+use sha2::{Digest as _, Sha256, Sha512};
 use tempfile::TempDir;
 use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
@@ -202,12 +202,18 @@ fn requires(project: &str) -> Value {
 }
 
 fn sha512_hex(bytes: &[u8]) -> String {
-    Sha512::digest(bytes)
-        .iter()
-        .fold(String::new(), |mut out, byte| {
-            write!(out, "{byte:02x}").unwrap();
-            out
-        })
+    hex(&Sha512::digest(bytes))
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    hex(&Sha256::digest(bytes))
+}
+
+fn hex(digest: &[u8]) -> String {
+    digest.iter().fold(String::new(), |mut out, byte| {
+        write!(out, "{byte:02x}").unwrap();
+        out
+    })
 }
 
 struct World {
@@ -710,5 +716,50 @@ fn usage_errors_and_bad_references_have_distinct_exit_codes() {
         bad_reference.err.contains("not a valid Modrinth"),
         "{}",
         bad_reference.err
+    );
+}
+
+#[test]
+fn direct_urls_install_with_pinned_checksums_and_refuse_plain_http() {
+    let world = World::new();
+    // A direct download needs no game version.
+    world.add_instance(None);
+    let url = "https://files.example.test/mods/extra-1.0.jar";
+    let bytes = b"extra mod bytes";
+    world
+        .modrinth
+        .files
+        .borrow_mut()
+        .insert(url.to_owned(), bytes.to_vec());
+    let mods = || at(&world.json(&["profile", "show", "mc"]), "/mods").clone();
+
+    let wrong = format!("{url}#sha256={}", "0".repeat(64));
+    let refused = world.msbe(&["add", "mc", wrong.as_str()]);
+    assert_eq!(refused.code, exit::FAILURE);
+    assert!(refused.err.contains("SHA-256"), "{}", refused.err);
+    let insecure = world.msbe(&["add", "mc", "http://files.example.test/mods/extra-1.0.jar"]);
+    assert_eq!(insecure.code, exit::FAILURE);
+    assert!(insecure.err.contains("insecure"), "{}", insecure.err);
+    assert_eq!(mods(), json!({}));
+
+    let pinned = format!("{url}#sha256={}", sha256_hex(bytes));
+    let added = world.json(&["add", "mc", pinned.as_str()]);
+    assert_eq!(at(&added, "/added"), &json!(["extra-1.0"]));
+    let installed = mods();
+    assert_eq!(at(&installed, "/extra-1.0/provider/provider"), "url");
+    assert_eq!(at(&installed, "/extra-1.0/provider/project"), url);
+    assert_eq!(
+        at(&installed, "/extra-1.0/provider/sha512"),
+        sha512_hex(bytes).as_str()
+    );
+    assert_eq!(
+        at(&world.json(&["add", "mc", url]), "/skipped"),
+        &json!(["extra-1.0"])
+    );
+
+    world.json(&["deploy", "mc"]);
+    assert_eq!(
+        fs::read(world.game.join("mods/extra-1.0.jar")).unwrap(),
+        bytes
     );
 }

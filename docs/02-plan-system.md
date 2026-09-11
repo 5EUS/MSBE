@@ -193,6 +193,12 @@ level = "warn"
 message = "NMS becomes unstable past roughly 100 .pak files."
 ```
 
+> **Implemented in M1:** `schema`, `id`, `name`, `version`, `[[loaders]]` (with `targets`
+> written as a list of `{ name, path }`), the `extract` and `place` steps, and one `[deploy]`
+> key, `mutable`. It holds globs over deployed paths, which may start with
+> `@loader.targets.<name>`; matching files are always copied, and runtime changes to them
+> are not drift ([04 §4.2](04-deployment-engine.md)). The rest of this manifest is planned.
+
 ### Declaring loaders
 
 A plan declares the loading regimes its game supports; it does **not** need one plan per

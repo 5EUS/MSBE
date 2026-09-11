@@ -17,6 +17,7 @@
 //! promotes or discards it according to whether the journal shows it committed.
 
 use std::{
+    cmp::Reverse,
     collections::{BTreeMap, BTreeSet},
     fmt,
     fs::{self, File},
@@ -228,6 +229,9 @@ pub struct Deployed {
     pub profile: Name,
     /// Every managed file afterwards, with its expected contents.
     pub files: BTreeMap<RelPath, Digest>,
+    /// The managed files the plan declares mutable. Runtime changes to them are expected.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub mutable: BTreeSet<RelPath>,
 }
 
 /// Deployments by live transaction, plus one not yet confirmed by the journal.
@@ -249,10 +253,15 @@ pub struct DeployPlan {
     pub operations: Vec<Operation>,
     /// Managed files already in their target state.
     pub unchanged: usize,
+    /// Mutable files changed on disk whose mod now ships a different default. The local
+    /// changes are kept and the new default is not applied.
+    pub kept: Vec<RelPath>,
     /// Files the plan withheld from deployment, with the mod and rule responsible.
     pub excluded: Vec<ModExclusion>,
     #[serde(skip)]
     target: BTreeMap<RelPath, Digest>,
+    #[serde(skip)]
+    mutable: BTreeSet<RelPath>,
 }
 
 /// A file in one mod's artifact that the plan excluded.
@@ -293,8 +302,12 @@ pub struct DeployReport {
     pub placed: usize,
     /// Managed files removed.
     pub removed: usize,
+    /// Empty directories MSBE had created that were removed.
+    pub removed_dirs: usize,
     /// Managed files that were already correct.
     pub unchanged: usize,
+    /// Mutable files whose local changes were kept instead of a new default.
+    pub kept: Vec<RelPath>,
     /// How many files each materialization backend placed.
     pub backends: BTreeMap<Backend, usize>,
     /// Files the plan withheld from deployment.
@@ -312,6 +325,8 @@ pub struct VerifyReport {
     pub missing: Vec<RelPath>,
     /// Deployed files whose contents changed.
     pub modified: Vec<RelPath>,
+    /// Mutable files the game or a mod changed, as expected. These are not drift.
+    pub changed_at_runtime: Vec<RelPath>,
 }
 
 impl VerifyReport {
@@ -714,6 +729,9 @@ impl Instance {
     ///
     /// Files already deployed with the right contents are left alone; a deployed file that
     /// went missing or changed on disk is placed again, so deploying also repairs drift.
+    /// Mutable files are the exception: runtime changes to them are kept (see
+    /// [`DeployPlan::kept`]). Empty directories MSBE created that nothing needs any more are
+    /// removed.
     ///
     /// # Errors
     ///
@@ -722,6 +740,7 @@ impl Instance {
     pub fn plan_deploy(&self, profile: &Name) -> Result<DeployPlan, InstanceError> {
         let selection = self.profile(profile)?;
         let mut claims: BTreeMap<RelPath, Vec<Claim>> = BTreeMap::new();
+        let mut mutable = BTreeSet::new();
         let mut excluded = Vec::new();
         for (module, entry) in &selection.mods {
             let files: Vec<ResolvedFile> = entry
@@ -739,7 +758,15 @@ impl Instance {
                 file,
             }));
             for operation in resolved.operations {
-                if let Operation::Materialize { path, blob, .. } = operation {
+                if let Operation::Materialize {
+                    path,
+                    blob,
+                    mutable: declared,
+                } = operation
+                {
+                    if declared {
+                        mutable.insert(path.clone());
+                    }
                     claims.entry(path).or_default().push(Claim {
                         module: module.clone(),
                         blob,
@@ -747,51 +774,45 @@ impl Instance {
                 }
             }
         }
-
-        let mut target = BTreeMap::new();
-        let mut conflicts = Vec::new();
-        for (path, path_claims) in claims {
-            let mut blobs: BTreeSet<Digest> = path_claims.iter().map(|claim| claim.blob).collect();
-            match (blobs.pop_first(), blobs.is_empty()) {
-                (Some(blob), true) => {
-                    target.insert(path, blob);
-                }
-                _ => conflicts.push(Conflict {
-                    path,
-                    claims: path_claims,
-                }),
-            }
-        }
-        if !conflicts.is_empty() {
-            return Err(InstanceError::Conflicts(conflicts));
-        }
+        let target = settle_claims(claims)?;
 
         let current = self.deployed_files();
-        let mut operations: Vec<Operation> = current
+        let removing: BTreeSet<RelPath> = current
             .keys()
             .filter(|path| !target.contains_key(*path))
+            .cloned()
+            .collect();
+        let mut operations: Vec<Operation> = removing
+            .iter()
             .map(|path| Operation::Remove { path: path.clone() })
             .collect();
+        operations.extend(
+            self.prunable_dirs(&target, &removing)?
+                .into_iter()
+                .map(|path| Operation::RemoveDir { path }),
+        );
         let mut unchanged = 0;
+        let mut kept = Vec::new();
         for (path, blob) in &target {
-            let settled = current.get(path) == Some(blob)
-                && on_disk(&path.to_path(&self.config.root), blob)? == OnDisk::Matches;
-            if settled {
-                unchanged += 1;
-            } else {
-                operations.push(Operation::Materialize {
+            let is_mutable = mutable.contains(path);
+            match self.settle(path, blob, current.get(path), is_mutable)? {
+                Settle::Unchanged => unchanged += 1,
+                Settle::Keep => kept.push(path.clone()),
+                Settle::Place => operations.push(Operation::Materialize {
                     path: path.clone(),
                     blob: *blob,
-                    mutable: false,
-                });
+                    mutable: is_mutable,
+                }),
             }
         }
         Ok(DeployPlan {
             profile: profile.clone(),
             operations,
             unchanged,
+            kept,
             excluded,
             target,
+            mutable,
         })
     }
 
@@ -812,6 +833,7 @@ impl Instance {
             txn,
             profile: profile.clone(),
             files: plan.target.clone(),
+            mutable: plan.mutable.clone(),
         });
         self.save_state()?;
 
@@ -833,17 +855,20 @@ impl Instance {
         for backend in committed.backends.values() {
             *backends.entry(*backend).or_insert(0) += 1;
         }
-        let placed = plan
-            .operations
-            .iter()
-            .filter(|operation| matches!(operation, Operation::Materialize { .. }))
-            .count();
+        let count = |kind: fn(&Operation) -> bool| {
+            plan.operations
+                .iter()
+                .filter(|operation| kind(operation))
+                .count()
+        };
         Ok(DeployReport {
             profile: profile.clone(),
             txn: committed.txn,
-            placed,
-            removed: plan.operations.len() - placed,
+            placed: count(|operation| matches!(operation, Operation::Materialize { .. })),
+            removed: count(|operation| matches!(operation, Operation::Remove { .. })),
+            removed_dirs: count(|operation| matches!(operation, Operation::RemoveDir { .. })),
             unchanged: plan.unchanged,
+            kept: plan.kept,
             backends,
             excluded: plan.excluded,
         })
@@ -889,12 +914,17 @@ impl Instance {
             checked: 0,
             missing: Vec::new(),
             modified: Vec::new(),
+            changed_at_runtime: Vec::new(),
         };
+        let mutable = self.state.history.last().map(|deployed| &deployed.mutable);
         for (path, blob) in self.deployed_files() {
             report.checked += 1;
             match on_disk(&path.to_path(&self.config.root), blob)? {
                 OnDisk::Matches => {}
                 OnDisk::Missing => report.missing.push(path.clone()),
+                OnDisk::Differs if mutable.is_some_and(|mutable| mutable.contains(path)) => {
+                    report.changed_at_runtime.push(path.clone());
+                }
                 OnDisk::Differs => report.modified.push(path.clone()),
             }
         }
@@ -954,6 +984,105 @@ impl Instance {
     /// Scratch space on the store's volume, for downloads about to be ingested.
     pub fn scratch_dir(&self) -> PathBuf {
         self.applier.store().tmp_dir()
+    }
+
+    /// What deploying `blob` at `path` needs, given the blob deployed there before, if any.
+    fn settle(
+        &self,
+        path: &RelPath,
+        blob: &Digest,
+        deployed: Option<&Digest>,
+        mutable: bool,
+    ) -> Result<Settle, InstanceError> {
+        let file = path.to_path(&self.config.root);
+        let disk = on_disk(&file, blob)?;
+        if !mutable {
+            let settled = deployed == Some(blob) && disk == OnDisk::Matches;
+            return Ok(if settled {
+                Settle::Unchanged
+            } else {
+                Settle::Place
+            });
+        }
+        Ok(match disk {
+            OnDisk::Missing => Settle::Place,
+            OnDisk::Matches => Settle::Unchanged,
+            OnDisk::Differs => match deployed {
+                // Changed since this default was deployed: the change is the point.
+                Some(previous) if previous == blob => Settle::Unchanged,
+                // Changed since an older default was deployed: keep it rather than revert it.
+                Some(previous) if on_disk(&file, previous)? == OnDisk::Differs => Settle::Keep,
+                // An untouched older default, or a file MSBE never deployed: replace it.
+                _ => Settle::Place,
+            },
+        })
+    }
+
+    /// Directories MSBE created, and nothing in `target` needs, that hold nothing once
+    /// `removing` is gone. Deepest first, so each is empty by the time it is removed. A
+    /// directory with anything unmanaged inside is kept.
+    fn prunable_dirs(
+        &self,
+        target: &BTreeMap<RelPath, Digest>,
+        removing: &BTreeSet<RelPath>,
+    ) -> Result<Vec<RelPath>, InstanceError> {
+        let needed: BTreeSet<RelPath> = target.keys().flat_map(RelPath::ancestors).collect();
+        let mut candidates: Vec<RelPath> = self
+            .applier
+            .journal()
+            .created_dirs()
+            .into_iter()
+            .filter(|dir| !needed.contains(dir))
+            .collect();
+        candidates.sort_by_key(|dir| Reverse(dir.ancestors().len()));
+        let mut pruned = Vec::new();
+        let mut gone = BTreeSet::new();
+        for dir in candidates {
+            if self.empties(&dir, removing, &gone)? {
+                gone.insert(dir.clone());
+                pruned.push(dir);
+            }
+        }
+        Ok(pruned)
+    }
+
+    /// Whether `dir` exists and holds only files in `removing` and directories in `gone`.
+    fn empties(
+        &self,
+        dir: &RelPath,
+        removing: &BTreeSet<RelPath>,
+        gone: &BTreeSet<RelPath>,
+    ) -> Result<bool, InstanceError> {
+        let path = dir.to_path(&self.config.root);
+        let entries = match fs::read_dir(&path) {
+            Ok(entries) => entries,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+                ) =>
+            {
+                return Ok(false);
+            }
+            Err(source) => {
+                return Err(InstanceError::Io {
+                    op: "list",
+                    path,
+                    source,
+                });
+            }
+        };
+        for entry in entries {
+            let entry = entry.map_err(io_error("list", &path))?;
+            let child = entry
+                .file_name()
+                .to_str()
+                .and_then(|name| RelPath::new(&format!("{dir}/{name}")).ok());
+            if !child.is_some_and(|child| removing.contains(&child) || gone.contains(&child)) {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     fn profile_path(&self, name: &Name) -> PathBuf {
@@ -1097,6 +1226,42 @@ pub fn parse_plan(text: &str, origin: &Path) -> Result<Plan, InstanceError> {
     Ok(plan)
 }
 
+/// The single blob each path resolves to, or every path claimed with different contents.
+fn settle_claims(
+    claims: BTreeMap<RelPath, Vec<Claim>>,
+) -> Result<BTreeMap<RelPath, Digest>, InstanceError> {
+    let mut target = BTreeMap::new();
+    let mut conflicts = Vec::new();
+    for (path, path_claims) in claims {
+        let mut blobs: BTreeSet<Digest> = path_claims.iter().map(|claim| claim.blob).collect();
+        match (blobs.pop_first(), blobs.is_empty()) {
+            (Some(blob), true) => {
+                target.insert(path, blob);
+            }
+            _ => conflicts.push(Conflict {
+                path,
+                claims: path_claims,
+            }),
+        }
+    }
+    if conflicts.is_empty() {
+        Ok(target)
+    } else {
+        Err(InstanceError::Conflicts(conflicts))
+    }
+}
+
+/// What deploying one file needs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Settle {
+    /// The file is already as it should be.
+    Unchanged,
+    /// A mutable file with local changes stays as it is.
+    Keep,
+    /// The file is placed.
+    Place,
+}
+
 /// Whether storing an artifact adds a new mod or replaces one of the same name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Placement {
@@ -1194,9 +1359,15 @@ fn read_json_or_default<T: DeserializeOwned + Default>(path: &Path) -> Result<T,
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, fs, path::PathBuf};
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        fs,
+        path::PathBuf,
+    };
 
-    use msbe_fsops::{Checkpoint, Error as FsError, NoopObserver, Observer, RelPath};
+    use msbe_fsops::{
+        Backend, Checkpoint, Error as FsError, NoopObserver, Observer, Operation, RelPath,
+    };
     use tempfile::TempDir;
 
     use super::{
@@ -1235,12 +1406,16 @@ flatten = true
 
     impl Fixture {
         fn new() -> Self {
+            Self::with_plan(PLAN)
+        }
+
+        fn with_plan(text: &str) -> Self {
             let dir = tempfile::tempdir().unwrap();
             let game = dir.path().join("game");
             fs::create_dir_all(game.join("mods")).unwrap();
             fs::write(game.join("mods/existing.bin"), b"vanilla").unwrap();
             let plan = dir.path().join("plan.toml");
-            fs::write(&plan, PLAN).unwrap();
+            fs::write(&plan, text).unwrap();
             let inputs = dir.path().join("inputs");
             fs::create_dir_all(&inputs).unwrap();
             Self {
@@ -1387,6 +1562,7 @@ flatten = true
                 txn: serde_json::from_str("99").unwrap(),
                 profile: name("default"),
                 files: BTreeMap::new(),
+                mutable: BTreeSet::new(),
             }),
         });
 
@@ -1528,6 +1704,119 @@ flatten = true
             matches!(result, Err(InstanceError::UnknownMod { .. })),
             "{result:?}"
         );
+    }
+
+    #[test]
+    fn mutable_files_keep_runtime_changes_and_are_not_drift() {
+        let fixture = Fixture::with_plan(&format!(
+            "{PLAN}\n[deploy]\nmutable = [\"@loader.targets.mods/*.cfg\"]\n"
+        ));
+        let mut instance = fixture.create();
+        let default = name("default");
+        let settings = fixture.game.join("mods/settings.cfg");
+        let config_path = || vec![RelPath::new("mods/settings.cfg").unwrap()];
+        instance
+            .add_mods(
+                &default,
+                &[
+                    fixture.input("settings.cfg", b"default = 1"),
+                    fixture.input("alpha.bin", b"alpha"),
+                ],
+            )
+            .unwrap();
+        let first = instance.deploy(&default, &mut NoopObserver).unwrap();
+        assert_eq!(first.placed, 2);
+        assert!(first.backends.contains_key(&Backend::Copy), "{first:?}");
+
+        // The game rewrites its config: that is not drift, and deploying leaves it alone.
+        fs::write(&settings, b"default = 1\ntuned = true").unwrap();
+        let verified = instance.verify().unwrap();
+        assert!(verified.is_clean(), "{verified:?}");
+        assert_eq!(verified.changed_at_runtime, config_path());
+        let again = instance.deploy(&default, &mut NoopObserver).unwrap();
+        assert_eq!((again.placed, again.unchanged), (0, 2));
+
+        // The mod ships a new default: the local changes win, and the deploy says so.
+        instance.remove_mod(&default, &name("settings")).unwrap();
+        instance
+            .add_mods(&default, &[fixture.input("settings.cfg", b"default = 2")])
+            .unwrap();
+        let updated = instance.deploy(&default, &mut NoopObserver).unwrap();
+        assert_eq!(updated.kept, config_path());
+        assert_eq!(fs::read(&settings).unwrap(), b"default = 1\ntuned = true");
+
+        // With no local changes left to protect, the new default is placed.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "simulates the player deleting the file"
+        )]
+        let deleted = fs::remove_file(&settings);
+        deleted.unwrap();
+        let replaced = instance.deploy(&default, &mut NoopObserver).unwrap();
+        assert_eq!(replaced.placed, 1);
+        assert_eq!(fs::read(&settings).unwrap(), b"default = 2");
+
+        instance.purge().unwrap();
+        assert!(!settings.exists());
+        assert_eq!(
+            fs::read(fixture.game.join("mods/existing.bin")).unwrap(),
+            b"vanilla"
+        );
+    }
+
+    #[test]
+    fn directories_msbe_created_are_pruned_once_nothing_needs_them() {
+        let fixture = Fixture::with_plan(&PLAN.replace("flatten = true", "flatten = false"));
+        let mut instance = fixture.create();
+        let default = name("default");
+        let empty = name("empty");
+        let blob = instance.applier.store().put_bytes(b"texture").unwrap();
+        let profile = Profile {
+            mods: BTreeMap::from([(
+                name("pack"),
+                ModEntry {
+                    origin: "pack.zip".to_owned(),
+                    provider: None,
+                    files: vec![StoredFile {
+                        source: RelPath::new("textures/blocks/stone.png").unwrap(),
+                        blob,
+                    }],
+                },
+            )]),
+        };
+        write_toml(&instance.profile_path(&default), &profile).unwrap();
+        instance.create_profile(empty.clone(), None).unwrap();
+        let textures = fixture.game.join("mods/textures");
+
+        instance.deploy(&default, &mut NoopObserver).unwrap();
+        assert!(textures.join("blocks/stone.png").is_file());
+        let switched = instance.deploy(&empty, &mut NoopObserver).unwrap();
+        assert_eq!((switched.removed, switched.removed_dirs), (1, 2));
+        assert!(!textures.exists());
+        assert!(
+            fixture.game.join("mods").is_dir(),
+            "a vanilla directory went"
+        );
+
+        // Rolling back recreates them. A file MSBE does not manage keeps its directory.
+        instance.rollback().unwrap();
+        assert!(textures.join("blocks/stone.png").is_file());
+        fs::write(textures.join("notes.txt"), b"mine").unwrap();
+        let plan = instance.plan_deploy(&empty).unwrap();
+        let removed_dirs: Vec<&str> = plan
+            .operations
+            .iter()
+            .filter_map(|operation| match operation {
+                Operation::RemoveDir { path } => Some(path.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(removed_dirs, ["mods/textures/blocks"]);
+        instance.deploy(&empty, &mut NoopObserver).unwrap();
+
+        instance.purge().unwrap();
+        assert!(!textures.join("blocks").exists());
+        assert_eq!(fs::read(textures.join("notes.txt")).unwrap(), b"mine");
     }
 
     #[test]

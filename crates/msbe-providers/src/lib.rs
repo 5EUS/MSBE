@@ -10,6 +10,8 @@
 //!
 //! See `docs/06-providers-and-policy.md`.
 
+pub mod direct;
+mod hashing;
 mod http;
 pub mod modrinth;
 

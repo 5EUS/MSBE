@@ -44,12 +44,17 @@ impl fmt::Debug for UreqClient {
 }
 
 impl UreqClient {
-    /// Builds a client that trusts the operating system's certificate authorities.
+    /// Builds a client that trusts the operating system's certificate authorities and speaks
+    /// only `https`, redirects included, so a redirect cannot downgrade a download to `http`.
     ///
     /// # Errors
     ///
     /// Returns [`HttpError::Transport`] if the trust store yields no usable certificates.
     pub fn connect() -> Result<Self, HttpError> {
+        Self::build(true)
+    }
+
+    fn build(https_only: bool) -> Result<Self, HttpError> {
         let loaded = rustls_native_certs::load_native_certs();
         let roots: Vec<Certificate<'static>> = loaded
             .certs
@@ -77,6 +82,7 @@ impl UreqClient {
             .tls_config(tls)
             // Statuses are inspected here so a 429's Retry-After survives.
             .http_status_as_error(false)
+            .https_only(https_only)
             .timeout_connect(Some(CONNECT_TIMEOUT))
             .timeout_global(Some(REQUEST_TIMEOUT))
             .build();
@@ -238,11 +244,27 @@ mod tests {
         (url, handle)
     }
 
+    /// A client for the plain-`http` loopback servers these tests run. Real clients are
+    /// https-only.
+    fn loopback_client() -> UreqClient {
+        UreqClient::build(false).unwrap()
+    }
+
+    #[test]
+    fn plain_http_is_refused_before_any_connection_is_made() {
+        let client = UreqClient::connect().expect("the system trust store has certificates");
+        let result = client.get("http://127.0.0.1:9/never", &[], 64);
+        assert!(
+            matches!(&result, Err(HttpError::Transport { message, .. }) if message.contains("https only")),
+            "{result:?}"
+        );
+    }
+
     #[test]
     fn a_json_post_sends_its_body_and_content_type() {
         let (url, server) =
             serve_once("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
-        let client = UreqClient::connect().unwrap();
+        let client = loopback_client();
         assert_eq!(
             client.post_json(&url, br#"{"hashes":[]}"#, 64).unwrap(),
             b"{}"
@@ -262,7 +284,7 @@ mod tests {
     fn a_successful_body_is_returned_with_the_identifying_user_agent_sent() {
         let (url, server) =
             serve_once("HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello");
-        let client = UreqClient::connect().unwrap();
+        let client = loopback_client();
         assert_eq!(
             client.get(&url, &[("q", "sodium")], 1024).unwrap(),
             b"hello"
@@ -278,7 +300,7 @@ mod tests {
 
     #[test]
     fn rate_limits_statuses_and_oversized_bodies_are_distinct_errors() {
-        let client = UreqClient::connect().unwrap();
+        let client = loopback_client();
 
         let (url, server) = serve_once(
             "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 7\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
@@ -319,7 +341,7 @@ mod tests {
     /// Found against the real Modrinth CDN: a file whose size equals the limit was refused.
     #[test]
     fn a_body_of_exactly_the_limit_is_accepted_and_one_byte_more_is_not() {
-        let client = UreqClient::connect().unwrap();
+        let client = loopback_client();
 
         let (url, server) =
             serve_once("HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nabcd");
@@ -355,7 +377,7 @@ mod tests {
 
     #[test]
     fn downloads_stream_into_the_sink() {
-        let client = UreqClient::connect().unwrap();
+        let client = loopback_client();
         let (url, server) = serve_once(
             "HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\nhello world",
         );

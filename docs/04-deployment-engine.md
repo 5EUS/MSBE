@@ -64,6 +64,11 @@ therefore the main case, and three rules are load-bearing rather than defensive:
 3. **Mutable paths are never linked.** Files that a game or mod rewrites at runtime, such as
    configs and generated caches, are declared by the plan (`mutable = ["config/**"]`) and
    always materialized by copy. This is also what lets the user override layer in §4.6 work.
+   *Implemented in M1* as `[deploy] mutable` globs over deployed paths, which may start with
+   `@loader.targets.<name>`. Changes the game makes to these files are not drift: `verify`
+   lists them separately, and deploy never re-places a mutable file that is present. When a
+   mod ships a new default for a file that changed locally, the local file is kept and the
+   deploy reports it. Merging the two is the §4.6 user override layer, still to come.
 
 **Read-only on Windows.** A hardlink shares its attributes with its store blob, so a deployed
 file is read-only too, and Windows refuses to rename anything over a read-only file. Clearing
@@ -126,6 +131,11 @@ flowchart LR
 Shared files (identical blob at identical path) are untouched. Switching between two
 250-mod Minecraft profiles that share 240 mods costs ~10 link operations. This is what
 makes `msbe bisect` (see [09](09-interfaces.md)) practical rather than theoretical.
+
+A switch also removes the directories MSBE created for files it no longer deploys, in the
+same transaction, deepest first, and only if nothing else is inside them. A directory that
+was already there, or that holds a file MSBE does not manage, stays. Rollback recreates
+removed directories. *Implemented in M1.*
 
 ## 4.6 Conflict handling
 

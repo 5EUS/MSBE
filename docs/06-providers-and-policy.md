@@ -35,7 +35,7 @@ normal, well-typed outcome — not an error and not an invitation to work around
 | **Nexus Mods** | personal API key / OAuth | premium: ✓ direct. free: ✗ | Free accounts have no programmatic file download. The *supported* path is the `nxm://` handler (see below). Rate limits published per-key; honour them and the `X-RL-*` response headers. |
 | **GitHub Releases** | optional token | ✓ | Watch unauthenticated rate limits. |
 | **CKAN repos** | none | ✓ | Consume the existing index; do not fork it. |
-| **Local / direct URL** | n/a | ✓ | Always available; the manual escape hatch. |
+| **Local / direct URL** | n/a | ✓ | Always available; the manual escape hatch. **Implemented (M1).** URLs must be https, redirects included. A `#sha256=` or `#sha512=` fragment pins a checksum that is verified before ingest, and every download's SHA-512 is recorded as provenance. |
 
 TLS for every provider goes through `msbe-http`, which trusts the operating system's
 certificate store rather than a bundled list of roots. That respects system and corporate
