@@ -47,7 +47,7 @@ fn run_via_daemon(args: Vec<OsString>) -> Result<u8, String> {
         stream
     } else {
         start_daemon(&socket)?;
-        connect_daemon(&socket, &thread::sleep, &Duration::from_millis(10))?
+        connect_daemon(&socket, &thread::sleep, &Duration::from_millis(50))?
     };
     let request = Request::new(json!(1), COMMAND_METHOD, json!({"args": command}));
     serde_json::to_writer(&mut stream, &request).map_err(|error| error.to_string())?;
@@ -108,7 +108,7 @@ fn connect_daemon(
     sleep: &dyn Fn(std::time::Duration),
     delay: &std::time::Duration,
 ) -> Result<std::os::unix::net::UnixStream, String> {
-    for _ in 0..20 {
+    for _ in 0..100 {
         match std::os::unix::net::UnixStream::connect(socket) {
             Ok(stream) => return Ok(stream),
             Err(_) => sleep(*delay),
