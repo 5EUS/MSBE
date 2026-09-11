@@ -20,6 +20,7 @@ pub mod manifest;
 mod metadata;
 pub mod modrinth;
 pub mod overlay;
+pub mod pack;
 pub mod registry;
 mod target;
 
