@@ -13,10 +13,11 @@ use std::{
 };
 
 use msbe_fsops::RelPath;
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
+    EndpointError, JsonEndpoint,
     hashing::HashingWriter,
     http::{HttpClient, HttpError},
 };
@@ -284,14 +285,13 @@ struct HashQuery<'q> {
 
 /// A Modrinth API client over any [`HttpClient`].
 pub struct Modrinth<'a> {
-    http: &'a dyn HttpClient,
-    base: String,
+    endpoint: JsonEndpoint<'a>,
 }
 
 impl fmt::Debug for Modrinth<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Modrinth")
-            .field("base", &self.base)
+            .field("endpoint", &self.endpoint)
             .finish_non_exhaustive()
     }
 }
@@ -305,8 +305,7 @@ impl<'a> Modrinth<'a> {
     /// A client for another deployment of the API, such as staging.
     pub fn with_base(http: &'a dyn HttpClient, base: impl Into<String>) -> Self {
         Self {
-            http,
-            base: base.into(),
+            endpoint: JsonEndpoint::new(http, base, METADATA_LIMIT),
         }
     }
 
@@ -491,7 +490,9 @@ impl<'a> Modrinth<'a> {
             source,
         };
         let mut sink = HashingWriter::new(File::create_new(&path).map_err(io_error)?);
-        self.http.download(&file.url, &mut sink, file.size)?;
+        self.endpoint
+            .http()
+            .download(&file.url, &mut sink, file.size)?;
         sink.inner().sync_all().map_err(io_error)?;
 
         if sink.written() != file.size {
@@ -624,40 +625,30 @@ impl<'a> Modrinth<'a> {
         })
     }
 
-    fn get_json<T: DeserializeOwned>(
+    fn get_json<T: serde::de::DeserializeOwned>(
         &self,
         path: &str,
         query: &[(&str, &str)],
     ) -> Result<T, ModrinthError> {
-        let url = format!("{}{path}", self.base);
-        let body = self.http.get(&url, query, METADATA_LIMIT)?;
-        decode(url, &body)
+        self.endpoint.get(path, query).map_err(Into::into)
     }
 
-    fn post_json<T: DeserializeOwned>(
+    fn post_json<T: serde::de::DeserializeOwned>(
         &self,
         path: &str,
         request: &impl Serialize,
     ) -> Result<T, ModrinthError> {
-        let url = format!("{}{path}", self.base);
-        // Serializing these request types cannot fail.
-        let request = serde_json::to_vec(request).unwrap_or_default();
-        let body = self.http.post_json(&url, &request, METADATA_LIMIT)?;
-        decode(url, &body)
+        self.endpoint.post(path, request).map_err(Into::into)
     }
-}
-
-fn decode<T: DeserializeOwned>(url: String, body: &[u8]) -> Result<T, ModrinthError> {
-    serde_json::from_slice(body).map_err(|error| ModrinthError::Decode {
-        url,
-        reason: error.to_string(),
-    })
 }
 
 /// Why a Modrinth operation failed.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum ModrinthError {
+    /// A request through the configured metadata endpoint failed.
+    #[error(transparent)]
+    Endpoint(#[from] EndpointError),
     /// The request failed.
     #[error(transparent)]
     Http(#[from] HttpError),

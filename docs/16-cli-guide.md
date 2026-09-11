@@ -204,7 +204,7 @@ content-owner controls.
 MSBE will also accept a user-selected local file, archive, or directory obtained through the
 Steam client or another tool the user chooses. It may record a public Workshop URL or item ID as
 display-only provenance. See
-[06 - Providers & policy](06-providers-and-policy.md#64-steam-workshop-steamcmd-or-user-supplied-content)
+[06 - Providers & policy](06-providers-and-policy.md#65-steam-workshop-steamcmd-or-user-supplied-content)
 for the binding policy boundary.
 
 ## 7. Automation and troubleshooting
@@ -220,6 +220,12 @@ The local daemon starts automatically on macOS and Linux. It uses a user-only Un
 at `$XDG_RUNTIME_DIR/msbe.sock`, or the temporary-directory fallback when that variable
 is unset. When developing from the checkout, build `msbe` and `msbe-daemon` together so
 the launcher can find its sibling binary.
+
+The built-in provider catalog recognizes the `modrinth:` source prefix and HTTPS direct URLs.
+Provider manifests are versioned and constrained configuration, not downloaded code: they can
+describe source recognition, HTTPS metadata origins, policy, and a supported acquisition
+primitive. See [06 - Providers & policy](06-providers-and-policy.md#63-provider-manifests) for
+the contribution and safety model.
 
 For unsupported behavior, consult [09 - Interfaces](09-interfaces.md) for the intended
 full interface and [13 - Roadmap](13-roadmap.md) for its implementation status.

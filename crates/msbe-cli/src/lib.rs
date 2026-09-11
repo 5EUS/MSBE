@@ -21,7 +21,7 @@ use msbe_core::{
 };
 use msbe_fsops::{Backend, NoopObserver, Operation, RelPath};
 use msbe_providers::{
-    HttpClient, HttpError,
+    Catalog, HttpClient, HttpError, ManifestError,
     direct::{self, DirectError, DirectSource},
     modrinth::{
         InstallPlan, Modrinth, ModrinthError, Requirement, Spec, Target, Update, UpdateCheck,
@@ -33,14 +33,8 @@ use serde::Serialize;
 #[cfg(test)]
 mod end_to_end_tests;
 
-/// Marks an `add` source as a Modrinth project rather than a local path.
-const MODRINTH_PREFIX: &str = "modrinth:";
-
 /// The provider name recorded in a mod's provenance.
 const MODRINTH: &str = "modrinth";
-
-/// The provider name recorded for a direct download.
-const DIRECT: &str = "url";
 
 /// Opens a network client on first use, so commands that never touch the network never load
 /// the platform's certificates.
@@ -243,6 +237,8 @@ enum CliError {
     Direct(#[from] DirectError),
     #[error(transparent)]
     Http(#[from] HttpError),
+    #[error(transparent)]
+    Provider(#[from] ManifestError),
     #[error(
         "instance {0} has no game version; set one with `msbe instance set {0} --game-version <version>`"
     )]
@@ -370,6 +366,7 @@ where
 }
 
 fn execute(cli: &Cli, console: &mut Console<'_>) -> Result<u8, CliError> {
+    let providers = Catalog::builtins()?;
     let home = match &cli.home {
         Some(dir) => Home::at(dir),
         None => Home::discover()?,
@@ -382,18 +379,22 @@ fn execute(cli: &Cli, console: &mut Console<'_>) -> Result<u8, CliError> {
             sources,
             profile,
             with_deps,
-        } => add(&home, instance, profile, sources, *with_deps, console),
+        } => add(
+            &providers, &home, instance, profile, sources, *with_deps, console,
+        ),
         Command::Search {
             instance,
             query,
             limit,
-        } => search(&home, instance, query, *limit, console),
+        } => search(&providers, &home, instance, query, *limit, console),
         Command::Update {
             instance,
             modules,
             profile,
             dry_run,
-        } => update(&home, instance, profile, modules, *dry_run, console),
+        } => update(
+            &providers, &home, instance, profile, modules, *dry_run, console,
+        ),
         Command::Remove {
             instance,
             module,
@@ -541,7 +542,12 @@ fn profile_command(
     Ok(exit::OK)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the established command handler signature needs the catalog alongside command inputs"
+)]
 fn add(
+    providers: &Catalog,
     home: &Home,
     instance: &str,
     profile: &str,
@@ -555,16 +561,24 @@ fn add(
     let mut specs = Vec::new();
     let mut urls = Vec::new();
     for source in sources {
-        if let Some(reference) = source.strip_prefix(MODRINTH_PREFIX) {
-            specs.push(Spec::parse(reference)?);
-        } else if source.starts_with("https://") || source.starts_with("http://") {
-            urls.push(DirectSource::parse(source)?);
-        } else {
-            artifacts.push(Artifact {
+        match providers.source(source) {
+            Ok(recognized) if recognized.provider().id == MODRINTH => {
+                specs.push(Spec::parse(recognized.reference())?);
+            }
+            Ok(recognized) if recognized.provider().id == "url" => {
+                urls.push(DirectSource::parse(recognized.raw())?);
+            }
+            Ok(recognized) => {
+                return Err(
+                    ManifestError::UnknownProvider(recognized.provider().id.clone()).into(),
+                );
+            }
+            Err(ManifestError::UnknownSource(_)) => artifacts.push(Artifact {
                 path: PathBuf::from(source),
                 module: None,
                 provider: None,
-            });
+            }),
+            Err(error) => return Err(error.into()),
         }
     }
 
@@ -585,11 +599,15 @@ fn add(
             report: &mut report,
         };
         if !specs.is_empty() {
-            let modrinth = Modrinth::new(client.as_ref());
+            let modrinth = modrinth(providers, client.as_ref())?;
             let plan = modrinth.plan_install(&specs, &target(&opened)?, with_deps)?;
             fetch.modrinth(&modrinth, plan)?;
         }
-        fetch.urls(client.as_ref(), &urls)?;
+        fetch.urls(
+            client.as_ref(),
+            &urls,
+            providers.provider("url")?.id.as_str(),
+        )?;
     }
     report.added = opened.add_artifacts(&profile, &artifacts)?;
 
@@ -645,9 +663,14 @@ impl Fetch<'_> {
         Ok(())
     }
 
-    fn urls(&mut self, http: &dyn HttpClient, sources: &[DirectSource]) -> Result<(), CliError> {
+    fn urls(
+        &mut self,
+        http: &dyn HttpClient,
+        sources: &[DirectSource],
+        provider_id: &str,
+    ) -> Result<(), CliError> {
         for source in sources {
-            if let Some(name) = installed_from(self.existing, DIRECT, &source.url) {
+            if let Some(name) = installed_from(self.existing, provider_id, &source.url) {
                 self.report.skipped.push(name.clone());
                 continue;
             }
@@ -656,7 +679,7 @@ impl Fetch<'_> {
                 path: downloaded.path,
                 module: None,
                 provider: Some(Provenance {
-                    provider: DIRECT.to_owned(),
+                    provider: provider_id.to_owned(),
                     project: source.url.clone(),
                     version: downloaded.sha512.clone(),
                     version_number: source.file_name.clone(),
@@ -668,7 +691,12 @@ impl Fetch<'_> {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the established command handler signature needs the catalog alongside command inputs"
+)]
 fn update(
+    providers: &Catalog,
     home: &Home,
     instance: &str,
     profile: &str,
@@ -687,7 +715,7 @@ fn update(
     if !tracked.is_empty() {
         let target = target(&opened)?;
         let client = (console.connect)()?;
-        let modrinth = Modrinth::new(client.as_ref());
+        let modrinth = modrinth(providers, client.as_ref())?;
         let updates = find_updates(&modrinth, &tracked, &target, &mut report)?;
         report_relationships(&modrinth, &selection, &updates, &mut report)?;
         if !dry_run && !updates.is_empty() {
@@ -815,6 +843,7 @@ fn report_relationships(
 }
 
 fn search(
+    providers: &Catalog,
     home: &Home,
     instance: &str,
     query: &[String],
@@ -824,7 +853,7 @@ fn search(
     let opened = open(home, instance, console)?;
     let target = target(&opened)?;
     let client = (console.connect)()?;
-    let hits = Modrinth::new(client.as_ref()).search(&query.join(" "), &target, limit)?;
+    let hits = modrinth(providers, client.as_ref())?.search(&query.join(" "), &target, limit)?;
     console.emit(&hits, |out, hits| {
         if hits.is_empty() {
             return writeln!(out, "No compatible mods found.");
@@ -832,7 +861,7 @@ fn search(
         for hit in hits {
             writeln!(
                 out,
-                "{MODRINTH_PREFIX}{:<28} {} ({} downloads)",
+                "modrinth:{:<28} {} ({} downloads)",
                 hit.slug, hit.title, hit.downloads
             )?;
             let summary: String = hit.description.chars().take(96).collect();
@@ -964,6 +993,14 @@ fn target(instance: &Instance) -> Result<Target, CliError> {
         loaders: instance.loader_ids(),
         game_version,
     })
+}
+
+fn modrinth<'a>(providers: &Catalog, http: &'a dyn HttpClient) -> Result<Modrinth<'a>, CliError> {
+    let provider = providers.provider(MODRINTH)?;
+    let api_base = provider
+        .api_base()
+        .ok_or_else(|| ManifestError::MissingMetadata(provider.id.clone()))?;
+    Ok(Modrinth::with_base(http, api_base))
 }
 
 /// The mod in `profile` recorded as `project` from `provider`, if any.

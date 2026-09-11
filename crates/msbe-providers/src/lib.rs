@@ -11,8 +11,12 @@
 //! See `docs/06-providers-and-policy.md`.
 
 pub mod direct;
+pub mod endpoint;
 mod hashing;
 mod http;
+pub mod manifest;
 pub mod modrinth;
 
+pub use endpoint::{EndpointError, JsonEndpoint};
 pub use http::{HttpClient, HttpError};
+pub use manifest::{Catalog, ManifestError, Provider, Source};

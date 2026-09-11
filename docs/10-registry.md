@@ -15,6 +15,7 @@ registry/
     <provider>/<mod-id>.toml   deps, conflicts, provides, replaces, known-bad,
                                load-order hints, install quirks
   components/<id>.toml         loaders & script extenders: upstream URL + hashes
+  providers/<provider-id>.toml provider identity, policy, and constrained adapter config
   index.json                   generated; what clients actually fetch
 ```
 
@@ -46,12 +47,12 @@ overlay from becoming a rumour mill, and it gives reviewers something to check.
 Git-backed, content-addressed, signed. **TUF-lite** role separation — a compromised
 build machine must not be able to silently ship a new plan:
 
-| Role | Holds | Rotation |
-|---|---|---|
-| `root` | offline key, signs role delegations | rare, manual, multi-party |
-| `targets` | signs plan/extension hashes | per release |
-| `snapshot` | signs the index, prevents mix-and-match | per publish |
-| `timestamp` | short-lived, prevents freeze attacks | frequent, automated |
+| Role        | Holds                                   | Rotation                  |
+| ----------- | --------------------------------------- | ------------------------- |
+| `root`      | offline key, signs role delegations     | rare, manual, multi-party |
+| `targets`   | signs plan/extension hashes             | per release               |
+| `snapshot`  | signs the index, prevents mix-and-match | per publish               |
+| `timestamp` | short-lived, prevents freeze attacks    | frequent, automated       |
 
 Clients pin `root`, verify the chain, and **refuse to downgrade** a plan version.
 Lockfiles pin the exact plan version and extension hash used, so a build reproduces
@@ -60,8 +61,15 @@ alter a locked result, `msbe sync` says so rather than silently drifting.
 
 Users can add additional registry sources (`msbe registry sources add`), each with its
 own trust root, clearly marked as third-party in the UI. Plans from an untrusted source
-get *no* WASM capabilities beyond `archive.read` without explicit per-capability
+get _no_ WASM capabilities beyond `archive.read` without explicit per-capability
 consent.
+
+Provider manifests are signed registry targets too. They are declarative configuration for a
+closed set of built-in acquisition primitives, never executable provider code. A manifest may
+configure an adapter's accepted source prefix, HTTPS metadata origin, and policy declaration;
+adding an acquisition primitive or a provider adapter remains a reviewed code change. This lets
+communities contribute transparent provider definitions without letting a registry update add a
+new downloader or weaken provider safeguards. See [06](06-providers-and-policy.md#63-provider-manifests).
 
 ## 10.3 Contribution flow
 
@@ -102,5 +110,5 @@ a future community index) plug in the same way.
 - A bot opens PRs for component upstream updates (new BepInEx, new Fabric) with hashes.
 - `msbe registry update` is delta-fetched and offline-tolerant; a stale registry
   degrades to "no new metadata," never to a broken client.
-- A moderation policy and a contact address exist *before* launch, because the overlay
+- A moderation policy and a contact address exist _before_ launch, because the overlay
   is user-generated content and will eventually be abused.

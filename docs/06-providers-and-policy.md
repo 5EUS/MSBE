@@ -56,7 +56,48 @@ struct ProviderPolicy {
 }
 ```
 
-## 6.3 What we will not do
+## 6.3 Provider manifests
+
+Provider definitions are versioned TOML documents. The M1 runtime loads the built-in direct
+URL and Modrinth definitions through the same validated catalog that will consume signed
+registry definitions. A manifest declares identity, source recognition, metadata origin,
+policy, and an acquisition primitive; it cannot execute code, alter HTTP transport rules, or
+weaken policy enforcement.
+
+```toml
+schema = 1
+id = "modrinth"
+name = "Modrinth"
+
+[source]
+type = "prefixed"
+prefix = "modrinth:"
+
+[metadata]
+api_base = "https://api.modrinth.com/v2"
+
+[acquisition]
+type = "direct_https"
+
+[policy]
+requires_auth = false
+respects_distribution_flag = true
+tos_url = "https://modrinth.com/legal/terms"
+ack_required = false
+```
+
+The schema rejects unknown fields, duplicate provider ids, empty or non-ASCII source prefixes,
+and metadata endpoints that are not HTTPS. The acquisition vocabulary is closed. In M1 it
+contains only `direct_https`: a reviewed adapter must still supply an HTTPS artifact URL and
+the applicable hash/size validation. Future primitives such as `browser_assisted`,
+`local_import`, and `steamcmd` require a runtime implementation and policy review before a
+manifest can select them.
+
+Manifest data routes sources and configures reviewed adapters. It does not replace provider
+semantics that cannot be described safely as mappings: Modrinth's dependency walk, release
+channel policy, and bulk update protocol remain a built-in adapter behind its manifest.
+
+## 6.4 What we will not do
 
 Stated here so it is never re-litigated in a PR:
 
@@ -72,7 +113,7 @@ MSBE identifies itself honestly in every request. If a provider asks us to chang
 something, we change it. The alternative is losing access for all users — which is
 what has happened to every tool that treated these as obstacles.
 
-## 6.4 Steam Workshop: SteamCMD or user-supplied content
+## 6.5 Steam Workshop: SteamCMD or user-supplied content
 
 Steam Workshop support is planned as an opt-in integration with the user's installed SteamCMD,
 plus a local import boundary. Workshop delivery has game-specific layouts, subscription
@@ -100,7 +141,7 @@ checking whether its recorded content digest changed, and opening the item's pub
 user's browser. Background downloads, subscription synchronization, and update polling remain
 out of scope unless Valve publishes and permits a suitable integration path.
 
-## 6.5 The `nxm://` path (why free Nexus users are fine)
+## 6.6 The `nxm://` path (why free Nexus users are fine)
 
 Nexus provides "Mod Manager Download" buttons that emit `nxm://` links **for free
 accounts too**. That is the sanctioned mechanism, and it is what MO2 and Vortex use.
@@ -128,7 +169,7 @@ MSBE registers the protocol handler on all three platforms and catches links fro
 **the integrated browser or the user's system browser alike** — a user who prefers
 Firefox loses nothing.
 
-## 6.6 Assisted download queue (the large-modpack case)
+## 6.7 Assisted download queue (the large-modpack case)
 
 The honest version of "browser automation." For a 200-mod Nexus list on a free
 account, MSBE:
@@ -147,7 +188,7 @@ access control exactly where the site put it. Rate-limited, resumable, and cance
 Optionally an "auto-advance" toggle moves to the next page after a successful capture.
 There is no toggle that clicks the download button.
 
-## 6.7 Operational asks
+## 6.8 Operational asks
 
 Tasks, not afterthoughts — start them early because approval takes weeks:
 

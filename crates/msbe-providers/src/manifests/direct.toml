@@ -1,0 +1,15 @@
+schema = 1
+id = "url"
+name = "Direct URL"
+
+[source]
+type = "https_url"
+
+[acquisition]
+type = "direct_https"
+
+[policy]
+requires_auth = false
+respects_distribution_flag = false
+tos_url = ""
+ack_required = false
