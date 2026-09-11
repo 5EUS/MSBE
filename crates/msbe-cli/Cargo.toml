@@ -36,6 +36,6 @@ tempfile.workspace   = true
 thiserror.workspace  = true
 
 [dev-dependencies]
-msbe-provider-modrinth = { version = "0.0.0", path = "../msbe-provider-modrinth", features = ["test-support"] }
+msbe-provider-modrinth = { version = "0.0.0", path = "../msbe-provider-modrinth", features = ["test"] }
 sha2.workspace = true
 zip.workspace  = true

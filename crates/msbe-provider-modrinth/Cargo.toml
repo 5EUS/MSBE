@@ -16,7 +16,7 @@ publish.workspace      = true
 workspace = true
 
 [features]
-test-support = ["dep:sha2"]
+test = ["dep:sha2"]
 
 [dependencies]
 msbe-provider-api    = { version = "0.0.0", path = "../msbe-provider-api" }

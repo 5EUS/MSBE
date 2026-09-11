@@ -859,10 +859,18 @@ impl Instance {
     ) -> Result<DeployReport, InstanceError> {
         let session = self.bisect()?;
         let report = self.deploy(&session.profile, observer)?;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the restored profile is deployed before deleting the MSBE-owned trial metadata"
+        )]
         fs::remove_file(self.profile_path(&session.trial_profile)).map_err(io_error(
             "remove",
             &self.profile_path(&session.trial_profile),
         ))?;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the completed session is MSBE-owned metadata outside the game root"
+        )]
         fs::remove_file(self.dir.join("bisect.toml"))
             .map_err(io_error("remove", &self.dir.join("bisect.toml")))?;
         Ok(report)
@@ -917,8 +925,16 @@ impl Instance {
         if !path.is_file() {
             return Err(InstanceError::UnknownProfile(profile.clone()));
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "an inactive profile is MSBE-owned metadata outside the game root"
+        )]
         fs::remove_file(&path).map_err(io_error("remove", &path))?;
         let lockfile = self.dir.join("locks").join(format!("{profile}.toml"));
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a derived lockfile is MSBE-owned metadata outside the game root"
+        )]
         if let Err(error) = fs::remove_file(&lockfile)
             && error.kind() != io::ErrorKind::NotFound
         {

@@ -624,6 +624,10 @@ fn pack_command(
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the command handler receives the established provider, instance, source, profile, and output context"
+)]
 fn pack_import(
     providers: &Providers,
     home: &Home,

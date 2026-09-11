@@ -1,5 +1,12 @@
 //! In-memory Modrinth service for integration tests of consumers of this adapter.
 
+#![expect(
+    clippy::panic,
+    clippy::type_complexity,
+    clippy::unwrap_used,
+    reason = "the opt-in test fixture intentionally uses infallible test setup and shared mutable canned responses"
+)]
+
 use std::{cell::RefCell, collections::BTreeMap, fmt::Write as _, io::Write, rc::Rc};
 
 use msbe_provider_api::{HttpClient, HttpError};
