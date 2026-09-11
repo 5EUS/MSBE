@@ -155,6 +155,9 @@ pub struct ExtractStep {
     /// Glob patterns which must never be deployed.
     #[serde(default)]
     pub deny: Vec<String>,
+    /// Glob patterns retained in the content store but excluded from deployment.
+    #[serde(default)]
+    pub quarantine: Vec<String>,
     /// Whether the conservative global hygiene rules apply.
     #[serde(default)]
     pub hygiene: Hygiene,
@@ -162,7 +165,10 @@ pub struct ExtractStep {
 
 impl ExtractStep {
     fn validate(&self) -> Result<(), ValidationError> {
-        if self.allow.iter().any(String::is_empty) || self.deny.iter().any(String::is_empty) {
+        if self.allow.iter().any(String::is_empty)
+            || self.deny.iter().any(String::is_empty)
+            || self.quarantine.iter().any(String::is_empty)
+        {
             return Err(ValidationError::EmptyPattern);
         }
         Ok(())
@@ -270,6 +276,7 @@ mod tests {
                 Step::Extract(super::ExtractStep {
                     allow: vec!["**/*.jar".to_owned()],
                     deny: Vec::new(),
+                    quarantine: Vec::new(),
                     hygiene: Hygiene::Default,
                 }),
                 Step::Place(PlaceStep {
