@@ -7,7 +7,7 @@ into the tool itself. MSBE inverts that: the tool knows nothing about any game, 
 every game's install behaviour is described by a **Plan** — a declarative, signed,
 community-contributable document that composes a small, closed vocabulary of steps.
 
-Stack: **Rust** core + daemon + CLI, **C# / Avalonia 11 (NativeAOT)** desktop UI.
+Stack: **Rust** core + daemon + CLI, **C# / Avalonia 12 (NativeAOT)** desktop UI.
 
 ## Planning documents
 
@@ -26,9 +26,46 @@ Stack: **Rust** core + daemon + CLI, **C# / Avalonia 11 (NativeAOT)** desktop UI
 | [10 — Registry](docs/10-registry.md) | Plan + overlay metadata repo, signing, contribution flow |
 | [11 — Security](docs/11-security.md) | Threat model, archive hardening, sandbox, supply chain |
 | [12 — Testing & release](docs/12-testing-and-release.md) | Fixtures, property tests, CI matrix, packaging, updates |
-| [13 — Roadmap](docs/13-roadmap.md) | Milestones M0–M6 |
+| [13 — Roadmap](docs/13-roadmap.md) | Milestones M0–M8 |
 | [14 — Risks & open questions](docs/14-risks.md) | What could sink this, and what still needs deciding |
+
+## Building
+
+```sh
+sh scripts/development/install-git-hooks.sh   # core.hooksPath = .githooks
+sh scripts/development/setup-vscode.sh        # optional: VS Code launch/tasks/settings
+cargo build --workspace                       # Rust: core, daemon, CLI
+dotnet build dotnet/MSBE.slnx                 # .NET: Avalonia desktop + RPC client
+sh scripts/development/check.sh               # everything CI checks, locally
+```
+
+Toolchains are pinned: Rust in `rust-toolchain.toml`, the .NET SDK in
+`dotnet/global.json`. Bump either in its own commit.
+
+## The compile-time posture
+
+Almost every rule in this repo exists because of a specific failure mode, and each is
+enforced by the compiler rather than by review. `CONTRIBUTING.md` explains every one;
+the short version:
+
+- **Rust** — workspace lints deny `clippy::all`, `pedantic` and `cargo`, plus
+  `unwrap_used` / `panic` / `indexing_slicing` (a panic mid-deploy is a half-applied
+  transaction) and `unsafe_code`. `clippy.toml` bans `HashMap` / `HashSet` (iteration
+  order is nondeterministic, and lockfiles are compared byte-for-byte), the unjournaled
+  `fs::remove_*` and `fs::rename` calls, `SystemTime::now`, and `Command::new`.
+  Exceptions are stated at the call site with `#[expect(..., reason = "...")]`;
+  `#[allow]` is itself denied, so stale suppressions cannot accumulate.
+- **C#** — NativeAOT posture from the first commit: trim and AOT analyzers,
+  `TreatWarningsAsErrors`, compiled bindings only, source-generated JSON.
+  `BannedSymbols.txt` rejects reflection instantiation, `System.Reflection.Emit`,
+  reflection-based `JsonSerializer`, `Task.Result` / `.Wait()` and `DateTime.Now`.
+  `Directory.Build.targets` fails the build (`MSBE0001`–`MSBE0005`) if any project opts
+  out of the posture, and CI publishes all six RIDs on every PR because AOT breakage is
+  invisible to `dotnet build`.
 
 ## Status
 
-Planning. No code yet. `MSBE` is a working codename.
+Scaffolding and planning. The Rust workspace builds and lints clean; there is no
+behaviour yet. `MSBE` is a working codename.
+
+See [13 — Roadmap](docs/13-roadmap.md) for what lands when.

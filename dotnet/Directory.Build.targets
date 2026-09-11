@@ -1,0 +1,29 @@
+<Project>
+  <!--
+    Guards that a single .csproj cannot quietly opt out of. Property assertions
+    only — the XAML-level checks live in scripts/development/check-xaml.sh, which
+    runs in the pre-commit hook and in CI, because MSBuild string handling over
+    markup is more fragile than a grep.
+  -->
+  <Target Name="MsbeAssertBuildPosture" BeforeTargets="BeforeBuild">
+    <Error Condition="'$(Nullable)' != 'enable'"
+           Code="MSBE0001"
+           Text="Nullable must stay enabled. Null-state is load-bearing across the RPC boundary." />
+
+    <Error Condition="'$(TreatWarningsAsErrors)' != 'true'"
+           Code="MSBE0002"
+           Text="TreatWarningsAsErrors must stay true: the trim and AOT analyzers report as warnings, so disabling this silently removes the NativeAOT guarantees." />
+
+    <Error Condition="'$(EnableTrimAnalyzer)' != 'true' Or '$(EnableAotAnalyzer)' != 'true'"
+           Code="MSBE0003"
+           Text="The trim and AOT analyzers must stay enabled. AOT breakage is invisible to 'dotnet build' without them and only surfaces at publish time." />
+
+    <Error Condition="'$(AvaloniaUseCompiledBindingsByDefault)' != 'true' And '$(MSBeIsNonUiProject)' != 'true'"
+           Code="MSBE0004"
+           Text="Compiled bindings must stay on. Reflection bindings break under NativeAOT and fail at runtime rather than at build time." />
+
+    <Error Condition="'$(RestorePackagesWithLockFile)' != 'true'"
+           Code="MSBE0005"
+           Text="Lock files must stay enabled so CI can restore with --locked-mode and builds stay reproducible." />
+  </Target>
+</Project>

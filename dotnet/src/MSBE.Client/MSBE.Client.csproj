@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <MSBeIsNonUiProject>true</MSBeIsNonUiProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="MSBE.Desktop.Tests" />
+  </ItemGroup>
+</Project>

@@ -5,7 +5,7 @@
 ```mermaid
 flowchart TB
   subgraph Clients
-    UI["<b>MSBE.Desktop</b><br/>C# · Avalonia 11 · NativeAOT<br/>no runtime dependency"]
+    UI["<b>MSBE.Desktop</b><br/>C# · Avalonia 12 · NativeAOT<br/>no runtime dependency"]
     CLI["<b>msbe</b><br/>Rust CLI · single static binary"]
   end
 
@@ -56,17 +56,27 @@ crates/
   msbe-browser/       CEF host process, nxm:// capture, assisted queue
 
 dotnet/
-  MSBE.Desktop/       Avalonia 11 app, PublishAot
-  MSBE.Client/        generated RPC client (source-generated JSON, no reflection)
+  Directory.Build.props    every setting, so .csproj files stay near-empty
+  Directory.Build.targets  MSBE0001-0005: posture assertions a .csproj cannot opt out of
+  Directory.Packages.props central package management
+  BannedSymbols.txt        the C# counterpart to clippy.toml's disallowed-methods
+  stylecop.json  global.json  NuGet.Config  MSBE.slnx
+  src/MSBE.Client/    generated RPC client (source-generated JSON, no reflection)
+  src/MSBE.Desktop/   Avalonia 12 app, PublishAot
+    ViewModels/         MainViewModel.<Feature>.cs feature partials
+    Views/{Shell,Pages,Components}/   paired .axaml + .axaml.cs
+    Styles/AppStyles.axaml
+  tests/MSBE.Desktop.Tests/
 
 plans/                first-party plans (mirrored into the registry)
 fixtures/             synthetic game dirs + mod archives for tests
+scripts/development/  check.sh, check-xaml.sh, format.sh, install-git-hooks.sh
 docs/
 ```
 
 ## 3.3 NativeAOT constraints — non-negotiable from commit #1
 
-Avalonia 11 supports NativeAOT, but only for trim-safe code. These are enforced by
+Avalonia 12 supports NativeAOT, but only for trim-safe code. These are enforced by
 analyzers and CI from the start, because retrofitting them is far more expensive than
 following them:
 
@@ -91,6 +101,15 @@ following them:
   is therefore six real runners (see [12](12-testing-and-release.md)), not one.
 - **Every third-party control is an AOT liability.** Each one needs an explicit
   smoke test in the AOT-published build, not just in `dotnet run`.
+
+These are enforced rather than documented. `Directory.Build.targets` fails the build
+(`MSBE0001`-`MSBE0005`) if a project disables nullable, warnings-as-errors, the trim or
+AOT analyzers, compiled bindings, or lock files; `BannedSymbols.txt` rejects
+`System.Reflection.Emit`, `Activator.CreateInstance`, reflection-based `JsonSerializer`,
+`ReflectionBindingExtension`, `Task.Result`/`.Wait()` and `DateTime.Now`; and
+`scripts/development/check-xaml.sh` fails a `{Binding}` in any view without `x:DataType`.
+CI publishes all six RIDs on every PR, because an AOT failure is invisible to
+`dotnet build`. See `CONTRIBUTING.md`.
 
 ## 3.4 RPC contract
 

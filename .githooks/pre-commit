@@ -1,0 +1,14 @@
+#!/usr/bin/env sh
+# Fast checks only. The slow ones (clippy, tests, build) belong in CI and in
+# scripts/development/check.sh — a pre-commit hook people disable is worse than
+# no hook at all.
+set -eu
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+
+cargo fmt --all --check
+sh scripts/development/check-xaml.sh
+
+if command -v dotnet >/dev/null 2>&1 && [ -f dotnet/MSBE.slnx ]; then
+  dotnet format whitespace dotnet/MSBE.slnx --no-restore --verify-no-changes
+fi

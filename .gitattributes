@@ -1,0 +1,13 @@
+* text=auto eol=lf
+
+*.png binary
+*.ico binary
+*.pak binary
+*.jar binary
+*.wasm binary
+*.zip binary
+*.7z  binary
+
+# Generated; keep them out of diffs but still reviewable on demand.
+Cargo.lock          linguist-generated=true -diff
+packages.lock.json  linguist-generated=true -diff

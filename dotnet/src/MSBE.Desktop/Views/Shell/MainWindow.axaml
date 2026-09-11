@@ -1,0 +1,16 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:MSBE.Desktop.ViewModels"
+        xmlns:pages="using:MSBE.Desktop.Views.Pages"
+        x:Class="MSBE.Desktop.Views.Shell.MainWindow"
+        x:DataType="vm:MainViewModel"
+        Title="{Binding Title}"
+        Width="1100" Height="720"
+        MinWidth="640" MinHeight="480">
+  <DockPanel>
+    <Border DockPanel.Dock="Bottom" Padding="12,6" Background="{DynamicResource SystemControlBackgroundListLowBrush}">
+      <TextBlock Classes="caption" Text="{Binding StatusMessage}" />
+    </Border>
+    <pages:InstancesPageView />
+  </DockPanel>
+</Window>

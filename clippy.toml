@@ -1,0 +1,34 @@
+msrv = "1.91"
+
+# Panicking helpers stay legal in tests, where a panic *is* the failure report.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests  = true
+allow-print-in-tests  = true
+allow-dbg-in-tests    = false
+
+# Complexity ceilings. These are low on purpose: the applier and the solver are
+# the two places bugs are unrecoverable, and "this function got long" is the
+# earliest cheap signal.
+cognitive-complexity-threshold = 15
+too-many-arguments-threshold   = 6
+type-complexity-threshold      = 150
+max-fn-params-bools            = 1
+
+disallowed-types = [
+  { path = "std::collections::HashMap", reason = "iteration order is nondeterministic; lockfiles and OperationSets are compared byte-for-byte, so use BTreeMap (ordered) or IndexMap (insertion-ordered). #[expect(clippy::disallowed_types, reason = \"...\")] where order provably never escapes." },
+  { path = "std::collections::HashSet", reason = "same as HashMap — use BTreeSet or IndexSet." },
+]
+
+disallowed-methods = [
+  { path = "std::fs::remove_file", reason = "destructive and unjournaled. Emit a Remove operation and let the msbe-fsops applier execute it, so it lands in the journal and can be rolled back." },
+  { path = "std::fs::remove_dir_all", reason = "destructive and unjournaled — this is the call that deletes someone's save directory. Go through the applier." },
+  { path = "std::fs::rename", reason = "use msbe_fsops::atomic (same-volume staging + rename) so a crash never leaves a half-written file at a real path." },
+  { path = "std::env::var", reason = "read configuration through msbe_core::config so precedence, redaction and headless fallbacks stay in one place." },
+  { path = "std::env::set_var", reason = "process-global mutation; unsound alongside threads. Pass environment explicitly." },
+  { path = "std::process::exit", reason = "skips destructors, so the journal may not be flushed. Return an ExitCode from main instead." },
+  { path = "std::process::Command::new", reason = "spawning a process is a capability, not an ambient ability. Only the run-trusted-binary path may do this, with an #[expect] and a reason naming the hash-pinning." },
+  { path = "std::time::SystemTime::now", reason = "inject a Clock. Plan evaluation must be deterministic, and reproducible lockfiles must not embed wall-clock time." },
+]
+
+doc-valid-idents = ["MSBE", "NativeAOT", "PubGrub", "WebAssembly", "WASM", "CAS", "TOML", "JSON", "SQLite", "BepInEx", "NeoForge", "Modrinth", "CurseForge", "Thunderstore", "FOMOD", "..."]

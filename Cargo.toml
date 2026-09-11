@@ -1,0 +1,78 @@
+[workspace]
+resolver = "3"
+members  = ["crates/*"]
+
+[workspace.package]
+version      = "0.0.0"
+edition      = "2024"
+rust-version = "1.91"
+license      = "MPL-2.0"
+repository   = "https://github.com/msbe/msbe"
+homepage     = "https://github.com/msbe/msbe"
+readme       = "README.md"
+keywords     = ["modding", "games", "package-manager"]
+categories   = ["games", "command-line-utilities", "filesystem"]
+publish      = false
+
+# ---------------------------------------------------------------------------
+# Lints are defined once here and inherited by every crate via `[lints]
+# workspace = true`. A crate that needs an exception states it at the call site
+# with #[expect(..., reason = "...")] — never by quietly loosening this table.
+# ---------------------------------------------------------------------------
+[workspace.lints.rust]
+unsafe_code                   = "deny"
+missing_docs                  = "deny"
+missing_debug_implementations = "deny"
+unreachable_pub               = "deny"
+unused_qualifications         = "deny"
+unused_import_braces          = "deny"
+trivial_casts                 = "deny"
+trivial_numeric_casts         = "deny"
+let_underscore_drop           = "deny"
+non_ascii_idents              = "deny"
+rust_2018_idioms              = { level = "deny", priority = -1 }
+future_incompatible           = { level = "deny", priority = -1 }
+nonstandard_style             = { level = "deny", priority = -1 }
+
+[workspace.lints.clippy]
+all      = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+cargo    = { level = "deny", priority = -1 }
+
+# Noise from the groups above, turned off deliberately rather than case by case.
+multiple_crate_versions = "allow"
+must_use_candidate      = "allow"
+module_name_repetitions = "allow"
+
+# Panic discipline. This crate family writes into directories users cannot
+# afford to lose; a panic mid-deploy is a half-applied transaction.
+unwrap_used      = "deny"
+expect_used      = "deny"
+panic            = "deny"
+todo             = "deny"
+unimplemented    = "deny"
+indexing_slicing = "deny"
+integer_division = "deny"
+float_cmp        = "deny"
+string_slice     = "deny"
+
+# Hygiene.
+dbg_macro                       = "deny"
+print_stdout                    = "deny"
+print_stderr                    = "deny"
+exit                            = "deny"
+mem_forget                      = "deny"
+str_to_string                   = "deny"
+self_named_module_files         = "deny"
+undocumented_unsafe_blocks      = "deny"
+allow_attributes                = "deny"
+allow_attributes_without_reason = "deny"
+
+[profile.release]
+lto           = "thin"
+codegen-units = 1
+strip         = "debuginfo"
+panic         = "unwind"
+
+[profile.dev]
+debug = "line-tables-only"

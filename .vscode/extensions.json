@@ -1,0 +1,13 @@
+{
+  "recommendations": [
+    "rust-lang.rust-analyzer",
+    "vadimcn.vscode-lldb",
+    "tamasfe.even-better-toml",
+    "ms-dotnettools.csdevkit",
+    "ms-dotnettools.csharp",
+    "AvaloniaTeam.vscode-avalonia",
+    "EditorConfig.EditorConfig",
+    "tekumara.typos-vscode",
+    "bierner.markdown-mermaid"
+  ]
+}

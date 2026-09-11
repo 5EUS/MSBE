@@ -49,7 +49,7 @@ flowchart LR
 Throwaway spikes with written conclusions, answering what could invalidate the
 architecture before anything is built on it.
 
-- **Avalonia 11 + NativeAOT + `CommunityToolkit.Mvvm`** — publish a non-trivial window
+- **Avalonia 12 + NativeAOT + `CommunityToolkit.Mvvm`** — publish a non-trivial window
   with a virtualized 1000-row list and compiled bindings on all three OSes. Measure
   binary size and startup. *The single biggest assumption in the stack.*
 - **wasmtime host** — a component-model extension that reads a fixture archive and emits

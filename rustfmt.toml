@@ -1,0 +1,24 @@
+# Stable options only, so `cargo fmt --check` passes on the pinned toolchain
+# without a nightly detour.
+edition             = "2024"
+max_width           = 100
+tab_spaces          = 4
+hard_tabs           = false
+newline_style       = "Unix"
+use_small_heuristics = "Default"
+fn_params_layout    = "Tall"
+match_arm_leading_pipes = "Never"
+merge_derives       = true
+remove_nested_parens = true
+reorder_imports     = true
+reorder_modules     = true
+use_field_init_shorthand = true
+use_try_shorthand   = true
+force_explicit_abi  = true
+
+# Nightly-only and therefore NOT enabled here; revisit if the project ever
+# pins a nightly for formatting:
+#   group_imports = "StdExternalCrate"
+#   imports_granularity = "Crate"
+#   wrap_comments = true
+#   format_code_in_doc_comments = true

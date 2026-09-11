@@ -1,0 +1,43 @@
+# Microsoft.CodeAnalysis.BannedApiAnalyzers — the C# counterpart to clippy.toml's
+# disallowed-methods. Entries are documentation-comment IDs:
+#   T:Namespace.Type   P:Namespace.Type.Property   M:Namespace.Type.Method   N:Namespace
+# A malformed line is reported as RS0002, so a typo fails the build rather than
+# silently disabling the ban.
+#
+# Escape hatch: #pragma warning disable RS0030 with a comment naming the reason.
+
+# --- NativeAOT: runtime codegen and reflection instantiation ------------------
+N:System.Reflection.Emit;Runtime code generation does not exist under NativeAOT.
+T:System.Reflection.Emit.DynamicMethod;Runtime code generation does not exist under NativeAOT.
+M:System.Activator.CreateInstance;Reflection instantiation is trim-unsafe. Construct explicitly, or use a source-generated factory.
+T:Avalonia.Data.ReflectionBindingExtension;Use compiled bindings with x:DataType. ReflectionBinding fails at runtime under NativeAOT.
+
+# --- NativeAOT: reflection-based serialization --------------------------------
+# Every RPC DTO belongs to a JsonSerializerContext; the reflection overloads are
+# the ones that compile fine and then throw on a published AOT build.
+M:System.Text.Json.JsonSerializer.Serialize;Use the JsonSerializerContext overload from MSBE.Client.
+M:System.Text.Json.JsonSerializer.Deserialize;Use the JsonSerializerContext overload from MSBE.Client.
+
+# --- Async correctness --------------------------------------------------------
+# A blocked UI thread is the most common Avalonia defect, and each of these is a
+# frozen window that a compile-time ban prevents outright.
+M:System.Threading.Tasks.Task.Wait;Blocking on a Task deadlocks the UI thread. Await it.
+M:System.Threading.Tasks.Task.WaitAll;Blocking on a Task deadlocks the UI thread. Use Task.WhenAll.
+M:System.Threading.Tasks.Task.WaitAny;Blocking on a Task deadlocks the UI thread. Use Task.WhenAny.
+P:System.Threading.Tasks.Task`1.Result;Blocking on a Task deadlocks the UI thread. Await it.
+M:System.Threading.Thread.Sleep;Use Task.Delay.
+T:System.Threading.Thread;Use the task scheduler and Dispatcher.UIThread rather than raw threads.
+
+# --- Determinism: mirrors the SystemTime::now ban in clippy.toml --------------
+P:System.DateTime.Now;Inject IClock. Local time is untestable and reproducible artifacts must not embed it.
+P:System.DateTime.UtcNow;Inject IClock so tests are deterministic.
+P:System.DateTimeOffset.Now;Inject IClock.
+P:System.DateTimeOffset.UtcNow;Inject IClock so tests are deterministic.
+
+# --- Secrets ------------------------------------------------------------------
+# Tokens live in the daemon and never enter the managed heap; see docs/07.
+T:System.Security.Cryptography.MD5;Broken. Use SHA-256 or BLAKE3.
+T:System.Security.Cryptography.SHA1;Broken. Use SHA-256 or BLAKE3.
+
+# --- Desktop app has no console ----------------------------------------------
+T:System.Console;The desktop app has no console. Use ILogger; the CLI is a Rust binary.

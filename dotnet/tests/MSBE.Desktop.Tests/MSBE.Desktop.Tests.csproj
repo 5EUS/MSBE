@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <!-- xUnit v3 test assemblies are self-hosting executables. -->
+    <OutputType>Exe</OutputType>
+    <MSBeIsNonUiProject>true</MSBeIsNonUiProject>
+    <!-- Tests are not published AOT; they exercise the same code the AOT build ships. -->
+    <PublishAot>false</PublishAot>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/MSBE.Desktop/MSBE.Desktop.csproj" />
+    <ProjectReference Include="../../src/MSBE.Client/MSBE.Client.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="Avalonia.Headless" />
+    <PackageReference Include="Avalonia.Headless.XUnit" />
+  </ItemGroup>
+</Project>

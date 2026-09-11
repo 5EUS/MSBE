@@ -1,0 +1,20 @@
+{
+  "$schema": "https://raw.githubusercontent.com/DotNetAnalyzers/StyleCopAnalyzers/master/StyleCop.Analyzers/StyleCop.Analyzers/Settings/stylecop.schema.json",
+  "settings": {
+    "documentationRules": {
+      "companyName": "MSBE contributors",
+      "copyrightText": "Copyright (c) MSBE contributors. Licensed under the MPL-2.0.",
+      "documentInternalElements": true,
+      "documentPrivateElements": false,
+      "documentInterfaces": true,
+      "documentExposedElements": true
+    },
+    "orderingRules": {
+      "usingDirectivesPlacement": "outsideNamespace",
+      "systemUsingDirectivesFirst": true
+    },
+    "layoutRules": {
+      "newlineAtEndOfFile": "require"
+    }
+  }
+}

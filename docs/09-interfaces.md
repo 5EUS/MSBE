@@ -98,7 +98,7 @@ for free.
 
 ## 9.4 Desktop UI
 
-Avalonia 11, NativeAOT, MVVM via `CommunityToolkit.Mvvm` (source-generated, no
+Avalonia 12, NativeAOT, MVVM via `CommunityToolkit.Mvvm` (source-generated, no
 reflection — see [03 §3.3](03-architecture.md)).
 
 Primary surfaces:

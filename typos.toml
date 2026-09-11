@@ -1,0 +1,16 @@
+[files]
+extend-exclude = ["target/", "**/bin/", "**/obj/", "*.lock", "Cargo.lock"]
+
+[default.extend-words]
+# Domain vocabulary that looks like a typo and is not.
+nxm      = "nxm"
+pak      = "pak"
+esp      = "esp"
+esm      = "esm"
+esl      = "esl"
+bsa      = "bsa"
+mrpack   = "mrpack"
+fomod    = "fomod"
+reflink  = "reflink"
+jarmod   = "jarmod"
+coremod  = "coremod"

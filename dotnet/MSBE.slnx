@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/MSBE.Client/MSBE.Client.csproj" />
+    <Project Path="src/MSBE.Desktop/MSBE.Desktop.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/MSBE.Desktop.Tests/MSBE.Desktop.Tests.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,16 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <!--
+    Application-wide styles live here rather than in individual views, so a visual
+    change is one file and one review.
+  -->
+  <Style Selector="TextBlock.sectionHeading">
+    <Setter Property="FontSize" Value="18" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+  </Style>
+
+  <Style Selector="TextBlock.caption">
+    <Setter Property="Opacity" Value="0.7" />
+    <Setter Property="FontSize" Value="12" />
+  </Style>
+</Styles>

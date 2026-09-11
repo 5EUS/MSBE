@@ -1,0 +1,7 @@
+# Pinned deliberately. Bump in its own commit so a toolchain change is never
+# tangled with a behaviour change — new lints landing in the same diff as new
+# logic makes review impossible.
+[toolchain]
+channel    = "1.91.0"
+components = ["rustfmt", "clippy", "rust-src"]
+profile    = "default"

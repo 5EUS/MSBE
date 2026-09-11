@@ -1,0 +1,16 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:MSBE.Desktop.ViewModels"
+             x:Class="MSBE.Desktop.Views.Pages.InstancesPageView"
+             x:DataType="vm:MainViewModel">
+  <StackPanel Margin="24" Spacing="12">
+    <TextBlock Classes="sectionHeading" Text="Instances" />
+    <TextBlock Classes="caption"
+               TextWrapping="Wrap"
+               Text="One installed copy of a game. Detection rules come from the plan, never from this application." />
+    <Button Content="Detect instances" Command="{Binding DetectInstancesCommand}" />
+    <ListBox ItemsSource="{Binding Instances}"
+             SelectedItem="{Binding SelectedInstance}"
+             MinHeight="200" />
+  </StackPanel>
+</UserControl>
