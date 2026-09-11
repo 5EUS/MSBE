@@ -34,6 +34,7 @@ use msbe_plan_schema::{Component, Plan, Side};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
 
+use crate::bisect::{Error as BisectError, Session as BisectSession};
 use crate::{ExcludedFile, ResolveError, ResolvedFile, config::Home, resolve};
 
 /// The profile every new instance starts with.
@@ -785,6 +786,96 @@ impl Instance {
         fs::create_dir_all(&directory).map_err(io_error("create directory", &directory))?;
         write_toml(&directory.join(format!("{profile}.toml")), &lockfile)?;
         Ok(lockfile)
+    }
+
+    /// Starts and persists a bisection for every module in `profile`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the profile cannot be loaded, has fewer than two modules, or state
+    /// cannot be written.
+    pub fn start_bisect(&self, profile: &Name) -> Result<BisectSession, InstanceError> {
+        let source = self.profile(profile)?;
+        let trial_profile = Name::new("msbe-bisect")?;
+        if self.profile_path(&trial_profile).exists() {
+            return Err(InstanceError::ProfileExists(trial_profile));
+        }
+        let candidates = source.mods.keys().cloned().collect();
+        let session = BisectSession::new(profile.clone(), trial_profile, candidates)?;
+        self.write_bisect_trial(&source, &session)?;
+        write_toml(&self.dir.join("bisect.toml"), &session)?;
+        Ok(session)
+    }
+
+    /// Loads the resumable bisection session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when no bisection is active or its state is invalid.
+    pub fn bisect(&self) -> Result<BisectSession, InstanceError> {
+        let path = self.dir.join("bisect.toml");
+        if !path.is_file() {
+            return Err(InstanceError::NoBisect);
+        }
+        read_toml(&path)
+    }
+
+    /// Records a bisection verdict and persists the next deterministic trial.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when no bisection is active or its state cannot be written.
+    pub fn record_bisect(&self, failing: bool) -> Result<BisectSession, InstanceError> {
+        let mut session = self.bisect()?;
+        session.record(failing)?;
+        if !session.trial.is_empty() {
+            self.write_bisect_trial(&self.profile(&session.profile)?, &session)?;
+        }
+        write_toml(&self.dir.join("bisect.toml"), &session)?;
+        Ok(session)
+    }
+
+    /// Deploys the current bisection trial profile.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when no bisection is active or the deployment fails.
+    pub fn run_bisect(
+        &mut self,
+        observer: &mut dyn Observer,
+    ) -> Result<DeployReport, InstanceError> {
+        let session = self.bisect()?;
+        self.deploy(&session.trial_profile, observer)
+    }
+
+    /// Restores the source profile and removes all bisection state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when no bisection is active or cleanup cannot be completed.
+    pub fn finish_bisect(
+        &mut self,
+        observer: &mut dyn Observer,
+    ) -> Result<DeployReport, InstanceError> {
+        let session = self.bisect()?;
+        let report = self.deploy(&session.profile, observer)?;
+        fs::remove_file(self.profile_path(&session.trial_profile)).map_err(io_error(
+            "remove",
+            &self.profile_path(&session.trial_profile),
+        ))?;
+        fs::remove_file(self.dir.join("bisect.toml"))
+            .map_err(io_error("remove", &self.dir.join("bisect.toml")))?;
+        Ok(report)
+    }
+
+    fn write_bisect_trial(
+        &self,
+        source: &Profile,
+        session: &BisectSession,
+    ) -> Result<(), InstanceError> {
+        let mut trial = source.clone();
+        trial.mods.retain(|name, _| session.trial.contains(name));
+        write_toml(&self.profile_path(&session.trial_profile), &trial)
     }
 
     /// Creates a profile, empty or copied from `from`.
@@ -1601,6 +1692,14 @@ pub enum InstanceError {
     /// No profile has this name.
     #[error("no profile named {0}")]
     UnknownProfile(Name),
+
+    /// No bisection session is active for this instance.
+    #[error("no bisection session is active")]
+    NoBisect,
+
+    /// Bisection state could not be advanced.
+    #[error(transparent)]
+    Bisect(#[from] BisectError),
 
     /// The profile already has a mod with this name.
     #[error("profile {profile} already has a mod named {module}")]

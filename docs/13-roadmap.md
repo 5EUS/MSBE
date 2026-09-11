@@ -149,7 +149,9 @@ export` writes a standard `.mrpack` with verified files as local overrides. Curs
   paths are intentionally excluded.
 
 **Done when**: a 250-mod modpack imports, resolves, deploys, updates and rolls back; the
-same lockfile reproduces on another OS; `msbe bisect` finds a deliberately broken mod.
+same lockfile reproduces on another OS; `msbe bisect` finds a deliberately broken mod. The
+implemented bisection session persists deterministic module halves and deploys each trial through
+the normal journal; dependency-closure and pair-interaction analysis remain future solver work.
 **This is v0.1 — usable, CLI-only, no credentials required.**
 
 ## M3 — Minecraft's legacy topologies (3–4 weeks)

@@ -100,6 +100,9 @@ enum Command {
     /// Import and export portable modpack manifests.
     #[command(subcommand)]
     Pack(PackCommand),
+    /// Diagnose one broken module through deterministic trial deployments.
+    #[command(subcommand)]
+    Bisect(BisectCommand),
     /// Add mods to a profile from local files, .zip archives, Modrinth, or https URLs.
     Add {
         /// The instance.
@@ -192,6 +195,28 @@ enum Command {
         /// The instance.
         instance: String,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum BisectCommand {
+    /// Start a resumable bisection for a profile.
+    Start {
+        instance: String,
+        #[arg(long, short, default_value = DEFAULT_PROFILE)]
+        profile: String,
+    },
+    /// Deploy the current trial subset for manual testing.
+    Run { instance: String },
+    /// Record whether the current trial reproduces the problem.
+    Result {
+        instance: String,
+        #[arg(long, conflicts_with = "good")]
+        bad: bool,
+        #[arg(long, conflicts_with = "bad")]
+        good: bool,
+    },
+    /// Restore the original profile and remove the bisection session.
+    Finish { instance: String },
 }
 
 #[derive(Debug, Subcommand)]
@@ -344,6 +369,8 @@ enum CliError {
     PackDownloadMissing,
     #[error("Modrinth pack file has no SHA-256 or SHA-512 checksum")]
     PackHashMissing,
+    #[error("pass exactly one of --bad or --good")]
+    BisectVerdict,
     #[error(
         "instance {0} has no game version; set one with `msbe instance set {0} --game-version <version>`"
     )]
@@ -488,6 +515,7 @@ fn execute(cli: &Cli, console: &mut Console<'_>) -> Result<u8, CliError> {
         Command::Instance(command) => instance_command(&home, command, console),
         Command::Profile(command) => profile_command(&home, command, console),
         Command::Pack(command) => pack_command(&providers, &home, command, console),
+        Command::Bisect(command) => bisect_command(&home, command, console),
         Command::Add {
             instance,
             sources,
@@ -526,6 +554,51 @@ fn execute(cli: &Cli, console: &mut Console<'_>) -> Result<u8, CliError> {
         Command::Verify { instance } => verify(&home, instance, console),
         Command::Status { instance } => status(&home, instance, console),
     }
+}
+
+fn bisect_command(
+    home: &Home,
+    command: &BisectCommand,
+    console: &mut Console<'_>,
+) -> Result<u8, CliError> {
+    match command {
+        BisectCommand::Start { instance, profile } => {
+            let opened = open(home, instance, console)?;
+            let session = opened.start_bisect(&Name::new(profile)?)?;
+            console.emit(&session, |out, session| {
+                writeln!(
+                    out,
+                    "Started bisection with {} candidates; run the {} trial.",
+                    session.candidates.len(),
+                    session.trial_profile
+                )
+            })?;
+        }
+        BisectCommand::Run { instance } => {
+            let mut opened = open(home, instance, console)?;
+            console.emit(&opened.run_bisect(&mut NoopObserver)?, print_deploy)?;
+        }
+        BisectCommand::Result {
+            instance,
+            bad,
+            good,
+        } => {
+            if !bad && !good {
+                return Err(CliError::BisectVerdict);
+            }
+            let opened = open(home, instance, console)?;
+            let session = opened.record_bisect(*bad)?;
+            console.emit(&session, |out, session| match session.candidates.first() {
+                Some(culprit) if session.trial.is_empty() => writeln!(out, "Bisection identified {culprit}. Run `msbe bisect finish {instance}` to restore the profile."),
+                _ => writeln!(out, "{} candidates remain; run the next {} trial.", session.candidates.len(), session.trial_profile),
+            })?;
+        }
+        BisectCommand::Finish { instance } => {
+            let mut opened = open(home, instance, console)?;
+            console.emit(&opened.finish_bisect(&mut NoopObserver)?, print_deploy)?;
+        }
+    }
+    Ok(exit::OK)
 }
 
 fn pack_command(

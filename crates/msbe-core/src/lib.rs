@@ -6,6 +6,7 @@
 //!
 //! See `docs/00-overview.md` and `docs/02-plan-system.md`.
 
+pub mod bisect;
 pub mod config;
 pub mod instance;
 pub mod solver;

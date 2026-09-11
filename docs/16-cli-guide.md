@@ -167,28 +167,32 @@ plan preserve runtime changes rather than being overwritten or removed.
 
 ## 5. Implemented command reference
 
-| Command                                                                                                                                          | Status          | Notes                                              |
-| ------------------------------------------------------------------------------------------------------------------------------------------------ | --------------- | -------------------------------------------------- |
-| `instance add NAME --root DIR --plan FILE --loader ID [--loader-version VERSION] [--side client\|server] [--game-version VERSION] [--store DIR]` | **Implemented** | Register an existing game instance.                |
-| `instance set NAME [--game-version VERSION] [--loader-version VERSION] [--side client\|server]`                                                  | **Implemented** | Change instance facts and legacy-profile defaults. |
-| `instance list`                                                                                                                                  | **Implemented** | List registered instances.                         |
-| `profile new INSTANCE NAME [--from PROFILE]`                                                                                                     | **Implemented** | Create or copy a profile.                          |
-| `profile remove INSTANCE NAME`                                                                                                                   | **Implemented** | Delete an inactive profile and its lockfile.       |
-| `profile list INSTANCE`                                                                                                                          | **Implemented** | List profiles and the deployed profile.            |
-| `profile show INSTANCE [NAME]`                                                                                                                   | **Implemented** | Show selected mods.                                |
-| `profile set-target INSTANCE [NAME] --loader ID [--loader-version VERSION] --side client\|server`                                                | **Implemented** | Set a profile compatibility target.                |
-| `search INSTANCE QUERY... [-p PROFILE] [--limit N]`                                                                                              | **Implemented** | Search Modrinth for a profile target.              |
-| `add INSTANCE SOURCE... [-p PROFILE] [--with-deps]`                                                                                              | **Implemented** | Add local, archive, URL, or Modrinth content.      |
-| `update INSTANCE [MOD...] [-p PROFILE] [--dry-run]`                                                                                              | **Implemented** | Update Modrinth mods.                              |
-| `remove INSTANCE MOD [-p PROFILE]`                                                                                                               | **Implemented** | Remove a selection from a profile.                 |
-| `deploy INSTANCE [-p PROFILE] [--dry-run]`                                                                                                       | **Implemented** | Apply a journaled profile diff.                    |
-| `lock INSTANCE [-p PROFILE]`                                                                                                                     | **Implemented** | Write `locks/<profile>.toml` with resolved state.  |
-| `pack export INSTANCE --output FILE [-p PROFILE]`                                                                                                | **Implemented** | Export verified files as `.mrpack` overrides.      |
-| `pack import INSTANCE FILE [-p PROFILE] [--with-deps]`                                                                                           | **Implemented** | Acquire compatible verified `.mrpack` files.       |
-| `rollback INSTANCE`                                                                                                                              | **Implemented** | Undo the latest deployment.                        |
-| `purge INSTANCE`                                                                                                                                 | **Implemented** | Undo all deployment history.                       |
-| `verify INSTANCE`                                                                                                                                | **Implemented** | Report deployment drift.                           |
-| `status INSTANCE`                                                                                                                                | **Implemented** | Show instance and deployment state.                |
+| Command                                                                                                                                          | Status          | Notes                                               |
+| ------------------------------------------------------------------------------------------------------------------------------------------------ | --------------- | --------------------------------------------------- |
+| `instance add NAME --root DIR --plan FILE --loader ID [--loader-version VERSION] [--side client\|server] [--game-version VERSION] [--store DIR]` | **Implemented** | Register an existing game instance.                 |
+| `instance set NAME [--game-version VERSION] [--loader-version VERSION] [--side client\|server]`                                                  | **Implemented** | Change instance facts and legacy-profile defaults.  |
+| `instance list`                                                                                                                                  | **Implemented** | List registered instances.                          |
+| `profile new INSTANCE NAME [--from PROFILE]`                                                                                                     | **Implemented** | Create or copy a profile.                           |
+| `profile remove INSTANCE NAME`                                                                                                                   | **Implemented** | Delete an inactive profile and its lockfile.        |
+| `profile list INSTANCE`                                                                                                                          | **Implemented** | List profiles and the deployed profile.             |
+| `profile show INSTANCE [NAME]`                                                                                                                   | **Implemented** | Show selected mods.                                 |
+| `profile set-target INSTANCE [NAME] --loader ID [--loader-version VERSION] --side client\|server`                                                | **Implemented** | Set a profile compatibility target.                 |
+| `search INSTANCE QUERY... [-p PROFILE] [--limit N]`                                                                                              | **Implemented** | Search Modrinth for a profile target.               |
+| `add INSTANCE SOURCE... [-p PROFILE] [--with-deps]`                                                                                              | **Implemented** | Add local, archive, URL, or Modrinth content.       |
+| `update INSTANCE [MOD...] [-p PROFILE] [--dry-run]`                                                                                              | **Implemented** | Update Modrinth mods.                               |
+| `remove INSTANCE MOD [-p PROFILE]`                                                                                                               | **Implemented** | Remove a selection from a profile.                  |
+| `deploy INSTANCE [-p PROFILE] [--dry-run]`                                                                                                       | **Implemented** | Apply a journaled profile diff.                     |
+| `lock INSTANCE [-p PROFILE]`                                                                                                                     | **Implemented** | Write `locks/<profile>.toml` with resolved state.   |
+| `pack export INSTANCE --output FILE [-p PROFILE]`                                                                                                | **Implemented** | Export verified files as `.mrpack` overrides.       |
+| `pack import INSTANCE FILE [-p PROFILE] [--with-deps]`                                                                                           | **Implemented** | Acquire compatible verified `.mrpack` files.        |
+| `bisect start INSTANCE [-p PROFILE]`                                                                                                             | **Implemented** | Create a resumable module bisection session.        |
+| `bisect run INSTANCE`                                                                                                                            | **Implemented** | Deploy the current trial subset for manual testing. |
+| `bisect result INSTANCE --bad\|--good`                                                                                                           | **Implemented** | Record the trial verdict and select the next half.  |
+| `bisect finish INSTANCE`                                                                                                                         | **Implemented** | Restore the source profile and clean up.            |
+| `rollback INSTANCE`                                                                                                                              | **Implemented** | Undo the latest deployment.                         |
+| `purge INSTANCE`                                                                                                                                 | **Implemented** | Undo all deployment history.                        |
+| `verify INSTANCE`                                                                                                                                | **Implemented** | Report deployment drift.                            |
+| `status INSTANCE`                                                                                                                                | **Implemented** | Show instance and deployment state.                 |
 
 ## 6. Planned command surface
 
@@ -201,7 +205,7 @@ in the current binary. Their names and arguments can change before implementatio
 | Profiles                  | `profile switch`, `copy`, `diff`, `export`, `import`                                  | M2                        |
 | Resolution                | `lock`, `sync`, `conflicts`, ordering controls                                        | M2                        |
 | Plans and registry        | `plan`, `registry`                                                                    | M7                        |
-| Diagnostics and store     | `doctor`, `store`, `bundle`, `bisect`                                                 | M2 and later              |
+| Diagnostics and store     | `doctor`, `store`, `bundle`                                                           | M2 and later              |
 | Daemon control            | `daemon start`, `stop`, `status`; Windows named-pipe transport                        | M1 follow-up              |
 | Credentials and downloads | `auth`, `download`, Nexus `nxm://`, browser assistance                                | M5                        |
 | Steam Workshop            | Opt-in user-installed SteamCMD acquisition or local import; optional item-ID metadata | Future, subject to policy |
