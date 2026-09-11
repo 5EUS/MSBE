@@ -19,6 +19,7 @@ workspace = true
 msbe-archive         = { path = "../msbe-archive" }
 msbe-fsops           = { path = "../msbe-fsops" }
 msbe-plan-schema     = { path = "../msbe-plan-schema" }
+json5.workspace      = true
 pubgrub.workspace    = true
 serde.workspace      = true
 serde_json.workspace = true

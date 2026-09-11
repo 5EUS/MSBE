@@ -133,8 +133,9 @@ Where the domain gets hard, still without touching credentials.
   for M7.
 - **Loader bootstrap as a component** — Fabric and NeoForge installation and version
   pinning, including the launcher profile JSON.
-- **Structured config merge** across TOML, JSON/JSON5 and `.properties`, with the user
-  override layer that survives updates.
+- **Structured config merge** — deterministic recursive TOML, JSON/JSON5 and `.properties`
+  merging plus a validated `merge-config` plan step are implemented. Transactional generated-file
+  deployment and the separately persisted user override layer remain pending.
 - **Multiple deploy targets in one plan** — `mods/`, `config/`, `resourcepacks/`,
   `shaderpacks/`, per-world `datapacks/`.
 - **Pack import** — `.mrpack` and CurseForge `manifest.json` (metadata-only; CurseForge

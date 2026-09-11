@@ -1,11 +1,139 @@
 //! Where MSBE keeps its own state, and the one place the process environment is read.
 
 use std::{
+    collections::BTreeMap,
     ffi::OsString,
     path::{Path, PathBuf},
 };
 
+use thiserror::Error;
+
 use crate::instance::{InstanceError, Name};
+pub use msbe_plan_schema::ConfigFormat;
+
+/// Merges `layers` in order, so later documents override earlier scalar values.
+///
+/// Tables and objects merge recursively. Arrays are replaced as a complete value. Properties
+/// are treated as a flat, ordered key/value map and emitted deterministically.
+///
+/// # Errors
+///
+/// Returns [`ConfigError`] when a layer does not parse as the declared format.
+pub fn merge(format: ConfigFormat, layers: &[&[u8]]) -> Result<Vec<u8>, ConfigError> {
+    match format {
+        ConfigFormat::Json | ConfigFormat::Json5 => merge_json(format, layers),
+        ConfigFormat::Toml => merge_toml(layers),
+        ConfigFormat::Properties => merge_properties(layers),
+    }
+}
+
+fn merge_json(format: ConfigFormat, layers: &[&[u8]]) -> Result<Vec<u8>, ConfigError> {
+    let mut merged = serde_json::Value::Object(serde_json::Map::new());
+    for layer in layers {
+        let text = std::str::from_utf8(layer).map_err(ConfigError::Utf8)?;
+        let parsed = match format {
+            ConfigFormat::Json => serde_json::from_str(text).map_err(ConfigError::Json)?,
+            ConfigFormat::Json5 => json5::from_str(text).map_err(ConfigError::Json5)?,
+            ConfigFormat::Toml | ConfigFormat::Properties => unreachable!(),
+        };
+        merge_json_value(&mut merged, parsed);
+    }
+    serde_json::to_vec_pretty(&merged).map_err(ConfigError::Json)
+}
+
+fn merge_json_value(base: &mut serde_json::Value, overlay: serde_json::Value) {
+    if let (Some(base), Some(overlay)) = (base.as_object_mut(), overlay.as_object()) {
+        for (key, value) in overlay {
+            if let Some(existing) = base.get_mut(key) {
+                merge_json_value(existing, value.clone());
+            } else {
+                base.insert(key.clone(), value.clone());
+            }
+        }
+    } else {
+        *base = overlay;
+    }
+}
+
+fn merge_toml(layers: &[&[u8]]) -> Result<Vec<u8>, ConfigError> {
+    let mut merged = toml::Value::Table(toml::map::Map::new());
+    for layer in layers {
+        let text = std::str::from_utf8(layer).map_err(ConfigError::Utf8)?;
+        merge_toml_value(
+            &mut merged,
+            toml::from_str::<toml::Value>(text).map_err(ConfigError::Toml)?,
+        );
+    }
+    toml::to_string_pretty(&merged)
+        .map(|text| text.into_bytes())
+        .map_err(ConfigError::TomlSerialize)
+}
+
+fn merge_toml_value(base: &mut toml::Value, overlay: toml::Value) {
+    if let (Some(base), Some(overlay)) = (base.as_table_mut(), overlay.as_table()) {
+        for (key, value) in overlay {
+            if let Some(existing) = base.get_mut(key) {
+                merge_toml_value(existing, value.clone());
+            } else {
+                base.insert(key.clone(), value.clone());
+            }
+        }
+    } else {
+        *base = overlay;
+    }
+}
+
+fn merge_properties(layers: &[&[u8]]) -> Result<Vec<u8>, ConfigError> {
+    let mut merged = BTreeMap::new();
+    for layer in layers {
+        let text = std::str::from_utf8(layer).map_err(ConfigError::Utf8)?;
+        for (line, raw) in text.lines().enumerate() {
+            let raw = raw.trim();
+            if raw.is_empty() || raw.starts_with(['#', '!']) {
+                continue;
+            }
+            let Some((key, value)) = raw.split_once(['=', ':']) else {
+                return Err(ConfigError::Properties { line: line + 1 });
+            };
+            if key.trim().is_empty() {
+                return Err(ConfigError::Properties { line: line + 1 });
+            }
+            merged.insert(key.trim().to_owned(), value.trim().to_owned());
+        }
+    }
+    Ok(merged
+        .into_iter()
+        .map(|(key, value)| format!("{key}={value}\n"))
+        .collect::<String>()
+        .into_bytes())
+}
+
+/// Why structured configuration merging failed.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum ConfigError {
+    /// A layer was not UTF-8 text.
+    #[error("configuration is not UTF-8: {0}")]
+    Utf8(#[from] std::str::Utf8Error),
+    /// A JSON layer was malformed.
+    #[error("invalid JSON: {0}")]
+    Json(serde_json::Error),
+    /// A JSON5 layer was malformed.
+    #[error("invalid JSON5: {0}")]
+    Json5(json5::Error),
+    /// A TOML layer was malformed.
+    #[error("invalid TOML: {0}")]
+    Toml(toml::de::Error),
+    /// The merged TOML document could not be encoded.
+    #[error("cannot encode merged TOML: {0}")]
+    TomlSerialize(toml::ser::Error),
+    /// A properties line has no key/value separator.
+    #[error("invalid properties entry on line {line}")]
+    Properties {
+        /// The one-based source line.
+        line: usize,
+    },
+}
 
 /// MSBE's data directory: instances, their journals, profiles and pinned plans.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,6 +213,61 @@ fn platform_data_dir() -> Option<PathBuf> {
 #[cfg(not(any(unix, windows)))]
 fn platform_data_dir() -> Option<PathBuf> {
     None
+}
+
+#[cfg(test)]
+mod merge_tests {
+    use super::{ConfigFormat, merge};
+
+    #[test]
+    fn json_layers_merge_recursively_and_replace_arrays() {
+        let merged = merge(
+            ConfigFormat::Json,
+            &[
+                br#"{"video":{"distance":8,"shaders":["a"]}}"#,
+                br#"{"video":{"distance":12,"shaders":["b"]}}"#,
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&merged).unwrap(),
+            serde_json::json!({"video":{"distance":12,"shaders":["b"]}})
+        );
+    }
+
+    #[test]
+    fn json5_toml_and_properties_merge_deterministically() {
+        let json5 = merge(
+            ConfigFormat::Json5,
+            &[
+                b"{ // default\n render: { clouds: true } }",
+                b"{ render: { clouds: false } }",
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&json5).unwrap(),
+            serde_json::json!({"render":{"clouds":false}})
+        );
+        let toml = merge(
+            ConfigFormat::Toml,
+            &[b"[render]\nclouds = true\n", b"[render]\ndistance = 12\n"],
+        )
+        .unwrap();
+        assert!(
+            std::str::from_utf8(&toml)
+                .unwrap()
+                .contains("distance = 12")
+        );
+        assert_eq!(
+            merge(
+                ConfigFormat::Properties,
+                &[b"clouds=true\ndistance=8\n", b"clouds=false\n"]
+            )
+            .unwrap(),
+            b"clouds=false\ndistance=8\n"
+        );
+    }
 }
 
 #[cfg(test)]

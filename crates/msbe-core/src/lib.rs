@@ -175,7 +175,7 @@ fn filter_files<'a>(
         .iter()
         .filter_map(|step| match step {
             Step::Extract(extract) => Some(extract),
-            Step::Place(_) => None,
+            Step::Place(_) | Step::MergeConfig(_) => None,
         })
         .collect();
     if extract_steps.is_empty() {

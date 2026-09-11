@@ -256,6 +256,8 @@ pub enum Step {
     Extract(ExtractStep),
     /// Places resolved mod artifacts into a declared deployment target.
     Place(PlaceStep),
+    /// Merges matching config files from selected artifacts and the user's override layer.
+    MergeConfig(MergeConfigStep),
 }
 
 impl Step {
@@ -263,7 +265,46 @@ impl Step {
         match self {
             Self::Extract(step) => step.validate(),
             Self::Place(step) => step.validate(),
+            Self::MergeConfig(step) => step.validate(),
         }
+    }
+}
+
+/// The structured syntax of a configuration file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigFormat {
+    /// JSON documents.
+    Json,
+    /// JSON5 documents, emitted as standard JSON after merging.
+    Json5,
+    /// TOML documents.
+    Toml,
+    /// Java `.properties` documents.
+    Properties,
+}
+
+/// A config source path merged into one instance-relative destination.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MergeConfigStep {
+    /// The exact artifact-relative source path to merge.
+    pub source: String,
+    /// The instance-relative destination of the merged document.
+    pub into: String,
+    /// The parser and deterministic emitter to use.
+    pub format: ConfigFormat,
+}
+
+impl MergeConfigStep {
+    fn validate(&self) -> Result<(), ValidationError> {
+        if !is_relative_path(&self.source) || !is_relative_path(&self.into) {
+            return Err(ValidationError::InvalidPath(format!(
+                "{} -> {}",
+                self.source, self.into
+            )));
+        }
+        Ok(())
     }
 }
 
@@ -493,6 +534,22 @@ mod tests {
             into: "mods".to_owned(),
             flatten: false,
         }));
+        assert!(plan.validate().is_err());
+    }
+
+    #[test]
+    fn merge_config_paths_must_be_safe_and_relative() {
+        let mut plan = minecraft_plan();
+        plan.steps.push(Step::MergeConfig(super::MergeConfigStep {
+            source: "config/options.toml".to_owned(),
+            into: "config/options.toml".to_owned(),
+            format: super::ConfigFormat::Toml,
+        }));
+        plan.validate().unwrap();
+        let Step::MergeConfig(step) = plan.steps.last_mut().unwrap() else {
+            panic!("expected merge-config step");
+        };
+        step.into = "../options.toml".to_owned();
         assert!(plan.validate().is_err());
     }
 }
