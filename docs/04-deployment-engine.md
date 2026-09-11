@@ -5,26 +5,41 @@ most tests and the most paranoia.
 
 ## 4.1 Content-addressed store
 
+The store is **per volume**. Every volume that holds a managed instance gets its own
+store shard, because hardlinks and reflinks cannot cross a volume boundary. A single
+central store would hardlink into one library and silently copy into every other one;
+the M0 probes found exactly that on a machine with three Steam libraries on three volumes
+([15](15-m0-findings.md)).
+
 ```
-store/
+<shard root>/                          one per volume, on the same device as its instances
   blobs/sha256/ab/cdef0123…            every downloaded artifact, every extracted file
   trees/<tree-hash>/                   an extracted archive: paths → blob refs
   backups/sha256/…                     displaced original files (vanilla protection)
   tmp/                                 staging; same volume, atomic rename into place
 ```
 
-Download → verify → blob. Extract once → tree (each entry hardlinked from its blob).
-Every profile that uses the same mod version shares the same bytes. Ten profiles with
-a 300-mod pack cost one copy of the pack plus a few hundred KB of manifests.
+**Where a shard lives.** Inside the managed library itself, for example
+`<SteamLibrary>/.msbe/store/`. That location is guaranteed to be on the right device and is
+already writable by the user (Steam writes there), which a volume root often is not. An
+instance outside any library gets a shard at its nearest user-writable ancestor on the
+same device. The state database in `$XDG_STATE_HOME` indexes every shard.
 
-GC is refcount-based over lockfiles + deployments + backups, with a grace period and
-`msbe store gc --dry-run` showing exactly what would go.
+Download → verify → blob. Extract once → tree (each entry hardlinked from its blob). Every
+profile on a volume that uses the same mod version shares the same bytes: ten profiles
+with a 300-mod pack cost one copy of the pack plus a few hundred KB of manifests. **Across
+volumes**, a blob already present in another shard is copied shard-to-shard rather than
+downloaded again, so profile switching stays link-cheap on every volume.
+
+GC is refcount-based per shard, over lockfiles + deployments + backups, with a grace
+period and `msbe store gc --dry-run` showing exactly what would go. `msbe store` reports
+usage per volume.
 
 ## 4.2 Materialization backends
 
 | Backend | Windows | macOS | Linux | Notes |
 |---|---|---|---|---|
-| **reflink** (CoW) | ReFS only | APFS ✓ | btrfs, XFS ✓ | Best: cheap *and* isolated. Game can rewrite the file without corrupting the store. |
+| **reflink** (CoW) | ReFS / Dev Drive only | APFS ✓ | btrfs, XFS ✓ | Best: cheap *and* isolated. Game can rewrite the file without corrupting the store. |
 | **hardlink** | NTFS ✓ | ✓ | ✓ | Same volume only. **Danger:** a game or tool that writes in place mutates the store copy. Store blobs are mode 0444 and verified on use. |
 | **copy** | ✓ | ✓ | ✓ | Always works. Costs disk. The universal fallback. |
 | **symlink** | needs Developer Mode or admin | ✓ | ✓ | Many games and most anticheat break on it. Opt-in only. |
@@ -35,10 +50,24 @@ GC is refcount-based over lockfiles + deployments + backups, with a grace period
 setup and cached. VFS is an advanced opt-in on Windows and Linux and is explicitly
 **not offered on macOS** — promising it there and failing is worse than not offering it.
 
+**On Linux the chain almost always lands on hardlink.** ext4, the most common Linux
+filesystem, has no reflink, and neither does NTFS mounted through ntfs-3g. Reflink is a bonus
+on btrfs, XFS and APFS, not the expected path. Hardlink's in-place-write hazard is
+therefore the main case, and three rules are load-bearing rather than defensive:
+
+1. **Store blobs are read-only** (mode `0444`), so a well-behaved writer fails instead of
+   silently changing every profile that shares the blob.
+2. **Verify before linking.** Deploy checks the blob hash before creating the link, and
+   `msbe verify` re-hashes deployed files.
+3. **Mutable paths are never linked.** Files that a game or mod rewrites at runtime, such as
+   configs and generated caches, are declared by the plan (`mutable = ["config/**"]`) and
+   always materialized by copy. This is also what lets the user override layer in §4.6 work.
+
 The probe is a real probe: MSBE creates a temp file in the store and attempts an
 actual `FICLONE` / `clonefile` / `CreateHardLink` against the game directory, because
 filesystem type is not a reliable proxy (bind mounts, network shares, Flatpak
-sandboxes and case-insensitive volumes all lie).
+sandboxes and case-insensitive volumes all lie). In M0, `stat -f` reported an NTFS Steam library as
+`fuse`; only the attempted clone and link revealed what it could do ([15](15-m0-findings.md)).
 
 ## 4.3 Vanilla protection
 

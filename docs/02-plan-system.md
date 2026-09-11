@@ -252,7 +252,8 @@ Closed and versioned on purpose — an open set becomes "arbitrary code" by degr
 | `write-file` | emit a generated file (load order lists, `modsettings.lsx`) |
 | `patch-binary` | apply a bounded, hash-pinned binary diff |
 | `ensure-component` | install/verify a loader or script extender |
-| `set-launch-arg` / `set-env` | launch configuration, incl. Proton `WINEDLLOVERRIDES` |
+| `set-launch-arg` / `set-env` | launch configuration; also the fallback route for Proton DLL overrides |
+| `set-dll-override` | Wine/Proton DLL override written to the prefix registry, scoped to one executable ([08 §8.2](08-platforms-and-detection.md)) |
 | `register-plugin` | add to a game-managed order file |
 | `reorder` | apply the plan's ordering strategy |
 | `validate` | assert a `[[validate]]` condition |
@@ -301,7 +302,14 @@ caps = [
 ]
 ```
 
-Enforced limits: fuel-metered execution, memory ceiling, wall-clock timeout,
+**Denial is structural, not a runtime check.** Each extension is instantiated against a
+`Linker` that defines only the imports its granted capabilities allow. A component that
+imports anything else fails to instantiate ("unknown import … has not been defined"), so
+there is no permission check to bypass: an ungranted capability does not exist in the
+extension's world ([15](15-m0-findings.md)).
+
+Enforced limits: fuel-metered execution (`Config::consume_fuel`, per `Store`), a memory
+and table ceiling (`ResourceLimiter`), wall-clock timeout,
 deterministic (no ambient randomness or time), and **`process.spawn` does not exist**.
 A plan that genuinely must run a vendor installer uses a distinct
 `run-trusted-binary` step whose binary hash is pinned in the registry and which

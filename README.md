@@ -28,6 +28,7 @@ Stack: **Rust** core + daemon + CLI, **C# / Avalonia 12 (NativeAOT)** desktop UI
 | [12 — Testing & release](docs/12-testing-and-release.md) | Fixtures, property tests, CI matrix, packaging, updates |
 | [13 — Roadmap](docs/13-roadmap.md) | Milestones M0–M8 |
 | [14 — Risks & open questions](docs/14-risks.md) | What could sink this, and what still needs deciding |
+| [15 — M0 findings](docs/15-m0-findings.md) | De-risking record: what was proven, the C# UI go decision, design changes |
 
 ## Building
 

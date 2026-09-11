@@ -21,7 +21,7 @@ flowchart TB
   C --> DB[("SQLite<br/>state")]
   C --> CAS[("CAS<br/>blobs &amp; trees")]
 
-  B["<b>msbe-browser</b> — separate process, optional component<br/>CEF · own profile dir · <b>no IPC binding to app internals</b>"]
+  B["<b>msbe-browser</b> — separate process, optional component<br/>Rust + cef-rs · own profile dir · <b>no IPC binding to app internals</b>"]
   B -->|"narrow one-way capture channel<br/>nxm:// links, downloaded files"| D
 
   style B stroke-dasharray: 5 5
@@ -53,7 +53,7 @@ crates/
   msbe-daemon/        JSON-RPC server, job queue, session auth
   msbe-cli/           clap; --format json; stable exit codes
   msbe-rpc-schema/    the RPC contract; generates C# client + TS types + JSON Schema
-  msbe-browser/       CEF host process, nxm:// capture, assisted queue
+  msbe-browser/       CEF host process via cef-rs, nxm:// capture, assisted queue
 
 dotnet/
   Directory.Build.props    every setting, so .csproj files stay near-empty
@@ -138,10 +138,11 @@ question, or `--answers answers.toml` to pre-supply them). One mechanism, three 
 ## 3.5 State storage
 
 - `$XDG_CONFIG_HOME/msbe/` — config, `%APPDATA%`/`~/Library/Application Support` equivalents.
-- `$XDG_DATA_HOME/msbe/store/` — CAS blobs and trees. Relocatable; must be able to sit
-  on the same volume as the game for hardlink/reflink to work (the setup wizard checks
-  this and says so plainly).
+- **Store shards, one per volume.** CAS blobs and trees live on the same volume as the
+  instances they serve, inside the managed library (for example
+  `<SteamLibrary>/.msbe/store/`), because hardlinks and reflinks cannot cross volumes.
+  See [04 §4.1](04-deployment-engine.md).
 - `$XDG_STATE_HOME/msbe/state.db` — SQLite (WAL): instances, profiles, selections,
-  deployments, journal index. Schema migrations versioned and tested both ways.
+  deployments, journal index, and the location of every store shard. Schema migrations versioned and tested both ways.
 - Lockfiles live **inside the profile directory** and are meant to be copied, mailed,
   and committed to git.

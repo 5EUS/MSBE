@@ -2,8 +2,9 @@
 
 ## 7.1 Why a bundled Chromium rather than the OS webview
 
-`msbe-browser` is a **separate process embedding CEF**, shipped as an *optional
-downloadable component* (~150–200 MB) rather than bundled into the base install.
+`msbe-browser` is a **separate Rust process embedding CEF through
+[`cef-rs`](https://github.com/tauri-apps/cef-rs)**, shipped as an *optional downloadable
+component* (~100–200 MB) rather than bundled into the base install.
 
 Rationale:
 
@@ -14,6 +15,10 @@ Rationale:
 - **Consistent behaviour.** A login flow that works on Windows works on Linux.
 - **Sandboxing we don't have to write.** Chromium's own multi-process sandbox.
 - **Avalonia's WebView story is the weak link** in this stack; this routes around it.
+- **Chromium stays out of the C# process.** Hosting CEF from Rust keeps it entirely out of
+  the NativeAOT-published desktop app, so there is no CefGlue or AOT-compatibility question
+  to answer. `cef-rs` is maintained by the Tauri team, tracks current Chromium, and covers
+  Linux, macOS and Windows on x86-64 and ARM64 ([15](15-m0-findings.md)).
 
 Cost — stated plainly: it is large, it is a second update stream with its own CVE
 cadence, and it must be kept current. Mitigations: it is optional (everything works

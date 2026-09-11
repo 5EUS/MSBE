@@ -34,13 +34,15 @@ be plainly better.
 ```mermaid
 flowchart TB
   subgraph Host["Linux host"]
-    G["Game files<br/>~/.steam/steam/steamapps/common/&lt;Game&gt;/<br/><i>deployment target for mods</i>"]
-    P["Proton prefix<br/>steamapps/compatdata/&lt;appid&gt;/pfx/<br/>drive_c/users/steamuser/…<br/><i>configs, saves, some loaders live here</i>"]
-    L["Steam launch options<br/>localconfig.vdf<br/><i>WINEDLLOVERRIDES, loader bootstrap</i>"]
+    G["Game files<br/>steamapps/common/&lt;Game&gt;/<br/><i>deployment target for mods</i>"]
+    P["Proton prefix<br/>steamapps/compatdata/&lt;appid&gt;/pfx/<br/><i>configs, saves, some loaders</i>"]
+    R["Prefix registry<br/>pfx/user.reg<br/><i>per-executable DllOverrides</i>"]
+    L["Steam launch options<br/>userdata/&lt;id&gt;/config/localconfig.vdf"]
   end
   M["MSBE"] --> G
   M --> P
-  M -.->|"requires Steam closed"| L
+  M -->|"preferred · game must not be running"| R
+  M -.->|"fallback · Steam must be closed"| L
 ```
 
 What the plan model must express, and does:
@@ -49,12 +51,40 @@ What the plan model must express, and does:
   loaders live inside the prefix under `drive_c/users/steamuser/…`. A plan addresses
   both via path variables (`@game.root`, `@runtime.prefix`, `@runtime.user_dir`), and
   the same plan therefore works natively on Windows where they coincide.
-- **DLL overrides.** BepInEx, script extenders and ASI loaders need
-  `WINEDLLOVERRIDES=winhttp=n,b` (or similar). The `set-env` / `set-launch-arg` steps
-  handle it — but writing Steam launch options means editing `localconfig.vdf`, which
-  **Steam overwrites on exit**. MSBE must detect Steam running, refuse, and say so
-  clearly. This is the number-one silent-failure mode for Linux modding and deserves
-  an explicit `msbe doctor` check.
+- **DLL overrides go into the prefix registry, not Steam.** BepInEx, ASI loaders and the
+  `version`/`winhttp`/`dinput8` proxy family need Wine to load a native DLL from the game
+  directory (`winhttp=n,b`). There are two places to say so, and they are not equal:
+
+  | Route | Where | Constraint | Scope |
+  |---|---|---|---|
+  | **Prefix registry** (preferred) | `pfx/user.reg`, under `Software\Wine\AppDefaults\<game>.exe\DllOverrides` | the game's Wine processes must not be running | one executable |
+  | **Steam launch options** (fallback) | `WINEDLLOVERRIDES=… %command%` in `localconfig.vdf` | **Steam must be closed** | the whole launch |
+
+  The launch-options route is as bad as feared ([15](15-m0-findings.md)). Steam reads
+  `localconfig.vdf` only at startup and overwrites edits made while it runs, and Valve has
+  offered no API in the seven years since
+  [steam-for-linux #6443](https://github.com/ValveSoftware/steam-for-linux/issues/6443)
+  was opened. Steam is normally running, so this route mostly means asking the user to
+  quit Steam.
+
+  The registry route is BepInEx's primary documented Proton method, and it shrinks the
+  constraint to "this game is not running," which MSBE checks by looking for that prefix's
+  `wineserver`. Wine holds the registry in memory while it runs and writes it back on exit,
+  so an edit made during play is lost; MSBE refuses rather than racing it. Writing under
+  `AppDefaults\<game>.exe` rather than the prefix-wide `DllOverrides` key keeps the override
+  away from launchers and helper executables that share the prefix. The writer must
+  round-trip the format exactly (`WINE REGISTRY Version 2`, timestamped section headers) and
+  is its own step, `set-dll-override`, distinct from `set-env`.
+
+  Two cases still need the fallback:
+  - **No prefix yet.** A prefix's registry is created on the game's first launch under
+    Proton; in M0, 10 of 22 `compatdata` folders in one library had none. MSBE asks the user
+    to launch the game once rather than fabricating a prefix.
+  - **Launch arguments.** Loaders that need arguments or non-DLL environment variables have
+    no registry equivalent and still go through `localconfig.vdf`.
+
+  `msbe doctor` reports which route each instance uses and flags a pending launch-option
+  change while Steam is running, since that is the silent-failure mode.
 - **Proton version pinning.** A loader working under Proton 9 may break under
   Experimental. Instances record the Proton version and warn on change.
 - **Path translation.** `Z:\` ↔ `/`, case sensitivity, and the fact that Wine is
@@ -78,6 +108,12 @@ What the plan model must express, and does:
   against the *target* platform's rules, not the authoring one.
 - **Unicode normalization** — macOS HFS+ legacy NFD versus NFC elsewhere; the same
   filename hashes differently. Normalize to NFC in the CAS, record the on-disk form.
+- **Filesystem type lies.** An NTFS drive mounted through ntfs-3g reports `fuseblk` in
+  `findmnt` and `fuse` from `stat -f`; nothing names NTFS. Capabilities are never inferred
+  from the type string ([04 §4.2](04-deployment-engine.md)).
+- **Libraries on several volumes are normal.** Steam users routinely add libraries on extra
+  drives, often NTFS drives shared with Windows. Each volume gets its own store shard
+  ([04 §4.1](04-deployment-engine.md)).
 - **Network shares and case-insensitive volumes** break hardlinks and reflinks
   silently — hence the real probe in [04 §4.2](04-deployment-engine.md).
 

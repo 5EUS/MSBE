@@ -7,8 +7,8 @@ something usable rather than something demoable.
 
 The obvious first game is the one with the simplest install. That reasoning is a trap.
 
-No Man's Sky's *install* is trivial — extract a zip, copy `.pak` files into
-`GAMEDATA/MODS`, done. But its *acquisition* runs through Nexus, which means an early
+No Man's Sky's _install_ is trivial — extract a zip, copy `.pak` files into
+`GAMEDATA/MODS`, done. But its _acquisition_ runs through Nexus, which means an early
 NMS milestone drags the entire hard infrastructure — integrated browser, keychain,
 `nxm://` handling, assisted download queue — onto the critical path in order to support
 a game whose install logic is one `place` step. Maximum infrastructure cost for minimum
@@ -26,7 +26,7 @@ Minecraft inverts this:
   all eight, which means the abstraction gets stressed before a second game exists.
 
 So **Minecraft is the sole v0.1 game**, and No Man's Sky moves later to become something
-more useful than a first game: the *portability test* (M4) and then the *acquisition*
+more useful than a first game: the _portability test_ (M4) and then the _acquisition_
 test (M5), as two separate milestones, because they are two separate problems.
 
 ```mermaid
@@ -44,29 +44,36 @@ flowchart LR
   M8 -.->|"<b>v1.0</b>"| X3(( ))
 ```
 
-## M0 — De-risk (2–3 weeks)
+## M0 — De-risk (2–3 weeks) · mostly answered, see [15](15-m0-findings.md)
 
 Throwaway spikes with written conclusions, answering what could invalidate the
-architecture before anything is built on it.
+architecture before anything is built on it. A time-boxed first pass, using primary docs
+plus live evidence from a real machine, settled most of it and changed three designs.
 
-- **Avalonia 12 + NativeAOT + `CommunityToolkit.Mvvm`** — publish a non-trivial window
-  with a virtualized 1000-row list and compiled bindings on all three OSes. Measure
-  binary size and startup. *The single biggest assumption in the stack.*
-- **wasmtime host** — a component-model extension that reads a fixture archive and emits
-  operations, with fuel metering and a capability denial that actually denies.
-- **Filesystem probes** — `FICLONE` / `clonefile` / `CreateHardLink` against real ext4,
-  btrfs, NTFS, APFS and a network share. Confirm the probe tells the truth.
-- **Proton reality check** — install a loader into a Proton prefix by hand, note every
-  step, confirm the `localconfig.vdf` / Steam-running problem is as bad as expected.
-- **CEF hosting** — *not on the v0.1 path any more*, but spike it anyway: it validates
-  the process-separation architecture, and knowing now is worth two days.
+| Spike | Status | Outcome |
+|---|---|---|
+| Avalonia 12 + NativeAOT + `CommunityToolkit.Mvvm` | publish **proven**; launch pending | 0 trim/AOT warnings; 33.4 MB shippable on linux-x64 |
+| wasmtime host | **supported by docs**; not executed | denial is structural: unlinked imports fail instantiation |
+| Filesystem probes | **proven** on ext4 and NTFS | → store is **per volume**; hardlink is the Linux default |
+| Proton reality check | **confirmed**, and largely avoidable | → DLL overrides go in the **prefix registry**, not `localconfig.vdf` |
+| CEF hosting | **better than planned** | → `msbe-browser` is **Rust on `cef-rs`** |
 
-**Exit criterion**: a written go/no-go on the C# UI, with the fallback (non-AOT desktop
-plus AOT CLI, or a Rust-native UI) decided rather than deferred.
+**Decision: GO on the C# UI**, conditional on the AOT binary launching. Fallback decided: a
+self-contained non-AOT publish of the same app. A Rust-native UI is no longer carried as a
+fallback.
+
+**Remaining M0 work** (see [15 — Still open](15-m0-findings.md#still-open)): launch and time
+the AOT binary; the virtualized 1000-row list; Windows and macOS AOT publishes; a wasmtime
+component with a denied import; live APFS, ReFS, btrfs, XFS and network-share probes; one
+loader installed by hand through the Proton registry route; a `cef-rs` build that captures
+`nxm://`.
+
+**Exit criterion**: a written go/no-go on the C# UI, with the fallback decided rather than
+deferred. *Written. The go is conditional on the first remaining item.*
 
 ## M1 — Core spine + Minecraft, easy path (6–8 weeks)
 
-The vertical slice, using the easiest install in modding so that the *engine* is what
+The vertical slice, using the easiest install in modding so that the _engine_ is what
 gets exercised, not the domain.
 
 `msbe-core` (plan schema, step engine, resolve/apply), `msbe-archive` (hardened, fuzzed),
@@ -98,7 +105,7 @@ Where the domain gets hard, still without touching credentials.
 - **Multiple deploy targets in one plan** — `mods/`, `config/`, `resourcepacks/`,
   `shaderpacks/`, per-world `datapacks/`.
 - **Pack import** — `.mrpack` and CurseForge `manifest.json` (metadata-only; CurseForge
-  *downloads* wait for M5, and the distribution flag is honoured from day one).
+  _downloads_ wait for M5, and the distribution flag is honoured from day one).
 - **Lockfiles** and cross-platform reproducibility.
 
 **Done when**: a 250-mod modpack imports, resolves, deploys, updates and rolls back; the
@@ -110,13 +117,13 @@ same lockfile reproduces on another OS; `msbe bisect` finds a deliberately broke
 The reason Minecraft alone can validate the abstraction: its own history contains install
 models that are structurally unlike the modern one.
 
-- **Jarmods** — pre-1.6 mods whose class files are injected *into* `minecraft.jar`, in
+- **Jarmods** — pre-1.6 mods whose class files are injected _into_ `minecraft.jar`, in
   order, with `META-INF/` removed to defeat the signature check. This is Axis D's
-  *in-place container injection* plus an ordered mutation, and nothing in M1–M2 touches it.
+  _in-place container injection_ plus an ordered mutation, and nothing in M1–M2 touches it.
 - **Coremods and ASM transformers** (1.6–1.12 Forge), `coremods/`, `.cfg` configs, and
   the much weaker `mcmod.info` dependency metadata — the solver must degrade honestly.
-- **Server ecosystems** — Bukkit/Paper `plugins/` are a *different loader for the same
-  game*, with a disjoint mod ecosystem. One plan declares both as loader variants
+- **Server ecosystems** — Bukkit/Paper `plugins/` are a _different loader for the same
+  game_, with a disjoint mod ecosystem. One plan declares both as loader variants
   ([02](02-plan-system.md)) and a Profile's Target picks one; M3 is where that model
   gets its first real test against two genuinely incompatible ecosystems.
 
@@ -134,7 +141,7 @@ Scope deliberately excludes acquisition: mods come from local zips and direct UR
 install topology — extract, hygiene filter, place `.pak` files, lexical ordering, optional
 pak-check component.
 
-**Done when**: the NMS plan is written and tested *without modifying `msbe-core`*. If it
+**Done when**: the NMS plan is written and tested _without modifying `msbe-core`_. If it
 takes more than two weeks, or if core had to change, the eight axes are wrong and the
 schedule should stop until that is resolved — which is exactly why this milestone sits
 here rather than at the end.
@@ -159,7 +166,14 @@ copy-pasting, and CurseForge's distribution flag is honoured correctly.
 
 Avalonia against the existing RPC. Mod list, install preview including the exclusion
 report, conflict tree, wizard host, download queue, browser tab, journal with one-click
-rollback. Accessibility and i18n included, not deferred.
+rollback. **Modpack creation**: poll supported mod APIs and repositories for updates and
+metadata, search and compose a mod list, choose compatible versions and dependencies,
+add and edit pack-owned configs, then validate and export a reproducible lockfile and
+distributable pack manifest. Accessibility and i18n included, not deferred.
+
+**Done when**: a user can create a Minecraft modpack in the app from provider search,
+review the resolved list, add configuration files, export it, and import the exported
+pack into a fresh profile with the same resolved result.
 
 ## M7 — Registry (4–6 weeks)
 

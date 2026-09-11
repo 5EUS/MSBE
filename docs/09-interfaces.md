@@ -62,9 +62,11 @@ are part of the compatibility contract.
 Runs the checks that account for most support traffic, and says what to *do*:
 
 - store & path detection, and whether the game version matches what the profile solved against;
-- materialization probe results — "your store is on a different filesystem from the
-  game, so hardlinks are unavailable and MSBE will copy; move the store to `/mnt/games`
-  to reclaim ~40 GB";
+- materialization results per volume, naming the backend each instance actually got and
+  why it fell back. For example: "`/mnt/nvme` is NTFS via ntfs-3g, which has no reflink, so
+  deploys hardlink from the shard at `/mnt/nvme/SteamLibrary/.msbe/store`", or "no store
+  shard could be created on `/mnt/SSD` because it is not writable, so this instance copies
+  every file; grant write access to `/mnt/SSD/SteamLibrary` to reclaim ~40 GB";
 - **Steam running while launch options need writing** (see [08 §8.2](08-platforms-and-detection.md));
 - Proton version drift since the profile was built;
 - loader/component present and at the expected version;
