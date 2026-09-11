@@ -14,12 +14,14 @@ flowchart TB
 
   subgraph Server["Server side"]
     D["<b>msbe-daemon</b><br/>session &amp; auth · job queue · progress<br/><i>single writer: owns all mutation</i>"]
-    C["<b>msbe-core</b><br/>plans · solver · providers · CAS<br/>applier · journal · detection · wasmtime host"]
+    C["<b>msbe-core</b><br/>plans · solver · providers<br/>resolve pipeline · detection · wasmtime host"]
+    F["<b>msbe-fsops</b><br/>CAS shards · capability probe · journaled applier<br/><i>the only writer to game directories</i>"]
     D --> C
+    C --> F
   end
 
   C --> DB[("SQLite<br/>state")]
-  C --> CAS[("CAS<br/>blobs &amp; trees")]
+  F --> CAS[("CAS shards<br/>one per volume")]
 
   B["<b>msbe-browser</b> — separate process, optional component<br/>Rust + cef-rs · own profile dir · <b>no IPC binding to app internals</b>"]
   B -->|"narrow one-way capture channel<br/>nxm:// links, downloaded files"| D
@@ -44,11 +46,11 @@ being a callback. Accepted — see 3.4.
 
 ```
 crates/
-  msbe-core/          plans, solver, providers, CAS, applier, journal, detection
+  msbe-core/          plans, solver, providers, resolve pipeline, detection
   msbe-plan-schema/   manifest types + validation (shared with registry CI)
   msbe-plan-host/     wasmtime host, capability enforcement, WIT bindings
   msbe-archive/       hardened extraction (zip/7z/rar/tar), path safety
-  msbe-fsops/         materialization backends, reflink/hardlink probes, journal
+  msbe-fsops/         CAS shards, capability probe, journaled applier (the only writer)
   msbe-providers/     nexus, modrinth, curseforge, thunderstore, github, ckan, local
   msbe-daemon/        JSON-RPC server, job queue, session auth
   msbe-cli/           clap; --format json; stable exit codes

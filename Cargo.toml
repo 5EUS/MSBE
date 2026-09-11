@@ -14,6 +14,16 @@ keywords     = ["modding", "games", "package-manager"]
 categories   = ["games", "command-line-utilities", "filesystem"]
 publish      = false
 
+# Versions live here once; crates opt in with `dep.workspace = true`, mirroring
+# Directory.Packages.props on the .NET side.
+[workspace.dependencies]
+reflink-copy = "0.1.30"
+serde        = { version = "1.0.229", features = ["derive"] }
+serde_json   = "1.0.151"
+sha2         = "0.11.0"
+tempfile     = "3.27.0"
+thiserror    = "2.0.20"
+
 # ---------------------------------------------------------------------------
 # Lints are defined once here and inherited by every crate via `[lints]
 # workspace = true`. A crate that needs an exception states it at the call site
