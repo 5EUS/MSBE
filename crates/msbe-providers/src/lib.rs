@@ -7,7 +7,6 @@
 //!
 //! See `docs/06-providers-and-policy.md`.
 
-pub mod pack;
 mod registry;
 
 pub use registry::{BUILTIN, Providers, RegistryError, Routed};

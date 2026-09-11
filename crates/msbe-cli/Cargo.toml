@@ -26,6 +26,7 @@ msbe-core            = { version = "0.0.0", path = "../msbe-core" }
 msbe-fsops           = { version = "0.0.0", path = "../msbe-fsops" }
 msbe-http            = { version = "0.0.0", path = "../msbe-http" }
 msbe-plan-schema     = { version = "0.0.0", path = "../msbe-plan-schema" }
+msbe-pack            = { version = "0.0.0", path = "../msbe-pack" }
 msbe-provider-api    = { version = "0.0.0", path = "../msbe-provider-api" }
 msbe-providers       = { version = "0.0.0", path = "../msbe-providers" }
 msbe-rpc-schema      = { version = "0.0.0", path = "../msbe-rpc-schema" }
@@ -35,5 +36,6 @@ tempfile.workspace   = true
 thiserror.workspace  = true
 
 [dev-dependencies]
+msbe-provider-modrinth = { version = "0.0.0", path = "../msbe-provider-modrinth", features = ["test-support"] }
 sha2.workspace = true
 zip.workspace  = true

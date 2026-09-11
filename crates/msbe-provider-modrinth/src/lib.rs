@@ -9,6 +9,8 @@
 //! `msbe_provider_api::model`, and the release-channel update policy with the bulk hash lookups
 //! that implement it.
 
+#[cfg(feature = "test-support")]
+pub mod cli_test_support;
 mod client;
 mod reference;
 #[cfg(test)]
@@ -289,7 +291,7 @@ mod tests {
             (provenance.provider.as_str(), provenance.version.as_str()),
             (ID, "S1")
         );
-        assert_eq!(Some(&provenance.sha512), file.sha512.as_ref());
+        assert_eq!(provenance.hashes.get("sha512"), file.sha512.as_ref());
 
         // Same size, one bit different: only the hash can catch it.
         let mut tampered = contents("sodium-0.8.12.jar");

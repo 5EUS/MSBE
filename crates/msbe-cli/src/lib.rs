@@ -20,6 +20,7 @@ use msbe_core::{
     },
 };
 use msbe_fsops::{Backend, NoopObserver, Operation, RelPath, Store};
+use msbe_pack::{self as pack, ExportFile, PackError};
 use msbe_plan_schema::Side;
 use msbe_provider_api::{
     AdapterError, HttpClient, HttpError, ManifestError, PackageId, Target, Update, UpdateCheck,
@@ -29,10 +30,7 @@ use msbe_provider_api::{
         Substitution,
     },
 };
-use msbe_providers::{
-    Providers, RegistryError, Routed,
-    pack::{self, ExportFile, PackError},
-};
+use msbe_providers::{Providers, RegistryError, Routed};
 use serde::Serialize;
 
 #[cfg(test)]

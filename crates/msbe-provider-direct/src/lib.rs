@@ -5,6 +5,8 @@
 //! is resolved. A checksum pinned in the fragment (`#sha256=...` or `#sha512=...`) is verified
 //! when present, and the SHA-512 of what was fetched is recorded either way.
 
+use std::collections::BTreeMap;
+
 use msbe_fsops::RelPath;
 use msbe_provider_api::{
     AcquiredArtifact, Adapter, AdapterError, Availability, PackageId, Provenance, Registration,
@@ -44,7 +46,10 @@ impl Adapter for Direct {
             project: release.project.project.clone(),
             version: acquired.sha512.clone(),
             version_number: release.number.clone(),
-            sha512: acquired.sha512.clone(),
+            hashes: BTreeMap::from([
+                ("sha256".to_owned(), acquired.sha256.clone()),
+                ("sha512".to_owned(), acquired.sha512.clone()),
+            ]),
         }
     }
 }
@@ -291,7 +296,7 @@ mod tests {
     }
 
     #[test]
-    fn a_pinned_checksum_is_verified_and_the_sha512_is_always_recorded() {
+    fn a_pinned_checksum_is_verified_and_all_computed_hashes_are_recorded() {
         let good = format!(
             "https://cdn.example/extra.jar#sha256={}",
             hex(&Sha256::digest(b"payload"))
@@ -304,8 +309,11 @@ mod tests {
         assert_eq!(std::fs::read(&acquired.path).unwrap(), b"payload");
         assert_eq!(acquired.size, 7);
         let provenance = Direct.provenance(&selection.release, &acquired);
-        assert_eq!(provenance.sha512, hex(&Sha512::digest(b"payload")));
-        assert_eq!(provenance.version, provenance.sha512);
+        assert_eq!(
+            provenance.hashes.get("sha512"),
+            Some(&hex(&Sha512::digest(b"payload")))
+        );
+        assert_eq!(provenance.version, acquired.sha512);
         assert_eq!(
             (
                 provenance.project.as_str(),

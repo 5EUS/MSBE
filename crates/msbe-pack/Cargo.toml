@@ -1,6 +1,6 @@
 [package]
-name        = "msbe-provider-modrinth"
-description = "The Modrinth provider adapter."
+name        = "msbe-pack"
+description = "Portable modpack manifest import and export."
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true
@@ -15,16 +15,12 @@ publish.workspace      = true
 [lints]
 workspace = true
 
-[features]
-test-support = ["dep:sha2"]
-
 [dependencies]
-msbe-provider-api    = { version = "0.0.0", path = "../msbe-provider-api" }
-serde.workspace      = true
+msbe-fsops = { version = "0.0.0", path = "../msbe-fsops" }
+serde.workspace = true
 serde_json.workspace = true
-thiserror.workspace  = true
-sha2 = { workspace = true, optional = true }
+thiserror.workspace = true
+zip.workspace = true
 
 [dev-dependencies]
-msbe-plan-schema   = { version = "0.0.0", path = "../msbe-plan-schema" }
 tempfile.workspace = true

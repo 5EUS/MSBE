@@ -1,6 +1,6 @@
 //! The trait a provider adapter implements, and how an adapter registers.
 
-use std::{error::Error as StdError, fmt, path::Path};
+use std::{collections::BTreeMap, error::Error as StdError, fmt, path::Path};
 
 use msbe_core::{instance::Provenance, solver::PackageId};
 use thiserror::Error;
@@ -93,7 +93,10 @@ pub trait Adapter: fmt::Debug {
             project: release.project.project.clone(),
             version: release.id.clone(),
             version_number: release.number.clone(),
-            sha512: acquired.sha512.clone(),
+            hashes: BTreeMap::from([
+                ("sha256".to_owned(), acquired.sha256.clone()),
+                ("sha512".to_owned(), acquired.sha512.clone()),
+            ]),
         }
     }
 }

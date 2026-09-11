@@ -26,7 +26,8 @@ pub(crate) fn check(
 ) -> Result<Vec<UpdateCheck>, AdapterError> {
     let requested: Vec<String> = installed
         .iter()
-        .map(|provenance| provenance.sha512.to_ascii_lowercase())
+        .filter_map(|provenance| provenance.hashes.get("sha512"))
+        .map(|sha512| sha512.to_ascii_lowercase())
         .collect();
     if requested.is_empty() {
         return Ok(Vec::new());
@@ -115,6 +116,8 @@ fn lowercase_keys<V>(map: BTreeMap<String, V>) -> BTreeMap<String, V> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use msbe_provider_api::{Provenance, UpdateCheck, Updates};
     use serde_json::json;
 
@@ -170,7 +173,7 @@ mod tests {
                 project: "P".to_owned(),
                 version: String::new(),
                 version_number: String::new(),
-                sha512: hash(key),
+                hashes: BTreeMap::from([("sha512".to_owned(), hash(key))]),
             })
             .collect();
         let installed: Vec<&Provenance> = installed.iter().collect();

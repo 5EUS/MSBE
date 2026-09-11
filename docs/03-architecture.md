@@ -53,7 +53,8 @@ crates/
   msbe-fsops/         CAS shards, capability probe, journaled applier (the only writer)
   msbe-provider-api/  the adapter contract: neutral records, HttpClient, acquisition, resolution; no TLS
   msbe-provider-*/    one crate per provider adapter (modrinth, direct); no TLS
-  msbe-providers/     the adapters MSBE ships, behind the policy gate; pack formats
+  msbe-providers/     the adapters MSBE ships, behind the policy gate
+  msbe-pack/          portable modpack manifest import and export; no provider policy
   msbe-http/          the one crate that links TLS: ureq + rustls/ring, OS trust store
   msbe-daemon/        JSON-RPC server, job queue, session auth
   msbe-cli/           clap; --format json; stable exit codes
@@ -123,6 +124,7 @@ Windows named pipe with a per-user DACL. Optional TCP for headless-server mode, 
 default, bearer-token authenticated, loopback-bound unless explicitly opened.
 
 `msbe-rpc-schema` is the single source of truth and generates:
+
 - Rust server traits,
 - C# DTOs + client with `JsonSerializerContext`,
 - a JSON Schema for third-party clients and for contract tests.

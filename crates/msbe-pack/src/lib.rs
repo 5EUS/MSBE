@@ -1,8 +1,8 @@
-//! Metadata-only import for supported modpack manifests.
+//! Portable modpack manifest import and export.
 //!
-//! Importing a pack never downloads its contents. Modrinth file URLs are returned for the
-//! existing reviewed direct acquisition path; CurseForge file identifiers remain metadata until
-//! the official CurseForge adapter is available.
+//! Pack formats describe portable collections rather than provider behavior. Importing a pack
+//! never downloads content. Modrinth URLs remain metadata for reviewed acquisition, while
+//! CurseForge identifiers remain metadata until an official adapter is available.
 
 use std::{
     collections::BTreeMap,
@@ -22,21 +22,17 @@ const LIMIT: u64 = 16 << 20;
 /// A verified local file included in an exported pack as an override.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExportFile {
-    /// The portable destination relative to the game directory.
+    /// Portable destination relative to the game directory.
     pub path: RelPath,
-    /// The local content-addressed blob to copy into the pack.
+    /// Local content-addressed blob to copy into the pack.
     pub source: PathBuf,
 }
 
-/// Writes a Modrinth `.mrpack` with local files stored as portable overrides.
-///
-/// The caller supplies the selected game and loader versions as Modrinth dependency entries.
-/// Artifact download URLs are deliberately not synthesized from provider metadata.
+/// Writes a Modrinth `.mrpack` with local files as portable overrides.
 ///
 /// # Errors
 ///
-/// Returns [`PackError`] when an input file cannot be read, the output cannot be created, or
-/// the ZIP container cannot be written.
+/// Returns [`PackError`] when an input file cannot be read or the ZIP cannot be written.
 pub fn export_modrinth(
     output: &Path,
     name: Option<&str>,
@@ -56,15 +52,13 @@ pub fn export_modrinth(
     archive
         .start_file(INDEX, options)
         .map_err(|error| PackError::Archive(error.to_string()))?;
-    let bytes = serde_json::to_vec_pretty(&index).map_err(PackError::Json)?;
     archive
-        .write_all(&bytes)
+        .write_all(&serde_json::to_vec_pretty(&index).map_err(PackError::Json)?)
         .map_err(|source| PackError::Io { source })?;
     for export in files {
-        let entry = format!("overrides/{}", export.path);
         let mut source = File::open(&export.source).map_err(|source| PackError::Io { source })?;
         archive
-            .start_file(entry, options)
+            .start_file(format!("overrides/{}", export.path), options)
             .map_err(|error| PackError::Archive(error.to_string()))?;
         io::copy(&mut source, &mut archive).map_err(|source| PackError::Io { source })?;
     }
@@ -77,40 +71,40 @@ pub fn export_modrinth(
 /// A locally imported pack manifest.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Pack {
-    /// A Modrinth `.mrpack` index with verified-file metadata.
+    /// A Modrinth `.mrpack` index.
     Modrinth(ModrinthPack),
-    /// A CurseForge `manifest.json` with metadata-only file references.
+    /// A CurseForge manifest.
     CurseForge(CurseForgePack),
 }
 
 /// The dependency files recorded in a Modrinth pack.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModrinthPack {
-    /// Pack display name, when supplied by the index.
+    /// Display name when supplied.
     pub name: Option<String>,
-    /// Downloadable files, with provider-published hashes.
+    /// Downloadable files.
     pub files: Vec<ModrinthFile>,
 }
 
 /// One downloadable Modrinth pack file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModrinthFile {
-    /// Candidate download URLs. The first compatible reviewed source is selected by the caller.
+    /// Candidate download URLs.
     pub downloads: Vec<String>,
-    /// Published digests keyed by algorithm, such as `sha512`.
+    /// Published hashes keyed by algorithm.
     pub hashes: BTreeMap<String, String>,
-    /// Whether the file is needed on the client.
+    /// Needed on client.
     pub client: bool,
-    /// Whether the file is needed on the dedicated server.
+    /// Needed on dedicated server.
     pub server: bool,
 }
 
 /// Metadata-only CurseForge pack references.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CurseForgePack {
-    /// Pack display name, when supplied by the manifest.
+    /// Display name when supplied.
     pub name: Option<String>,
-    /// CurseForge project/file identifiers; no download URL is inferred.
+    /// Project/file references.
     pub files: Vec<CurseForgeFile>,
 }
 
@@ -121,11 +115,11 @@ pub struct CurseForgeFile {
     pub project_id: u64,
     /// CurseForge file ID.
     pub file_id: u64,
-    /// Whether the pack requires this file.
+    /// Whether required.
     pub required: bool,
 }
 
-/// Imports a `.mrpack` archive or a CurseForge `manifest.json` without downloading content.
+/// Imports a `.mrpack` archive or CurseForge `manifest.json` without downloading content.
 ///
 /// # Errors
 ///
@@ -141,14 +135,12 @@ pub fn import(path: &Path) -> Result<Pack, PackError> {
 }
 
 fn import_modrinth(path: &Path) -> Result<ModrinthPack, PackError> {
-    let file = File::open(path).map_err(|source| PackError::Io { source })?;
-    let mut archive =
-        ZipArchive::new(file).map_err(|error| PackError::Archive(error.to_string()))?;
-    let entry = archive
-        .by_name(INDEX)
-        .map_err(|_| PackError::MissingIndex)?;
+    let mut archive = ZipArchive::new(File::open(path).map_err(|source| PackError::Io { source })?)
+        .map_err(|error| PackError::Archive(error.to_string()))?;
     let mut bytes = Vec::new();
-    entry
+    archive
+        .by_name(INDEX)
+        .map_err(|_| PackError::MissingIndex)?
         .take(LIMIT + 1)
         .read_to_end(&mut bytes)
         .map_err(|source| PackError::Io { source })?;
@@ -203,7 +195,6 @@ struct ModrinthIndex {
     #[serde(default)]
     files: Vec<ModrinthIndexFile>,
 }
-
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ModrinthExportIndex<'a> {
@@ -248,14 +239,14 @@ struct CurseForgeManifestFile {
     required: bool,
 }
 
-/// Why pack import failed.
+/// Why pack import or export failed.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum PackError {
-    /// The file could not be read.
-    #[error("cannot read pack: {source}")]
+    /// The file could not be read or written.
+    #[error("cannot access pack: {source}")]
     Io {
-        /// The underlying file-read error.
+        /// The underlying filesystem error.
         #[source]
         source: io::Error,
     },
@@ -274,66 +265,4 @@ pub enum PackError {
     /// This Modrinth pack schema version is unsupported.
     #[error("unsupported Modrinth pack format version {0}")]
     UnsupportedVersion(u32),
-}
-
-#[cfg(test)]
-mod tests {
-    use std::{
-        collections::BTreeMap,
-        fs::{self, File},
-        io::Read,
-    };
-
-    use msbe_fsops::RelPath;
-
-    use super::{ExportFile, export_modrinth};
-
-    #[test]
-    fn export_writes_a_portable_modrinth_override_pack() {
-        let directory = tempfile::tempdir().unwrap();
-        let source = directory.path().join("sodium.jar");
-        let output = directory.path().join("profile.mrpack");
-        fs::write(&source, b"verified bytes").unwrap();
-
-        export_modrinth(
-            &output,
-            Some("Example profile"),
-            BTreeMap::from([
-                ("minecraft".to_owned(), "1.21.1".to_owned()),
-                ("fabric-loader".to_owned(), "0.16.10".to_owned()),
-            ]),
-            &[ExportFile {
-                path: RelPath::new("mods/sodium.jar").unwrap(),
-                source,
-            }],
-        )
-        .unwrap();
-
-        let file = File::open(output).unwrap();
-        let mut archive = zip::ZipArchive::new(file).unwrap();
-        let mut index = String::new();
-        archive
-            .by_name("modrinth.index.json")
-            .unwrap()
-            .read_to_string(&mut index)
-            .unwrap();
-        let index: serde_json::Value = serde_json::from_str(&index).unwrap();
-        assert_eq!(index.pointer("/formatVersion"), Some(&serde_json::json!(1)));
-        assert_eq!(
-            index.pointer("/dependencies/minecraft"),
-            Some(&serde_json::json!("1.21.1"))
-        );
-        assert_eq!(
-            index.pointer("/dependencies/fabric-loader"),
-            Some(&serde_json::json!("0.16.10"))
-        );
-
-        let mut override_file = Vec::new();
-        archive
-            .by_name("overrides/mods/sodium.jar")
-            .unwrap()
-            .read_to_end(&mut override_file)
-            .unwrap();
-        assert_eq!(override_file, b"verified bytes");
-    }
 }

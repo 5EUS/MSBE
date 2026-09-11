@@ -376,8 +376,10 @@ dependencies = [
  "msbe-core",
  "msbe-fsops",
  "msbe-http",
+ "msbe-pack",
  "msbe-plan-schema",
  "msbe-provider-api",
+ "msbe-provider-modrinth",
  "msbe-providers",
  "msbe-rpc-schema",
  "serde",
@@ -437,6 +439,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "msbe-pack"
+version = "0.0.0"
+dependencies = [
+ "msbe-fsops",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "zip",
+]
+
+[[package]]
 name = "msbe-plan-host"
 version = "0.0.0"
 
@@ -492,16 +506,12 @@ dependencies = [
 name = "msbe-providers"
 version = "0.0.0"
 dependencies = [
- "msbe-fsops",
  "msbe-plan-schema",
  "msbe-provider-api",
  "msbe-provider-direct",
  "msbe-provider-modrinth",
- "serde",
  "serde_json",
- "tempfile",
  "thiserror",
- "zip",
 ]
 
 [[package]]

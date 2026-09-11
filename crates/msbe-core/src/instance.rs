@@ -275,8 +275,7 @@ pub struct StoredFile {
 ///
 /// Provider-agnostic on purpose: every provider identifies a project, a version of it, and
 /// the hash it published for the file.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Provenance {
     /// The provider, such as `modrinth`.
     pub provider: String,
@@ -286,8 +285,41 @@ pub struct Provenance {
     pub version: String,
     /// The human-readable version number.
     pub version_number: String,
-    /// The SHA-512 the provider published for the file, verified when it was downloaded.
-    pub sha512: String,
+    /// Provider-published artifact hashes, keyed by normalized algorithm such as `sha256`.
+    pub hashes: BTreeMap<String, String>,
+}
+
+impl<'de> Deserialize<'de> for Provenance {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Wire {
+            provider: String,
+            project: String,
+            version: String,
+            version_number: String,
+            #[serde(default)]
+            hashes: BTreeMap<String, String>,
+            #[serde(default)]
+            sha512: Option<String>,
+        }
+
+        let wire = Wire::deserialize(deserializer)?;
+        let mut hashes = wire.hashes;
+        if let Some(sha512) = wire.sha512 {
+            hashes.entry("sha512".to_owned()).or_insert(sha512);
+        }
+        Ok(Self {
+            provider: wire.provider,
+            project: wire.project,
+            version: wire.version,
+            version_number: wire.version_number,
+            hashes,
+        })
+    }
 }
 
 /// A file or archive to add to a profile as one mod.
@@ -2103,7 +2135,7 @@ flatten = true
             project: "P1".to_owned(),
             version: "V1".to_owned(),
             version_number: "1.0.0".to_owned(),
-            sha512: "ab".repeat(64),
+            hashes: BTreeMap::from([("sha512".to_owned(), "ab".repeat(64))]),
         };
         instance
             .add_artifacts(
@@ -2144,7 +2176,7 @@ flatten = true
                 project: "P1".to_owned(),
                 version: version.to_owned(),
                 version_number: version.to_owned(),
-                sha512: "ab".repeat(64),
+                hashes: BTreeMap::from([("sha512".to_owned(), "ab".repeat(64))]),
             }),
         };
         instance
@@ -2184,6 +2216,20 @@ flatten = true
             matches!(result, Err(InstanceError::UnknownMod { .. })),
             "{result:?}"
         );
+    }
+
+    #[test]
+    fn legacy_provenance_sha512_migrates_to_the_hash_map() {
+        let provenance: super::Provenance = toml::from_str(
+            r#"provider = "modrinth"
+project = "AANobbMI"
+version = "S1"
+version_number = "0.8.12"
+sha512 = "abc"
+"#,
+        )
+        .unwrap();
+        assert_eq!(provenance.hashes.get("sha512"), Some(&"abc".to_owned()));
     }
 
     #[test]

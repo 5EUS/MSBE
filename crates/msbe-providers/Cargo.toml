@@ -16,15 +16,11 @@ publish.workspace      = true
 workspace = true
 
 [dependencies]
-msbe-fsops             = { version = "0.0.0", path = "../msbe-fsops" }
 msbe-provider-api      = { version = "0.0.0", path = "../msbe-provider-api" }
 msbe-provider-direct   = { version = "0.0.0", path = "../msbe-provider-direct" }
 msbe-provider-modrinth = { version = "0.0.0", path = "../msbe-provider-modrinth" }
-serde.workspace        = true
-serde_json.workspace   = true
 thiserror.workspace    = true
-zip.workspace          = true
 
 [dev-dependencies]
-msbe-plan-schema   = { version = "0.0.0", path = "../msbe-plan-schema" }
-tempfile.workspace = true
+msbe-plan-schema = { version = "0.0.0", path = "../msbe-plan-schema" }
+serde_json.workspace = true
