@@ -175,22 +175,37 @@ plan preserve runtime changes rather than being overwritten or removed.
 These commands are part of the documented product direction, but they are not available
 in the current binary. Their names and arguments can change before implementation.
 
-| Area                      | Planned commands                                                      | Target milestone       |
-| ------------------------- | --------------------------------------------------------------------- | ---------------------- |
-| Instance lifecycle        | `instance detect`, `instance show`, `instance remove`, `instance use` | Future M1/M2 follow-up |
-| Profiles                  | `profile switch`, `copy`, `diff`, `export`, `import`, `remove`        | M2                     |
-| Resolution                | `lock`, `sync`, `conflicts`, ordering controls                        | M2                     |
-| Plans and registry        | `plan`, `registry`                                                    | M7                     |
-| Diagnostics and store     | `doctor`, `store`, `bundle`, `bisect`                                 | M2 and later           |
-| Daemon control            | `daemon start`, `stop`, `status`; Windows named-pipe transport        | M1 follow-up           |
-| Credentials and downloads | `auth`, `download`, Nexus `nxm://`, browser assistance                | M5                     |
-| Game launch               | `launch`                                                              | Future                 |
+| Area                      | Planned commands                                                                      | Target milestone          |
+| ------------------------- | ------------------------------------------------------------------------------------- | ------------------------- |
+| Instance lifecycle        | `instance detect`, `instance show`, `instance remove`, `instance use`                 | Future M1/M2 follow-up    |
+| Profiles                  | `profile switch`, `copy`, `diff`, `export`, `import`, `remove`                        | M2                        |
+| Resolution                | `lock`, `sync`, `conflicts`, ordering controls                                        | M2                        |
+| Plans and registry        | `plan`, `registry`                                                                    | M7                        |
+| Diagnostics and store     | `doctor`, `store`, `bundle`, `bisect`                                                 | M2 and later              |
+| Daemon control            | `daemon start`, `stop`, `status`; Windows named-pipe transport                        | M1 follow-up              |
+| Credentials and downloads | `auth`, `download`, Nexus `nxm://`, browser assistance                                | M5                        |
+| Steam Workshop            | Opt-in user-installed SteamCMD acquisition or local import; optional item-ID metadata | Future, subject to policy |
+| Game launch               | `launch`                                                                              | Future                    |
 
 M2 also adds target pre-filtering, PubGrub solving, loader bootstrap, structured config
 merge, pack import, lockfiles, and reproducible cross-platform deployment. Later
 milestones add legacy Minecraft topologies, a No Man's Sky validation plan, the
 acquisition stack, the desktop UI, a signed registry, and Bethesda/KSP support. See
 [13 - Roadmap](13-roadmap.md) for the milestone definitions and completion criteria.
+
+### 6.1 Planned Steam Workshop acquisition and imports
+
+Steam Workshop acquisition is **not implemented**. The planned opt-in adapter may invoke a
+SteamCMD binary supplied by the user to acquire content their account is entitled to receive.
+MSBE will not bundle or modify SteamCMD, retain Steam credentials, implement Steam-client or
+depot protocols, access manifests, or bypass entitlement, subscription, rate-limit, or
+content-owner controls.
+
+MSBE will also accept a user-selected local file, archive, or directory obtained through the
+Steam client or another tool the user chooses. It may record a public Workshop URL or item ID as
+display-only provenance. See
+[06 - Providers & policy](06-providers-and-policy.md#64-steam-workshop-steamcmd-or-user-supplied-content)
+for the binding policy boundary.
 
 ## 7. Automation and troubleshooting
 

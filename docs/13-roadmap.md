@@ -178,7 +178,10 @@ here rather than at the end.
 ## M5 — The acquisition stack (5–7 weeks)
 
 Now the browser, credentials and automation earn their place, because two games already
-need them and a third (Bethesda) is coming.
+need them and a third (Bethesda) is coming. Steam Workshop remains an import-only boundary:
+MSBE may use a user-installed SteamCMD to acquire content the user's account is entitled to
+receive, or process content the user acquired elsewhere; it ships no Steam credentials or
+Steam-protocol integration.
 
 Keychain with the headless fallback a server admin actually needs. Thunderstore and
 GitHub Releases. Nexus with `nxm://` handler registration on all three platforms.

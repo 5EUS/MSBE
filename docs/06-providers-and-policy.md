@@ -1,6 +1,6 @@
 # 06 — Providers & Policy
 
-Providers are technically uniform and legally *not*. The policy layer is a
+Providers are technically uniform and legally _not_. The policy layer is a
 first-class part of the design, not a README disclaimer — getting this wrong is the
 most likely way this project dies, and it would die by C&D rather than by bug.
 
@@ -27,15 +27,16 @@ normal, well-typed outcome — not an error and not an invitation to work around
 
 ## 6.2 Policy matrix
 
-| Provider | Auth | Programmatic download | Notable constraints |
-|---|---|---|---|
-| **Modrinth** | none for public; token for private | ✓ open API | **Implemented (M1).** Real dependency graph. Requires an identifying User-Agent; 300 requests a minute, surfaced as `RateLimited` with the reset time. Downloads are https-only and verified against the published size and SHA-512 before ingest. Updates are found with the bulk hash endpoints (`POST /version_files` and `/version_files/update`), at most four requests however many mods are installed. A mod stays on its release channel or moves to a more stable one, and never goes to an older version unless the installed one no longer supports the instance. |
-| **Thunderstore** | none | ✓ | Clean SemVer, clean package format. |
-| **CurseForge** | API key required | ✓ *conditionally* | **Must honour `allowModDistribution: false`.** When false, third-party download is forbidden — return `Unavailable` and send the user to the mod page. Non-negotiable; this flag is why several managers got access revoked. |
-| **Nexus Mods** | personal API key / OAuth | premium: ✓ direct. free: ✗ | Free accounts have no programmatic file download. The *supported* path is the `nxm://` handler (see below). Rate limits published per-key; honour them and the `X-RL-*` response headers. |
-| **GitHub Releases** | optional token | ✓ | Watch unauthenticated rate limits. |
-| **CKAN repos** | none | ✓ | Consume the existing index; do not fork it. |
-| **Local / direct URL** | n/a | ✓ | Always available; the manual escape hatch. **Implemented (M1).** URLs must be https, redirects included. A `#sha256=` or `#sha512=` fragment pins a checksum that is verified before ingest, and every download's SHA-512 is recorded as provenance. |
+| Provider               | Auth                               | Programmatic download      | Notable constraints                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| ---------------------- | ---------------------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Modrinth**           | none for public; token for private | ✓ open API                 | **Implemented (M1).** Real dependency graph. Requires an identifying User-Agent; 300 requests a minute, surfaced as `RateLimited` with the reset time. Downloads are https-only and verified against the published size and SHA-512 before ingest. Updates are found with the bulk hash endpoints (`POST /version_files` and `/version_files/update`), at most four requests however many mods are installed. A mod stays on its release channel or moves to a more stable one, and never goes to an older version unless the installed one no longer supports the instance. |
+| **Thunderstore**       | none                               | ✓                          | Clean SemVer, clean package format.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| **CurseForge**         | API key required                   | ✓ _conditionally_          | **Must honour `allowModDistribution: false`.** When false, third-party download is forbidden — return `Unavailable` and send the user to the mod page. Non-negotiable; this flag is why several managers got access revoked.                                                                                                                                                                                                                                                                                                                                                 |
+| **Nexus Mods**         | personal API key / OAuth           | premium: ✓ direct. free: ✗ | Free accounts have no programmatic file download. The _supported_ path is the `nxm://` handler (see below). Rate limits published per-key; honour them and the `X-RL-*` response headers.                                                                                                                                                                                                                                                                                                                                                                                    |
+| **GitHub Releases**    | optional token                     | ✓                          | Watch unauthenticated rate limits.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| **CKAN repos**         | none                               | ✓                          | Consume the existing index; do not fork it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| **Steam Workshop**     | Steam account                      | SteamCMD or import         | **Planned.** MSBE may invoke a user-installed SteamCMD to acquire content the user's account is entitled to receive, or ingest a local file, archive, or directory obtained elsewhere. It will not implement Steam-client, depot, manifest, or authentication protocols itself.                                                                                                                                                                                                                                                                                              |
+| **Local / direct URL** | n/a                                | ✓                          | Always available; the manual escape hatch. **Implemented (M1).** URLs must be https, redirects included. A `#sha256=` or `#sha512=` fragment pins a checksum that is verified before ingest, and every download's SHA-512 is recorded as provenance.                                                                                                                                                                                                                                                                                                                         |
 
 TLS for every provider goes through `msbe-http`, which trusts the operating system's
 certificate store rather than a bundled list of roots. That respects system and corporate
@@ -64,12 +65,42 @@ Stated here so it is never re-litigated in a PR:
 - No scraping around a published rate limit, and no distributing shared API keys.
 - No mirroring or re-hosting mod binaries.
 - No ignoring `allowModDistribution: false` or any equivalent opt-out.
+- No Steam credential handling, client-protocol emulation, depot or manifest access, or
+  integration that bypasses Steam's normal entitlement and delivery controls.
 
 MSBE identifies itself honestly in every request. If a provider asks us to change
 something, we change it. The alternative is losing access for all users — which is
 what has happened to every tool that treated these as obstacles.
 
-## 6.4 The `nxm://` path (why free Nexus users are fine)
+## 6.4 Steam Workshop: SteamCMD or user-supplied content
+
+Steam Workshop support is planned as an opt-in integration with the user's installed SteamCMD,
+plus a local import boundary. Workshop delivery has game-specific layouts, subscription
+semantics, and platform rules; MSBE will not infer permission to automate around any of them.
+The supported workflows are deliberately narrow:
+
+1. the user explicitly enables the SteamCMD adapter and points MSBE to their installed binary;
+2. SteamCMD performs any authentication and entitlement checks through its own supported flow;
+3. MSBE requests only the selected content, imports the resulting local artifact, and validates,
+   hashes, stores, and deploys it through the normal plan;
+4. alternatively, the user selects an exported file, archive, or directory obtained through the
+   Steam client or another tool they choose;
+5. MSBE records the source, content digest, and optional Workshop item URL or ID for display
+   and update reminders.
+
+The planned adapter must use a SteamCMD binary supplied by the user; it must not bundle or
+modify SteamCMD, retain Steam credentials, emulate Steam protocols, inspect depot or manifest
+data, or bypass entitlement, subscription, rate-limit, or content-owner controls. A game plan
+may describe how an acquired artifact installs, but it does not grant MSBE permission to acquire
+it. If SteamCMD cannot obtain an item through its supported flow, MSBE returns `Unavailable` and
+offers the local-import path without suggesting a workaround.
+
+Possible future conveniences are limited to local, user-initiated operations: importing a path,
+checking whether its recorded content digest changed, and opening the item's public page in the
+user's browser. Background downloads, subscription synchronization, and update polling remain
+out of scope unless Valve publishes and permits a suitable integration path.
+
+## 6.5 The `nxm://` path (why free Nexus users are fine)
 
 Nexus provides "Mod Manager Download" buttons that emit `nxm://` links **for free
 accounts too**. That is the sanctioned mechanism, and it is what MO2 and Vortex use.
@@ -97,26 +128,26 @@ MSBE registers the protocol handler on all three platforms and catches links fro
 **the integrated browser or the user's system browser alike** — a user who prefers
 Firefox loses nothing.
 
-## 6.5 Assisted download queue (the large-modpack case)
+## 6.6 Assisted download queue (the large-modpack case)
 
 The honest version of "browser automation." For a 200-mod Nexus list on a free
 account, MSBE:
 
 1. resolves the list to concrete mod/file pages;
-2. shows a queue with progress — *N of 200*;
+2. shows a queue with progress — _N of 200_;
 3. navigates the integrated browser to the next page in the queue;
 4. **waits for the user to click the download button**, and any wait timer runs
    normally, un-touched;
 5. captures the resulting `nxm://` link, ingests the file, advances the queue.
 
-The automation is *navigation and capture*, not *clicking through gates*. It removes
+The automation is _navigation and capture_, not _clicking through gates_. It removes
 tab management and copy-pasting, which is the actual tedium, and it leaves every
 access control exactly where the site put it. Rate-limited, resumable, and cancellable.
 
 Optionally an "auto-advance" toggle moves to the next page after a successful capture.
 There is no toggle that clicks the download button.
 
-## 6.6 Operational asks
+## 6.7 Operational asks
 
 Tasks, not afterthoughts — start them early because approval takes weeks:
 
