@@ -31,6 +31,8 @@ use crate::{
 const FORMAT: &str = "msbe-snapshot";
 const SCHEMA: u32 = 1;
 const DOCUMENT_LIMIT: u64 = 16 << 20;
+/// The most bytes a pinned extension module may be, as core enforces.
+const MODULE_LIMIT: u64 = 64 << 20;
 const STATE: &str = "instance/";
 const BLOBS: &str = "blobs/sha256/";
 const OBSERVATIONS: &str = "observations.toml";
@@ -105,6 +107,14 @@ pub fn create_snapshot(
         entries.insert(
             format!("{STATE}{file}"),
             EntryContent::Inline(read(&dir.join(file))?),
+        );
+    }
+    // The plan's pinned extension modules travel with it, so a restored instance can deploy.
+    for declaration in &opened.plan().extensions {
+        let module = format!("{}.wasm", declaration.sha256);
+        entries.insert(
+            format!("{STATE}extensions/{module}"),
+            EntryContent::Inline(read(&dir.join("extensions").join(&module))?),
         );
     }
     let profiles = opened.profiles()?;
@@ -321,7 +331,12 @@ fn stage_state(snapshot: &ZipPackInput, store: &Store, staging: &Path) -> Result
         let Some(name) = entry.path.as_str().strip_prefix(STATE) else {
             continue;
         };
-        let bytes = snapshot.read(&entry.path, DOCUMENT_LIMIT)?;
+        let limit = if name.starts_with("extensions/") {
+            MODULE_LIMIT
+        } else {
+            DOCUMENT_LIMIT
+        };
+        let bytes = snapshot.read(&entry.path, limit)?;
         let label = entry.path.as_str();
         match name.split_once('/') {
             None if name == "instance.toml" => drop(document::<InstanceConfig>(&bytes, label)?),
@@ -346,6 +361,7 @@ fn stage_state(snapshot: &ZipPackInput, store: &Store, staging: &Path) -> Result
             Some(("locks", file)) if is_toml(file) => {
                 drop(document::<Lockfile>(&bytes, label)?);
             }
+            Some(("extensions", file)) if is_pinned_module(file, &bytes) => {}
             _ => {
                 return Err(PackError::issue(
                     IssueCode::UnsafeArchivePath,
@@ -360,6 +376,13 @@ fn stage_state(snapshot: &ZipPackInput, store: &Store, staging: &Path) -> Result
         atomic::write_file(&destination, &bytes)?;
     }
     Ok(())
+}
+
+/// Whether `file` names the module `bytes` hold: `<sha256>.wasm` for their own digest.
+fn is_pinned_module(file: &str, bytes: &[u8]) -> bool {
+    file.strip_suffix(".wasm").is_some_and(|sha256| {
+        Digest::of_bytes(bytes).to_string().strip_prefix("sha256:") == Some(sha256)
+    })
 }
 
 fn read_snapshot(snapshot: &ZipPackInput) -> Result<(SnapshotManifest, InstanceConfig), PackError> {

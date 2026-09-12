@@ -59,15 +59,18 @@ supported formats. The RAR path is treated with extra suspicion given its histor
 
 ## 11.3 Malicious plans
 
-The `emit-op`-only WASM design ([02 §2.5](02-plan-system.md)) means an extension cannot
-perform an unmodelled action. Remaining risk is a plan that emits *legitimate-looking
-but harmful* operations — e.g. `place` into a path outside the instance.
+The operations-only WASM design ([02 §2.5](02-plan-system.md), [18](18-wasm-extensions.md))
+means an extension cannot perform an unmodelled action. Remaining risk is a plan whose
+extension returns *legitimate-looking but harmful* operations — e.g. `place` into a path
+outside the instance.
 
 Defences:
-- every emitted operation is **re-validated by the host** against the plan's declared
-  capabilities and the instance root; extension output is treated as untrusted input;
-- fuel metering, memory ceiling, wall-clock timeout, no ambient time or randomness;
-- capability grants are shown to the user before first run and are per-plan, not global;
+- every returned operation is **checked by the host** against the extension's declared
+  operation kinds and roots and against the mod's own files, and its path must be safe and
+  relative; extension output is treated as untrusted input;
+- fuel metering, a memory ceiling, a read budget, and no ambient time, randomness or network;
+- capability grants are declared per extension in the plan, and a module that imports an
+  ungranted capability fails to load;
 - `run-trusted-binary` is a separate, hash-pinned, always-prompting step — never
   reachable from WASM;
 - capability tiers gate registry review effort ([10 §10.3](10-registry.md)).

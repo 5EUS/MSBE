@@ -308,6 +308,7 @@ fn stage_lockfile(
                 origin: module.origin.clone(),
                 provider: module.provider.clone(),
                 files: module.files.clone(),
+                answers: module.answers.clone(),
             };
             (name.clone(), StagedModule::Exact { entry })
         })
@@ -803,6 +804,7 @@ impl<'a> Fetcher<'a> {
                     blob: file.blob,
                 })
                 .collect(),
+            answers: requirement.answers.clone(),
         })
     }
 

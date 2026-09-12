@@ -34,6 +34,9 @@ pub struct Plan {
     /// Installation-owned inputs that deployment derivations may read.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub environment: Vec<EnvironmentInput>,
+    /// Sandboxed WebAssembly modules the plan's `run-extension` steps may run.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extensions: Vec<ExtensionDeclaration>,
     /// How resolved files are deployed.
     #[serde(default)]
     pub deploy: Deploy,
@@ -89,8 +92,22 @@ impl Plan {
             }
         }
 
+        let mut extension_ids = BTreeSet::new();
+        for extension in &self.extensions {
+            extension.validate()?;
+            if !extension_ids.insert(&extension.id) {
+                return Err(ValidationError::DuplicateExtension(extension.id.clone()));
+            }
+        }
+
+        let mut run_steps = BTreeSet::new();
         for step in &self.steps {
-            step.validate(&loader_ids)?;
+            step.validate(&loader_ids, &extension_ids)?;
+            if let Step::RunExtension(run) = step
+                && !run_steps.insert(&run.id)
+            {
+                return Err(ValidationError::DuplicateStep(run.id.clone()));
+            }
         }
         self.deploy.validate(&self.loaders)
     }
@@ -355,6 +372,8 @@ pub enum Step {
     Inject(InjectStep),
     /// Derives a JSON document from a file in the game by editing it at JSON pointers.
     EditJson(EditJsonStep),
+    /// Runs a sandboxed WebAssembly extension over each mod and deploys what it returns.
+    RunExtension(RunExtensionStep),
 }
 
 impl Step {
@@ -366,6 +385,7 @@ impl Step {
             Self::MergeConfig(step) => &step.loaders,
             Self::Inject(step) => &step.loaders,
             Self::EditJson(step) => &step.loaders,
+            Self::RunExtension(step) => &step.loaders,
         }
     }
 
@@ -374,7 +394,11 @@ impl Step {
         admits(self.loaders(), id)
     }
 
-    fn validate(&self, loaders: &BTreeSet<&String>) -> Result<(), ValidationError> {
+    fn validate(
+        &self,
+        loaders: &BTreeSet<&String>,
+        extensions: &BTreeSet<&String>,
+    ) -> Result<(), ValidationError> {
         if let Some(unknown) = self.loaders().iter().find(|id| !loaders.contains(id)) {
             return Err(ValidationError::UnknownStepLoader(unknown.clone()));
         }
@@ -384,6 +408,7 @@ impl Step {
             Self::MergeConfig(step) => step.validate(),
             Self::Inject(step) => step.validate(),
             Self::EditJson(step) => step.validate(),
+            Self::RunExtension(step) => step.validate(extensions),
         }
     }
 }
@@ -606,6 +631,229 @@ impl EditJsonStep {
     }
 }
 
+/// A sandboxed WebAssembly module that `run-extension` steps may run, and what it is granted.
+///
+/// Anything not granted here does not exist in the module's world: the host links only the imports
+/// these capabilities name, so a module that asks for any other import fails to load. See
+/// `docs/18-wasm-extensions.md`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExtensionDeclaration {
+    /// Stable identifier that steps use to name the extension.
+    pub id: String,
+    /// The module file, relative to the directory that holds the plan manifest.
+    pub path: String,
+    /// Lowercase hexadecimal SHA-256 of the module bytes, which pins them.
+    pub sha256: String,
+    /// Host capabilities the module may use.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<ExtensionCapability>,
+    /// Instance-relative globs that the `game-read` capability may read. Required with that
+    /// capability and refused without it. Globs may use `{game_version}`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub game_read: Vec<String>,
+    /// The operation kinds the module may return.
+    pub emit: Vec<EmitKind>,
+    /// Where returned operations may write: `@loader.targets.<name>` references or
+    /// instance-relative directories. Empty means every target of the selected loader.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub roots: Vec<String>,
+}
+
+impl ExtensionDeclaration {
+    /// Whether the module is granted `capability`.
+    pub fn grants(&self, capability: ExtensionCapability) -> bool {
+        self.capabilities.contains(&capability)
+    }
+
+    fn validate(&self) -> Result<(), ValidationError> {
+        validate_identifier("extension id", &self.id)?;
+        if !is_relative_path(&self.path) {
+            return Err(ValidationError::InvalidPath(self.path.clone()));
+        }
+        if self.sha256.len() != 64
+            || !self
+                .sha256
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        {
+            return Err(ValidationError::InvalidExtensionHash(self.id.clone()));
+        }
+        let grant = |reason| ValidationError::InvalidGrant {
+            extension: self.id.clone(),
+            reason,
+        };
+        if has_duplicates(&self.capabilities) {
+            return Err(grant("a capability is listed more than once"));
+        }
+        if self.grants(ExtensionCapability::GameRead) == self.game_read.is_empty() {
+            return Err(grant(
+                "`game_read` globs are required with the game-read capability, and only with it",
+            ));
+        }
+        for glob in &self.game_read {
+            validate_template_path(glob)?;
+        }
+        if self.emit.is_empty() || has_duplicates(&self.emit) {
+            return Err(grant(
+                "`emit` must list each operation kind once, and at least one",
+            ));
+        }
+        for root in &self.roots {
+            let valid = match root.strip_prefix(TARGET_PREFIX) {
+                Some(name) => !name.is_empty() && !name.contains(['/', '\\', ':']),
+                None => is_relative_path(root),
+            };
+            if !valid {
+                return Err(ValidationError::InvalidTargetReference(root.clone()));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A host capability a step extension may be granted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExtensionCapability {
+    /// List and read the files of the mod the step runs over.
+    ArchiveRead,
+    /// Read game files that match the declaration's `game_read` globs.
+    GameRead,
+    /// Ask installer questions, answered from the mod's recorded answers.
+    UiPrompt,
+}
+
+impl ExtensionCapability {
+    /// The capability's manifest spelling, such as `archive-read`.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ArchiveRead => "archive-read",
+            Self::GameRead => "game-read",
+            Self::UiPrompt => "ui-prompt",
+        }
+    }
+}
+
+/// An operation kind a step extension may return.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EmitKind {
+    /// Place one of the mod's files at an instance-relative path.
+    Place,
+    /// Write generated text to an instance-relative path.
+    WriteFile,
+}
+
+impl EmitKind {
+    /// The operation kind's manifest spelling, such as `write-file`.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Place => "place",
+            Self::WriteFile => "write-file",
+        }
+    }
+}
+
+/// Settings for a [`Step::RunExtension`], which runs a declared extension over each mod.
+///
+/// The extension's only effect is the operations it returns. The host checks each one against the
+/// extension's declaration before core turns it into a deployment claim.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunExtensionStep {
+    /// Stable identifier. It keys a mod's recorded installer answers and pins the transform in
+    /// lockfiles, so it may use only ASCII letters, digits, `-` and `_`.
+    pub id: String,
+    /// Loaders this step is limited to. Empty means every loader.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub loaders: Vec<String>,
+    /// The declared extension to run.
+    pub extension: String,
+    /// String parameters passed to the extension. Values may use `{game_version}`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub parameters: BTreeMap<String, String>,
+}
+
+impl RunExtensionStep {
+    fn validate(&self, extensions: &BTreeSet<&String>) -> Result<(), ValidationError> {
+        validate_identifier("run-extension step id", &self.id)?;
+        if !extensions.contains(&self.extension) {
+            return Err(ValidationError::UnknownExtension(self.extension.clone()));
+        }
+        for (key, value) in &self.parameters {
+            validate_identifier("extension parameter", key)?;
+            if !is_template(value) {
+                return Err(ValidationError::InvalidTemplate(value.clone()));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Whether `path` matches the glob `pattern`. Both use `/` separators. `**` matches any number of
+/// whole components, `*` any run of characters within one component, and `?` one character.
+pub fn matches_glob(pattern: &str, path: &str) -> bool {
+    let pattern: Vec<&str> = pattern.split('/').collect();
+    let path: Vec<&str> = path.split('/').collect();
+    matches_glob_parts(&pattern, &path)
+}
+
+fn matches_glob_parts(pattern: &[&str], path: &[&str]) -> bool {
+    let Some((head, tail)) = pattern.split_first() else {
+        return path.is_empty();
+    };
+    if *head == "**" {
+        if matches_glob_parts(tail, path) {
+            return true;
+        }
+        return match path.split_first() {
+            Some((_, rest)) => matches_glob_parts(pattern, rest),
+            None => false,
+        };
+    }
+    let Some((path_head, path_tail)) = path.split_first() else {
+        return false;
+    };
+    glob_chars_match(head.chars(), path_head.chars()) && matches_glob_parts(tail, path_tail)
+}
+
+fn glob_chars_match(pattern: std::str::Chars<'_>, mut path: std::str::Chars<'_>) -> bool {
+    let mut rest = pattern.clone();
+    match rest.next() {
+        None => path.next().is_none(),
+        // `*` matches nothing, or consumes one character and stays in effect. The retry must
+        // use `pattern`, which still starts with the star, not `rest`.
+        Some('*') => {
+            glob_chars_match(rest, path.clone())
+                || (path.next().is_some() && glob_chars_match(pattern, path))
+        }
+        Some('?') => path.next().is_some() && glob_chars_match(rest, path),
+        Some(character) => path.next() == Some(character) && glob_chars_match(rest, path),
+    }
+}
+
+fn has_duplicates<T: Ord>(values: &[T]) -> bool {
+    let mut seen = BTreeSet::new();
+    !values.iter().all(|value| seen.insert(value))
+}
+
+/// Checks that `value` is non-empty and uses only ASCII letters, digits, `-` and `_`.
+fn validate_identifier(field: &'static str, value: &str) -> Result<(), ValidationError> {
+    require_text(field, value)?;
+    if value
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        Ok(())
+    } else {
+        Err(ValidationError::InvalidIdentifier {
+            field,
+            value: value.to_owned(),
+        })
+    }
+}
+
 /// A manifest invariant that prevents deterministic resolution.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ValidationError {
@@ -639,6 +887,34 @@ pub enum ValidationError {
     /// An installation fingerprint or environment input names an undeclared loader.
     #[error("installation input refers to unknown loader {0:?}")]
     UnknownInputLoader(String),
+    /// Multiple extensions declare the same identifier.
+    #[error("duplicate extension {0:?}")]
+    DuplicateExtension(String),
+    /// Multiple `run-extension` steps share an identifier.
+    #[error("duplicate run-extension step {0:?}")]
+    DuplicateStep(String),
+    /// A step names an extension the plan does not declare.
+    #[error("unknown extension {0:?}")]
+    UnknownExtension(String),
+    /// An extension's SHA-256 is not 64 lowercase hexadecimal characters.
+    #[error("extension {0:?} has an invalid SHA-256")]
+    InvalidExtensionHash(String),
+    /// An extension's grant is inconsistent.
+    #[error("extension {extension:?}: {reason}")]
+    InvalidGrant {
+        /// The extension.
+        extension: String,
+        /// What is inconsistent.
+        reason: &'static str,
+    },
+    /// An identifier uses characters other than ASCII letters, digits, `-` and `_`.
+    #[error("{field} {value:?} may use only ASCII letters, digits, '-' and '_'")]
+    InvalidIdentifier {
+        /// Which identifier.
+        field: &'static str,
+        /// The refused value.
+        value: String,
+    },
     /// A deployment path is not platform-independent and instance-relative.
     #[error("invalid instance-relative path {0:?}")]
     InvalidPath(String),
@@ -675,7 +951,9 @@ fn require_text(field: &'static str, value: &str) -> Result<(), ValidationError>
     }
 }
 
-fn is_relative_path(path: &str) -> bool {
+/// Whether `path` is a safe, platform-independent relative path: `/`-separated, with no empty,
+/// `.` or `..` component, and no backslash, colon or NUL.
+pub fn is_relative_path(path: &str) -> bool {
     !path.is_empty()
         && !path.starts_with('/')
         && !path.contains(['\\', ':', '\0'])
@@ -706,8 +984,10 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::{
-        Deploy, EditJsonStep, EnvironmentInput, Hygiene, InjectStep, InstallationFingerprint,
-        Loader, NamedPath, PlaceStep, Plan, SCHEMA_VERSION, Side, Step, ValidationError,
+        Deploy, EditJsonStep, EmitKind, EnvironmentInput, ExtensionCapability,
+        ExtensionDeclaration, Hygiene, InjectStep, InstallationFingerprint, Loader, NamedPath,
+        PlaceStep, Plan, RunExtensionStep, SCHEMA_VERSION, Side, Step, ValidationError,
+        matches_glob,
     };
 
     fn minecraft_plan() -> Plan {
@@ -718,6 +998,7 @@ mod tests {
             version: "1.0.0".to_owned(),
             fingerprint: None,
             environment: Vec::new(),
+            extensions: Vec::new(),
             deploy: Deploy::default(),
             loaders: vec![Loader {
                 id: "fabric".to_owned(),
@@ -821,6 +1102,112 @@ mod tests {
             plan.validate(),
             Err(ValidationError::DuplicateEnvironment(id)) if id == "game"
         ));
+    }
+
+    fn extension_plan() -> Plan {
+        let mut plan = minecraft_plan();
+        plan.extensions = vec![ExtensionDeclaration {
+            id: "installer".to_owned(),
+            path: "extensions/installer.wasm".to_owned(),
+            sha256: "0".repeat(64),
+            capabilities: vec![
+                ExtensionCapability::ArchiveRead,
+                ExtensionCapability::GameRead,
+            ],
+            game_read: vec!["Data/*.esm".to_owned()],
+            emit: vec![EmitKind::Place, EmitKind::WriteFile],
+            roots: vec!["@loader.targets.mods".to_owned()],
+        }];
+        plan.steps.push(Step::RunExtension(RunExtensionStep {
+            id: "install".to_owned(),
+            loaders: Vec::new(),
+            extension: "installer".to_owned(),
+            parameters: BTreeMap::from([("into".to_owned(), "mods/{game_version}".to_owned())]),
+        }));
+        plan
+    }
+
+    #[test]
+    fn run_extension_steps_round_trip_and_name_declared_extensions() {
+        let plan = extension_plan();
+        plan.validate().unwrap();
+        let json = serde_json::to_string(&plan).unwrap();
+        assert!(json.contains(r#""archive-read""#) && json.contains(r#""write-file""#));
+        assert!(json.contains(r#""type":"run-extension""#));
+        assert_eq!(serde_json::from_str::<Plan>(&json).unwrap(), plan);
+
+        let mut steps = plan.clone();
+        for step in &mut steps.steps {
+            if let Step::RunExtension(run) = step {
+                run.extension = "missing".to_owned();
+            }
+        }
+        assert_eq!(
+            steps.validate(),
+            Err(ValidationError::UnknownExtension("missing".to_owned()))
+        );
+
+        let mut repeated = plan.clone();
+        let run = repeated.steps.last().cloned().unwrap();
+        repeated.steps.push(run);
+        assert_eq!(
+            repeated.validate(),
+            Err(ValidationError::DuplicateStep("install".to_owned()))
+        );
+
+        let mut named = plan;
+        for step in &mut named.steps {
+            if let Step::RunExtension(run) = step {
+                run.id = "install/one".to_owned();
+            }
+        }
+        assert!(matches!(
+            named.validate(),
+            Err(ValidationError::InvalidIdentifier { value, .. }) if value == "install/one"
+        ));
+    }
+
+    #[test]
+    fn extension_grants_must_be_consistent() {
+        let edited = |edit: fn(&mut ExtensionDeclaration)| {
+            let mut plan = extension_plan();
+            plan.extensions.iter_mut().for_each(edit);
+            plan.validate()
+        };
+        assert!(matches!(
+            edited(|extension| extension.game_read.clear()),
+            Err(ValidationError::InvalidGrant { .. })
+        ));
+        assert!(matches!(
+            edited(|extension| extension.capabilities = vec![ExtensionCapability::ArchiveRead]),
+            Err(ValidationError::InvalidGrant { .. })
+        ));
+        assert!(matches!(
+            edited(|extension| extension.emit.clear()),
+            Err(ValidationError::InvalidGrant { .. })
+        ));
+        assert_eq!(
+            edited(|extension| extension.sha256 = "A".repeat(64)),
+            Err(ValidationError::InvalidExtensionHash(
+                "installer".to_owned()
+            ))
+        );
+        assert_eq!(
+            edited(|extension| extension.path = "../installer.wasm".to_owned()),
+            Err(ValidationError::InvalidPath("../installer.wasm".to_owned()))
+        );
+        assert!(matches!(
+            edited(|extension| extension.roots = vec!["@loader.targets.".to_owned()]),
+            Err(ValidationError::InvalidTargetReference(_))
+        ));
+    }
+
+    #[test]
+    fn globs_match_components_and_recursive_directories() {
+        assert!(matches_glob("**/*.jar", "release/nested/example.jar"));
+        assert!(matches_glob("Data/*.esm", "Data/Base.esm"));
+        assert!(!matches_glob("Data/*.esm", "Data/nested/Base.esm"));
+        assert!(matches_glob("Data/Bas?.esm", "Data/Base.esm"));
     }
 
     #[test]

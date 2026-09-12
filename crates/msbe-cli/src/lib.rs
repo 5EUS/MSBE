@@ -536,6 +536,20 @@ enum ProfileCommand {
         #[arg(long, value_enum, default_value_t = TargetSide::Client)]
         side: TargetSide,
     },
+    /// Record the answers a mod's run-extension step asks for. An empty answer removes a recorded
+    /// one. Answers are checked against the step's questions at the next deploy.
+    Answer {
+        /// The instance.
+        instance: String,
+        /// The mod.
+        module: String,
+        /// Answers, such as `install/textures=high`.
+        #[arg(required = true, value_name = "STEP/QUESTION=ANSWER")]
+        answers: Vec<String>,
+        /// The profile.
+        #[arg(long, short, default_value = DEFAULT_PROFILE)]
+        profile: String,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -594,6 +608,8 @@ enum CliError {
     },
     #[error("pack-owned config {0} is not UTF-8 text")]
     ConfigNotText(RelPath),
+    #[error("{0:?} is not an answer; use STEP/QUESTION=ANSWER")]
+    AnswerSyntax(String),
     #[error("cannot write output: {0}")]
     Output(#[from] io::Error),
     #[error("cannot encode output: {0}")]
@@ -1634,25 +1650,7 @@ fn profile_command(
                 Ok(())
             })?;
         }
-        ProfileCommand::Show { instance, name } => {
-            let opened = open(home, instance, console)?;
-            let name = Name::new(name)?;
-            let mut profile = opened.profile(&name)?;
-            profile.target = Some(opened.profile_target(&name)?);
-            console.emit(&profile, |out, profile| {
-                if profile.mods.is_empty() {
-                    return writeln!(out, "No mods.");
-                }
-                for (module, entry) in profile.ordered() {
-                    let source = entry.provider.as_ref().map_or_else(
-                        || format!("from {}", entry.origin),
-                        |provider| format!("{} {}", provider.provider, provider.version_number),
-                    );
-                    writeln!(out, "{module}  {} file(s), {source}", entry.files.len())?;
-                }
-                Ok(())
-            })?;
-        }
+        ProfileCommand::Show { instance, name } => profile_show(home, instance, name, console)?,
         ProfileCommand::Order {
             instance,
             mods,
@@ -1687,8 +1685,87 @@ fn profile_command(
                 writeln!(out, "  side          {:?}", target.side)
             })?;
         }
+        ProfileCommand::Answer {
+            instance,
+            module,
+            answers,
+            profile,
+        } => profile_answer(home, instance, module, answers, profile, console)?,
     }
     Ok(exit::OK)
+}
+
+/// Prints the mods a profile selects, with its resolved target.
+fn profile_show(
+    home: &Home,
+    instance: &str,
+    name: &str,
+    console: &mut Console<'_>,
+) -> Result<(), CliError> {
+    let opened = open(home, instance, console)?;
+    let name = Name::new(name)?;
+    let mut profile = opened.profile(&name)?;
+    profile.target = Some(opened.profile_target(&name)?);
+    console.emit(&profile, |out, profile| {
+        if profile.mods.is_empty() {
+            return writeln!(out, "No mods.");
+        }
+        for (module, entry) in profile.ordered() {
+            let source = entry.provider.as_ref().map_or_else(
+                || format!("from {}", entry.origin),
+                |provider| format!("{} {}", provider.provider, provider.version_number),
+            );
+            writeln!(out, "{module}  {} file(s), {source}", entry.files.len())?;
+        }
+        Ok(())
+    })?;
+    Ok(())
+}
+
+/// Records installer answers given as `STEP/QUESTION=ANSWER`, and prints every answer each named
+/// step now has for the mod.
+fn profile_answer(
+    home: &Home,
+    instance: &str,
+    module: &str,
+    answers: &[String],
+    profile: &str,
+    console: &mut Console<'_>,
+) -> Result<(), CliError> {
+    let mut by_step: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+    for raw in answers {
+        let (step, question, answer) = raw
+            .split_once('=')
+            .and_then(|(key, answer)| {
+                let (step, question) = key.split_once('/')?;
+                (!step.is_empty() && !question.is_empty()).then_some((step, question, answer))
+            })
+            .ok_or_else(|| CliError::AnswerSyntax(raw.clone()))?;
+        by_step
+            .entry(step.to_owned())
+            .or_default()
+            .insert(question.to_owned(), answer.to_owned());
+    }
+    let opened = open(home, instance, console)?;
+    let profile = Name::new(profile)?;
+    let module = Name::new(module)?;
+    let mut recorded = BTreeMap::new();
+    for (step, answers) in &by_step {
+        recorded.insert(
+            step.clone(),
+            opened.set_answers(&profile, &module, step, answers)?,
+        );
+    }
+    console.emit(&recorded, |out, recorded| {
+        writeln!(out, "Recorded answers for {module}:")?;
+        for (step, answers) in recorded {
+            for (question, answer) in answers {
+                writeln!(out, "  {step}/{question} = {answer}")?;
+            }
+        }
+        Ok(())
+    })?;
+    Ok(())
 }
 
 /// Sets the order a profile's mods apply in, and prints the whole order.

@@ -8,6 +8,7 @@
 
 pub mod bisect;
 pub mod config;
+mod extension;
 pub mod instance;
 pub mod solver;
 use std::collections::BTreeMap;
@@ -15,7 +16,7 @@ use std::collections::BTreeMap;
 use msbe_fsops::{Applier, Digest, Observer, Operation, RelPath, Result as FsResult, TxnReport};
 use msbe_plan_schema::{
     EditJsonStep, ExtractStep, GAME_VERSION, Hygiene, InjectStep, Loader, Plan, Step,
-    ValidationError,
+    ValidationError, matches_glob,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -261,7 +262,7 @@ pub fn derive(
                 )?);
             }
             Step::EditJson(edit) => derivations.edits.push(json_edit(edit, game_version)?),
-            Step::Extract(_) | Step::Place(_) | Step::MergeConfig(_) => {}
+            Step::Extract(_) | Step::Place(_) | Step::MergeConfig(_) | Step::RunExtension(_) => {}
         }
     }
     Ok(derivations)
@@ -310,7 +311,7 @@ fn json_edit(step: &EditJsonStep, game_version: Option<&str>) -> Result<JsonEdit
 }
 
 /// `template` with `{game_version}` filled in.
-fn fill(template: &str, game_version: Option<&str>) -> Result<String, ResolveError> {
+pub(crate) fn fill(template: &str, game_version: Option<&str>) -> Result<String, ResolveError> {
     if !template.contains(GAME_VERSION) {
         return Ok(template.to_owned());
     }
@@ -402,7 +403,11 @@ fn filter_files<'a>(
         .filter(|step| step.applies_to(loader_id))
         .filter_map(|step| match step {
             Step::Extract(extract) => Some(extract),
-            Step::Place(_) | Step::MergeConfig(_) | Step::Inject(_) | Step::EditJson(_) => None,
+            Step::Place(_)
+            | Step::MergeConfig(_)
+            | Step::Inject(_)
+            | Step::EditJson(_)
+            | Step::RunExtension(_) => None,
         })
         .collect();
     if extract_steps.is_empty() {
@@ -477,50 +482,6 @@ fn is_hygiene_path(path: &str) -> bool {
         || components
             .iter()
             .any(|component| matches!(*component, "__MACOSX" | ".git" | ".hg" | ".svn"))
-}
-
-pub(crate) fn matches_glob(pattern: &str, path: &str) -> bool {
-    let pattern: Vec<&str> = pattern.split('/').collect();
-    let path: Vec<&str> = path.split('/').collect();
-    matches_glob_parts(&pattern, &path)
-}
-
-fn matches_glob_parts(pattern: &[&str], path: &[&str]) -> bool {
-    let Some((head, tail)) = pattern.split_first() else {
-        return path.is_empty();
-    };
-    if *head == "**" {
-        if matches_glob_parts(tail, path) {
-            return true;
-        }
-        return match path.split_first() {
-            Some((_, rest)) => matches_glob_parts(pattern, rest),
-            None => false,
-        };
-    }
-    let Some((path_head, path_tail)) = path.split_first() else {
-        return false;
-    };
-    glob_segment_matches(head, path_head) && matches_glob_parts(tail, path_tail)
-}
-
-fn glob_segment_matches(pattern: &str, path: &str) -> bool {
-    glob_chars_match(pattern.chars(), path.chars())
-}
-
-fn glob_chars_match(pattern: std::str::Chars<'_>, mut path: std::str::Chars<'_>) -> bool {
-    let mut rest = pattern.clone();
-    match rest.next() {
-        None => path.next().is_none(),
-        // `*` matches nothing, or consumes one character and stays in effect. The retry must
-        // use `pattern`, which still starts with the star, not `rest`.
-        Some('*') => {
-            glob_chars_match(rest, path.clone())
-                || (path.next().is_some() && glob_chars_match(pattern, path))
-        }
-        Some('?') => path.next().is_some() && glob_chars_match(rest, path),
-        Some(character) => path.next() == Some(character) && glob_chars_match(rest, path),
-    }
 }
 
 /// A failure while resolving a plan into inert filesystem operations.
@@ -598,6 +559,7 @@ mod tests {
             version: "1.0.0".to_owned(),
             fingerprint: None,
             environment: Vec::new(),
+            extensions: Vec::new(),
             deploy: Deploy::default(),
             loaders: vec![Loader {
                 id: "loader".to_owned(),

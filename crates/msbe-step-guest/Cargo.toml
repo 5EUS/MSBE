@@ -1,6 +1,6 @@
 [package]
-name        = "msbe-plan-host"
-description = "Sandboxed WebAssembly host and capability enforcement for plan step extensions."
+name        = "msbe-step-guest"
+description = "Guest SDK for writing sandboxed MSBE plan step extensions that compile to WebAssembly."
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true
@@ -16,11 +16,5 @@ publish.workspace      = true
 workspace = true
 
 [dependencies]
-msbe-plan-schema = { version = "0.0.0", path = "../msbe-plan-schema" }
 serde.workspace      = true
 serde_json.workspace = true
-thiserror.workspace  = true
-wasmtime             = "40.0.0"
-
-[dev-dependencies]
-wat = "1.0.97"

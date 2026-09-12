@@ -18,6 +18,7 @@ workspace = true
 [dependencies]
 msbe-archive         = { version = "0.0.0", path = "../msbe-archive" }
 msbe-fsops           = { version = "0.0.0", path = "../msbe-fsops" }
+msbe-plan-host       = { version = "0.0.0", path = "../msbe-plan-host" }
 msbe-plan-schema     = { version = "0.0.0", path = "../msbe-plan-schema" }
 json5.workspace      = true
 pubgrub.workspace    = true

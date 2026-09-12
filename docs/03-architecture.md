@@ -62,7 +62,10 @@ using that game; existing instances keep their pinned copy and continue to work.
 crates/
   msbe-core/          plans, solver, providers, resolve pipeline, detection
   msbe-plan-schema/   manifest types + validation (shared with registry CI)
-  msbe-plan-host/     wasmtime host, capability enforcement, WIT bindings
+  msbe-plan-host/     sandboxed wasmtime host for run-extension steps: grants, limits, operation checks
+  msbe-step-guest/    guest SDK for step extensions (wasm32-unknown-unknown)
+  msbe-wasm-codec/    sandboxed wasmtime host for pack codecs
+  msbe-codec-guest/   guest SDK for pack codecs
   msbe-archive/       hardened extraction (zip/7z/rar/tar), path safety
   msbe-fsops/         CAS shards, capability probe, journaled applier (the only writer)
   msbe-provider-api/  neutral adapter and pack-codec contracts; HttpClient, acquisition, resolution; no TLS

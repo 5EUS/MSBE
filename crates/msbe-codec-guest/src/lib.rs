@@ -17,7 +17,7 @@
 //! ```
 //!
 //! Off `wasm32`, [`Input::memory`] serves a pack from memory, so a codec's logic can be unit
-//! tested natively. See `docs/18-wasm-codecs.md` for the ABI, the record shapes, and packaging.
+//! tested natively. See `docs/18-wasm-extensions.md` for the ABI, the record shapes, and packaging.
 
 #[doc(hidden)]
 pub mod abi;

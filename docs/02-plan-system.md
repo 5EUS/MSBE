@@ -303,7 +303,7 @@ Closed and versioned on purpose — an open set becomes "arbitrary code" by degr
 | `register-plugin`            | add to a game-managed order file                                                                                             |
 | `reorder`                    | apply the plan's ordering strategy                                                                                           |
 | `validate`                   | assert a `[[validate]]` condition                                                                                            |
-| `run-extension`              | hand off to a sandboxed WASM module (below)                                                                                  |
+| `run-extension`              | hand off to a sandboxed WASM module (below); **implemented**                                                                 |
 
 New step kinds require an engine version bump, a spec change and a test fixture.
 That friction is the point.
@@ -312,54 +312,60 @@ That friction is the point.
 
 Roughly 10% of games need real computation: FOMOD's conditional trees, KSP's
 ModuleManager patch semantics, deriving a load order from record-level conflicts.
-Those load a **WebAssembly component** (wasmtime, WASI Preview 2 / component model).
+A `run-extension` step hands each mod to a sandboxed **WebAssembly module** and deploys
+the operations it returns. _Implemented; the ABI, limits and authoring guide are in
+[18](18-wasm-extensions.md)._
 
-The extension **has no filesystem, no network, no process, and no clock** unless
-granted. It reads through host-provided handles and its _only_ effect on the world is
-emitting operations:
-
-```wit
-package msbe:plan@0.1.0;
-
-interface host {
-  record file-entry { path: string, size: u64, hash: string }
-
-  list-archive: func(h: archive) -> list<file-entry>;
-  read-entry:   func(h: archive, path: string) -> result<list<u8>, error>;
-  read-game:    func(path: string) -> result<list<u8>, error>;   // cap-scoped
-  ask:          func(q: question) -> answer;                     // UI wizard
-  http-get:     func(url: string) -> result<response, error>;    // declared hosts only
-  log:          func(lvl: level, msg: string);
-  emit-op:      func(op: operation);                             // the ONLY effect
-}
-```
-
-Declared in the manifest and shown to the user before first run:
+The extension **has no filesystem, no network, no process, and no clock**. It reads the
+mod, and where granted the game and recorded installer answers, through host imports.
+Its _only_ effect on the world is the operations it returns: `place` one of the mod's
+files, or `write-file` generated text. The plan declares each module and exactly what it
+is granted:
 
 ```toml
-[extension]
-wasm = "fomod.wasm"
-sha256 = "…"
-caps = [
-  "archive.read",
-  "ui.prompt",
-  "game.read:paths=['Data/*.esm']",
-  "op.emit:kinds=['place','write-file']",
-]
+[[extensions]]
+id           = "fomod"
+path         = "extensions/fomod.wasm"
+sha256       = "…"
+capabilities = ["archive-read", "game-read", "ui-prompt"]
+game_read    = ["Data/*.esm"]
+emit         = ["place", "write-file"]
+roots        = ["@loader.targets.data"]
+
+[[steps]]
+type = "run-extension"
+  [steps.with]
+  id        = "fomod"
+  extension = "fomod"
 ```
 
 **Denial is structural, not a runtime check.** Each extension is instantiated against a
-`Linker` that defines only the imports its granted capabilities allow. A component that
-imports anything else fails to instantiate ("unknown import … has not been defined"), so
-there is no permission check to bypass: an ungranted capability does not exist in the
-extension's world ([15](15-m0-findings.md)).
+`Linker` that defines only the imports its granted capabilities allow. A module that
+imports anything else fails to load, naming the import, so there is no permission check
+to bypass: an ungranted capability does not exist in the extension's world
+([15](15-m0-findings.md)).
 
-Enforced limits: fuel-metered execution (`Config::consume_fuel`, per `Store`), a memory
-and table ceiling (`ResourceLimiter`), wall-clock timeout,
-deterministic (no ambient randomness or time), and **`process.spawn` does not exist**.
-A plan that genuinely must run a vendor installer uses a distinct
+Every returned operation is checked before it becomes a deployment claim: its kind must
+be declared in `emit`, its path must be a safe relative path beneath the step's roots, a
+`place` must name a file the mod contains, and no path may be written twice.
+
+Installer questions are answered from answers recorded on the mod
+(`msbe profile answer`) or the question's default. A run never prompts; a question with
+neither stops it, listing every unanswered question. Answers are pinned in the lockfile,
+so a replayed install asks nothing.
+
+Enforced limits: fuel-metered execution (`Config::consume_fuel`, per `Store`), which is
+the timeout because it is deterministic; a memory and table ceiling (`ResourceLimiter`);
+a read budget; deterministic execution (no ambient randomness or time, no threads,
+canonical NaNs); and **`process.spawn` does not exist**. Network access is deliberately
+not a capability, because output that depends on a download cannot be reproduced from a
+lockfile. A plan that genuinely must run a vendor installer uses a distinct
 `run-trusted-binary` step whose binary hash is pinned in the registry and which
 prompts the user every single time.
+
+This section originally specified WASI Preview 2 components with a WIT interface. Core
+modules exchanging JSON records proved sufficient for the pack codec sandbox, so step
+extensions use the same convention rather than a second toolchain.
 
 ## 2.6 Authoring & testing workflow
 

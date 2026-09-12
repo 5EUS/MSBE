@@ -121,6 +121,15 @@ mod wins where two change the same thing. New mods apply after the ones already 
 "$MSBE" profile order mc modloader optifine
 ```
 
+**Installer answers.** A plan's `run-extension` step can ask questions about a mod, such as which
+optional files to install ([18](18-wasm-extensions.md)). Deployment answers them from answers
+recorded on the mod, or each question's default, and fails listing any question that has neither.
+Record answers by step and question; an empty answer removes one:
+
+```sh
+"$MSBE" profile answer mc better-textures install/textures=high
+```
+
 **Legacy jarmods.** An instance added with `--loader jarmod --game-version 1.5.2` builds a
 separate launcher version, `versions/1.5.2-msbe`, from the vanilla `versions/1.5.2` jar and
 version manifest. Those must already be installed, and MSBE only reads them. Each jarmod `.zip`
@@ -217,6 +226,7 @@ preview, rather than copied into the game's mod directory.
 | `profile show INSTANCE [NAME]`                                                                                                                   | **Implemented** | Show selected mods.                                                         |
 | `profile order INSTANCE MOD... [-p PROFILE]`                                                                                                     | **Implemented** | Set the order mods apply in.                                                |
 | `profile set-target INSTANCE [NAME] --loader ID [--loader-version VERSION] --side client\|server`                                                | **Implemented** | Set a profile compatibility target.                                         |
+| `profile answer INSTANCE MOD STEP/QUESTION=ANSWER... [-p PROFILE]`                                                                               | **Implemented** | Record installer answers for a mod's run-extension step.                    |
 | `search INSTANCE QUERY... [-p PROFILE] [--limit N]`                                                                                              | **Implemented** | Search Modrinth for a profile target.                                       |
 | `add INSTANCE SOURCE... [-p PROFILE] [--with-deps]`                                                                                              | **Implemented** | Add local, archive, URL, or Modrinth content.                               |
 | `update INSTANCE [MOD...] [-p PROFILE] [--dry-run]`                                                                                              | **Implemented** | Update Modrinth mods.                                                       |

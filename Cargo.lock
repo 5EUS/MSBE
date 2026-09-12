@@ -1076,6 +1076,7 @@ dependencies = [
  "json5",
  "msbe-archive",
  "msbe-fsops",
+ "msbe-plan-host",
  "msbe-plan-schema",
  "pubgrub",
  "serde",
@@ -1149,6 +1150,14 @@ dependencies = [
 [[package]]
 name = "msbe-plan-host"
 version = "0.0.0"
+dependencies = [
+ "msbe-plan-schema",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "wasmtime",
+ "wat",
+]
 
 [[package]]
 name = "msbe-plan-schema"
@@ -1236,6 +1245,14 @@ dependencies = [
 
 [[package]]
 name = "msbe-rpc-schema"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "msbe-step-guest"
 version = "0.0.0"
 dependencies = [
  "serde",

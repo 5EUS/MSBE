@@ -657,6 +657,9 @@ pub struct ModEntry {
     pub provider: Option<Provenance>,
     /// Every file the artifact contained.
     pub files: Vec<StoredFile>,
+    /// Installer answers for `run-extension` steps, keyed by step and question ID.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub answers: InstallAnswers,
 }
 
 /// A file inside an artifact, and the blob holding its bytes.
@@ -807,6 +810,21 @@ struct DeploymentClaims {
     classifications: BTreeMap<RelPath, LockedFileClassification>,
     mutable: BTreeSet<RelPath>,
     excluded: Vec<ModExclusion>,
+}
+
+/// A `run-extension` step ready to run over mods: its checked module and resolved settings.
+#[derive(Debug)]
+struct PreparedStep<'a> {
+    step: &'a msbe_plan_schema::RunExtensionStep,
+    extension: msbe_plan_host::StepExtension,
+    /// Digest of the module bytes.
+    digest: Digest,
+    /// Digest of the pinned plan.
+    plan: Digest,
+    roots: Vec<String>,
+    parameters: BTreeMap<String, String>,
+    /// The loader's mutable globs, with target references expanded.
+    mutable: Vec<String>,
 }
 
 /// A file in one mod's artifact that the plan excluded.
@@ -960,6 +978,7 @@ impl Instance {
         }
         let plan_text = fs::read_to_string(new.plan).map_err(io_error("read plan", new.plan))?;
         let plan = parse_plan(&plan_text, new.plan)?;
+        let modules = crate::extension::read_declared(&plan, new.plan)?;
         let loader = plan
             .loaders
             .iter()
@@ -991,6 +1010,13 @@ impl Instance {
             store,
         };
         write_toml(&dir.join("instance.toml"), &config)?;
+        for (declaration, bytes) in &modules {
+            let path = crate::extension::module_path(&dir, declaration);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).map_err(io_error("create directory", parent))?;
+            }
+            atomic::write_file(&path, bytes)?;
+        }
         atomic::write_file(&dir.join("plan.toml"), plan_text.as_bytes())?;
         write_toml(
             &profiles.join(format!("{DEFAULT_PROFILE}.toml")),
@@ -1196,12 +1222,7 @@ impl Instance {
     ) -> Result<Lockfile, InstanceError> {
         extensions.sort_by(|left, right| left.id.cmp(&right.id));
         extensions.dedup_by(|left, right| left.id == right.id);
-        let plan_digest = Digest::of_bytes(&serde_json::to_vec(&self.plan).map_err(|error| {
-            InstanceError::Encode {
-                path: self.dir.join("plan.toml"),
-                reason: error.to_string(),
-            }
-        })?);
+        let plan_digest = self.plan_digest()?;
         let target = selection
             .target
             .clone()
@@ -1238,7 +1259,7 @@ impl Instance {
                             provider: module.provider.clone(),
                             files: module.files.clone(),
                             layer: selection.module_layer(name, module),
-                            answers: InstallAnswers::new(),
+                            answers: module.answers.clone(),
                         },
                     )
                 })
@@ -1593,6 +1614,12 @@ impl Instance {
                 selection.order = selection.load_order();
                 selection.order.push(module.clone());
             }
+            // A replaced artifact keeps the installer answers recorded for its mod.
+            let answers = selection
+                .mods
+                .get(&module)
+                .map(|entry| entry.answers.clone())
+                .unwrap_or_default();
             selection.mods.insert(
                 module.clone(),
                 ModEntry {
@@ -1605,6 +1632,7 @@ impl Instance {
                             blob: file.blob,
                         })
                         .collect(),
+                    answers,
                 },
             );
             added.push(module);
@@ -1681,6 +1709,51 @@ impl Instance {
         selection.order = order.iter().cloned().chain(rest).collect();
         write_toml(&self.profile_path(profile), &selection)?;
         Ok(selection.order)
+    }
+
+    /// Records installer answers, by question, for `module`'s run of the `run-extension` step
+    /// `step`. An empty answer removes the one recorded. Returns every answer the mod now has for
+    /// that step. Answers are checked against the questions when the step next runs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InstanceError::UnknownStep`] if the plan has no such step,
+    /// [`InstanceError::UnknownMod`] if the profile lacks the mod, or an error writing the profile.
+    pub fn set_answers(
+        &self,
+        profile: &Name,
+        module: &Name,
+        step: &str,
+        answers: &BTreeMap<String, String>,
+    ) -> Result<BTreeMap<String, String>, InstanceError> {
+        let declared = self.plan.steps.iter().any(|candidate| {
+            matches!(candidate, msbe_plan_schema::Step::RunExtension(run) if run.id == step)
+        });
+        if !declared {
+            return Err(InstanceError::UnknownStep(step.to_owned()));
+        }
+        let mut selection = self.profile(profile)?;
+        let entry = selection
+            .mods
+            .get_mut(module)
+            .ok_or_else(|| InstanceError::UnknownMod {
+                profile: profile.clone(),
+                module: module.clone(),
+            })?;
+        let recorded = entry.answers.entry(step.to_owned()).or_default();
+        for (question, answer) in answers {
+            if answer.is_empty() {
+                recorded.remove(question);
+            } else {
+                recorded.insert(question.clone(), answer.clone());
+            }
+        }
+        let result = recorded.clone();
+        if result.is_empty() {
+            entry.answers.remove(step);
+        }
+        write_toml(&self.profile_path(profile), &selection)?;
+        Ok(result)
     }
 
     /// Returns `profile`'s target, inheriting the legacy instance target when absent.
@@ -1951,6 +2024,7 @@ impl Instance {
         self.collect_module_claims(&selection, &target.loader, &mut resolved)?;
         self.collect_component_claims(&selection, &target.loader, &mut resolved)?;
         self.collect_derived_claims(&selection, &target.loader, &mut resolved)?;
+        self.collect_extension_claims(&selection, &target.loader, &mut resolved)?;
         let mut deployment = settle_claims(resolved.claims)?;
         for (path, blob) in selection.configs {
             deployment.insert(path.clone(), blob);
@@ -2111,6 +2185,277 @@ impl Instance {
         Ok(())
     }
 
+    /// Runs every `run-extension` step for `loader_id` over each mod in profile order, and claims
+    /// what each run returns.
+    fn collect_extension_claims(
+        &self,
+        selection: &Profile,
+        loader_id: &str,
+        resolved: &mut DeploymentClaims,
+    ) -> Result<(), InstanceError> {
+        let steps: Vec<&msbe_plan_schema::RunExtensionStep> = self
+            .plan
+            .steps
+            .iter()
+            .filter(|step| step.applies_to(loader_id))
+            .filter_map(|step| {
+                if let msbe_plan_schema::Step::RunExtension(run) = step {
+                    Some(run)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if steps.is_empty() {
+            return Ok(());
+        }
+        let loader = self
+            .plan
+            .loaders
+            .iter()
+            .find(|loader| loader.id == loader_id)
+            .ok_or_else(|| ResolveError::UnknownLoader(loader_id.to_owned()))?;
+        let plan = self.plan_digest()?;
+        for step in steps {
+            let prepared = self.prepare_extension(step, loader, plan)?;
+            for (module, entry) in selection.ordered() {
+                let outcome = self.run_extension(&prepared, module, entry, loader_id)?;
+                self.claim_extension_outcome(&prepared, module, entry, outcome, resolved)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Loads the module `step` runs from the instance's pinned copy, checked against its grant.
+    fn prepare_extension<'a>(
+        &self,
+        step: &'a msbe_plan_schema::RunExtensionStep,
+        loader: &msbe_plan_schema::Loader,
+        plan: Digest,
+    ) -> Result<PreparedStep<'a>, InstanceError> {
+        let game_version = self.config.game_version.as_deref();
+        let declaration = self
+            .plan
+            .extensions
+            .iter()
+            .find(|declaration| declaration.id == step.extension)
+            .ok_or_else(|| {
+                ResolveError::InvalidPlan(msbe_plan_schema::ValidationError::UnknownExtension(
+                    step.extension.clone(),
+                ))
+            })?;
+        let bytes = crate::extension::read_module(
+            &crate::extension::module_path(&self.dir, declaration),
+            declaration,
+        )?;
+        let game_read = declaration
+            .game_read
+            .iter()
+            .map(|glob| crate::fill(glob, game_version))
+            .collect::<Result<Vec<_>, _>>()?;
+        let grant = msbe_plan_host::Grant::new(
+            declaration.capabilities.iter().copied(),
+            game_read,
+            declaration.emit.iter().copied(),
+        );
+        let extension =
+            msbe_plan_host::StepExtension::load(&bytes, grant, msbe_plan_host::Limits::default())
+                .map_err(|source| InstanceError::Extension {
+                step: step.id.clone(),
+                module: None,
+                source,
+            })?;
+        let parameters = step
+            .parameters
+            .iter()
+            .map(|(key, value)| Ok((key.clone(), crate::fill(value, game_version)?)))
+            .collect::<Result<_, ResolveError>>()?;
+        Ok(PreparedStep {
+            step,
+            extension,
+            digest: Digest::of_bytes(&bytes),
+            plan,
+            roots: crate::extension::roots(declaration, loader),
+            parameters,
+            mutable: crate::mutable_globs(&self.plan, loader),
+        })
+    }
+
+    /// Runs a prepared step over one mod, answering its questions from the mod's recorded answers.
+    fn run_extension(
+        &self,
+        prepared: &PreparedStep<'_>,
+        module: &Name,
+        entry: &ModEntry,
+        loader: &str,
+    ) -> Result<msbe_plan_host::Outcome, InstanceError> {
+        let answers = entry
+            .answers
+            .get(&prepared.step.id)
+            .cloned()
+            .unwrap_or_default();
+        let archive = crate::extension::ModArchive::new(&self.config.store, &entry.files)?;
+        let installation = crate::extension::Installation::new(
+            &self.config.root,
+            &self.config.store,
+            self.displaced(),
+        )?;
+        let invocation = msbe_plan_host::Invocation {
+            step: &prepared.step.id,
+            module: module.as_str(),
+            loader,
+            game_version: self.config.game_version.as_deref(),
+            parameters: &prepared.parameters,
+            roots: &prepared.roots,
+            answers: &answers,
+        };
+        prepared
+            .extension
+            .run(&invocation, Box::new(archive), Box::new(installation))
+            .map_err(|source| match source {
+                msbe_plan_host::HostError::QuestionsRequired(questions) => {
+                    InstanceError::AnswersRequired {
+                        module: module.clone(),
+                        step: prepared.step.id.clone(),
+                        questions,
+                    }
+                }
+                source => InstanceError::Extension {
+                    step: prepared.step.id.clone(),
+                    module: Some(module.clone()),
+                    source,
+                },
+            })
+    }
+
+    /// Claims each operation one run returned for `module`. Placed files keep the mod's own
+    /// classification; written files are derived from the mod's files and the game files the run
+    /// read, by the pinned plan, step and module, under the answers it consulted.
+    fn claim_extension_outcome(
+        &self,
+        prepared: &PreparedStep<'_>,
+        module: &Name,
+        entry: &ModEntry,
+        outcome: msbe_plan_host::Outcome,
+        resolved: &mut DeploymentClaims,
+    ) -> Result<(), InstanceError> {
+        let encode = |error: serde_json::Error| InstanceError::Encode {
+            path: self.dir.join("plan.toml"),
+            reason: error.to_string(),
+        };
+        let parameters = Digest::of_bytes(
+            &serde_json::to_vec(&(
+                module,
+                &prepared.parameters,
+                &outcome.answers,
+                &outcome.game_inputs,
+            ))
+            .map_err(encode)?,
+        );
+        let mut inputs: Vec<Digest> = entry
+            .files
+            .iter()
+            .map(|file| file.blob)
+            .chain(
+                outcome
+                    .game_inputs
+                    .values()
+                    .flatten()
+                    .filter_map(|identity| identity.parse().ok()),
+            )
+            .collect();
+        inputs.sort_unstable();
+        inputs.dedup();
+        for operation in outcome.operations {
+            let (path, blob, classification) = match operation {
+                msbe_plan_host::StepOperation::Place { source, path } => {
+                    let blob = entry
+                        .files
+                        .iter()
+                        .find(|file| file.source.as_str() == source)
+                        .map(|file| file.blob)
+                        .ok_or_else(|| InstanceError::Extension {
+                            step: prepared.step.id.clone(),
+                            module: Some(module.clone()),
+                            source: msbe_plan_host::HostError::UnknownSource(source),
+                        })?;
+                    (path, blob, module_classification(entry, &blob))
+                }
+                msbe_plan_host::StepOperation::WriteFile { path, contents } => {
+                    let classification = LockedFileClassification {
+                        role: PackFileRole::Generated,
+                        source: BlobSource::Derived {
+                            inputs: inputs.clone(),
+                            transform: TransformId {
+                                plan: prepared.plan,
+                                step: prepared.step.id.clone(),
+                                extensions: vec![prepared.digest],
+                                parameters,
+                                data: Vec::new(),
+                                deterministic: true,
+                            },
+                        },
+                    };
+                    (
+                        path,
+                        self.applier.store().put_bytes(&contents)?,
+                        classification,
+                    )
+                }
+            };
+            let path = RelPath::new(&path)?;
+            if prepared
+                .mutable
+                .iter()
+                .any(|glob| crate::matches_glob(glob, path.as_str()))
+            {
+                resolved.mutable.insert(path.clone());
+            }
+            merge_classification(&mut resolved.classifications, path.clone(), classification);
+            resolved.claims.entry(path).or_default().push(Claim {
+                module: module.clone(),
+                blob,
+            });
+        }
+        Ok(())
+    }
+
+    /// What each live transaction first displaced, by path: the file's digest, or `None` where
+    /// nothing was.
+    fn displaced(&self) -> BTreeMap<RelPath, Option<Digest>> {
+        let journal = self.applier.journal();
+        let live: BTreeSet<TxnId> = journal.live_transactions().into_iter().collect();
+        let mut displaced = BTreeMap::new();
+        for record in journal.records() {
+            if let Record::Op {
+                txn,
+                operation,
+                prior,
+                ..
+            } = record
+                && live.contains(txn)
+            {
+                displaced
+                    .entry(operation.path().clone())
+                    .or_insert(match prior {
+                        Prior::File { digest, .. } => Some(*digest),
+                        Prior::Absent | Prior::Dir => None,
+                    });
+            }
+        }
+        displaced
+    }
+
+    /// Digest of the pinned plan, as lockfiles and transform identities record it.
+    fn plan_digest(&self) -> Result<Digest, InstanceError> {
+        serde_json::to_vec(&self.plan)
+            .map(|bytes| Digest::of_bytes(&bytes))
+            .map_err(|error| InstanceError::Encode {
+                path: self.dir.join("plan.toml"),
+                reason: error.to_string(),
+            })
+    }
+
     /// A mod's stored files, as the resolver sees them.
     fn resolved_files(entry: &ModEntry) -> Vec<ResolvedFile> {
         entry
@@ -2135,12 +2480,7 @@ impl Instance {
 
         let owner = Name::new("plan")?;
         let store = self.applier.store();
-        let plan = Digest::of_bytes(&serde_json::to_vec(&self.plan).map_err(|error| {
-            InstanceError::Encode {
-                path: self.dir.join("plan.toml"),
-                reason: error.to_string(),
-            }
-        })?);
+        let plan = self.plan_digest()?;
         let mut claims = Vec::new();
         for injection in &derivations.injections {
             let base = self.pristine(&injection.base)?;
@@ -2804,6 +3144,70 @@ pub enum InstanceError {
     /// A mutable root holds more files than a capture will examine.
     #[error("the plan's mutable roots hold more than {0} files")]
     TooManyFiles(usize),
+
+    /// An extension module differs from the SHA-256 its plan pins.
+    #[error("extension {extension:?} does not match its pinned SHA-256 {expected}; found {found}")]
+    ExtensionMismatch {
+        /// The extension.
+        extension: String,
+        /// The pinned SHA-256.
+        expected: String,
+        /// The module's digest.
+        found: String,
+    },
+
+    /// An extension module is larger than a module may be.
+    #[error("extension {extension:?} is larger than the {limit}-byte module limit")]
+    ExtensionTooLarge {
+        /// The extension.
+        extension: String,
+        /// The limit.
+        limit: u64,
+    },
+
+    /// A `run-extension` step's module could not load, or failed or was refused while running.
+    #[error("run-extension step {step:?}{}: {source}", for_module(.module.as_ref()))]
+    Extension {
+        /// The step.
+        step: String,
+        /// The mod it was running over, once running.
+        module: Option<Name>,
+        /// What the host reported.
+        #[source]
+        source: msbe_plan_host::HostError,
+    },
+
+    /// A `run-extension` step asked questions that this mod has no recorded answers for.
+    #[error(
+        "mod {module} needs answers for step {step:?}: {}. Record them with `msbe profile answer <instance> {module} {step}/<question>=<answer>`",
+        describe_questions(.questions)
+    )]
+    AnswersRequired {
+        /// The mod.
+        module: Name,
+        /// The step.
+        step: String,
+        /// Every question without an answer or default.
+        questions: Vec<msbe_plan_host::Question>,
+    },
+
+    /// The plan has no `run-extension` step with this identifier.
+    #[error("the plan has no run-extension step {0:?}")]
+    UnknownStep(String),
+}
+
+fn for_module(module: Option<&Name>) -> String {
+    module
+        .map(|module| format!(" for mod {module}"))
+        .unwrap_or_default()
+}
+
+fn describe_questions(questions: &[msbe_plan_host::Question]) -> String {
+    questions
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 /// Parses and validates a plan manifest.
@@ -3313,6 +3717,143 @@ flatten = true
         assert!(legacy.classifications.is_empty());
     }
 
+    const INSTALLER: &[u8] =
+        include_bytes!("../../msbe-plan-host/tests/fixtures/option-installer.wasm");
+
+    const INSTALLER_MANIFEST: &[u8] = br#"{"format":"option-installer","version":1,"always":"core",
+        "groups":[{"id":"textures","prompt":"Textures","default":"standard","options":[
+            {"id":"standard","label":"Standard","directory":"options/standard"},
+            {"id":"high","label":"High","directory":"options/high","requires":"Data/High.esm"}]}]}"#;
+
+    fn installer_plan(sha256: &str) -> String {
+        format!(
+            r#"
+schema = 1
+id = "example"
+name = "Example"
+version = "1.0.0"
+
+[[extensions]]
+id = "installer"
+path = "installer.wasm"
+sha256 = "{sha256}"
+capabilities = ["archive-read", "game-read", "ui-prompt"]
+game_read = ["Data/*.esm"]
+emit = ["place", "write-file"]
+
+[[loaders]]
+id = "loader"
+bootstrap = "none"
+targets = [{{ name = "mods", path = "mods" }}]
+
+[[steps]]
+type = "run-extension"
+
+[steps.with]
+id = "install"
+extension = "installer"
+"#
+        )
+    }
+
+    #[test]
+    fn run_extension_steps_deploy_what_the_sandboxed_installer_chooses() {
+        let pin = msbe_fsops::Digest::of_bytes(INSTALLER).to_string();
+        let fixture = Fixture::with_plan(&installer_plan(pin.trim_start_matches("sha256:")));
+        fs::write(fixture.plan.with_file_name("installer.wasm"), INSTALLER).unwrap();
+        let mut instance = fixture.create();
+        let profile = name("default");
+        let archive = jar(&[
+            ("installer.json", INSTALLER_MANIFEST),
+            ("core/readme.txt", b"core"),
+            ("options/standard/texture.dds", b"standard"),
+            ("options/high/texture.dds", b"high"),
+        ]);
+        instance
+            .add_mods(&profile, &[fixture.input("pack.zip", &archive)])
+            .unwrap();
+        fs::create_dir_all(fixture.game.join("Data")).unwrap();
+        fs::write(fixture.game.join("Data/High.esm"), b"esm").unwrap();
+
+        instance.deploy(&profile, &mut NoopObserver).unwrap();
+        assert_eq!(
+            fs::read(fixture.game.join("mods/texture.dds")).unwrap(),
+            b"standard"
+        );
+        assert_eq!(
+            fs::read(fixture.game.join("mods/readme.txt")).unwrap(),
+            b"core"
+        );
+
+        let answers = BTreeMap::from([("textures".to_owned(), "high".to_owned())]);
+        let recorded = instance
+            .set_answers(&profile, &name("pack"), "install", &answers)
+            .unwrap();
+        assert_eq!(recorded, answers);
+        instance.deploy(&profile, &mut NoopObserver).unwrap();
+        assert_eq!(
+            fs::read(fixture.game.join("mods/texture.dds")).unwrap(),
+            b"high"
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.game.join("mods/pack.choices.txt")).unwrap(),
+            "textures=high\n"
+        );
+
+        let lockfile = instance.lockfile(&profile).unwrap();
+        let locked = lockfile
+            .mods
+            .get(&name("pack"))
+            .and_then(|module| module.answers.get("install"))
+            .and_then(|answers| answers.get("textures"));
+        assert_eq!(locked.map(String::as_str), Some("high"));
+        let choices = lockfile
+            .classifications
+            .get(&RelPath::new("mods/pack.choices.txt").unwrap())
+            .unwrap();
+        let super::BlobSource::Derived { inputs, transform } = &choices.source else {
+            panic!("expected a derived source, got {choices:?}");
+        };
+        assert_eq!(transform.step, "install");
+        assert_eq!(
+            transform.extensions,
+            [msbe_fsops::Digest::of_bytes(INSTALLER)]
+        );
+        assert!(inputs.contains(&msbe_fsops::Digest::of_bytes(b"esm")));
+
+        assert!(matches!(
+            instance.set_answers(&profile, &name("pack"), "other", &answers),
+            Err(InstanceError::UnknownStep(_))
+        ));
+        instance.purge().unwrap();
+        assert!(!fixture.game.join("mods/texture.dds").exists());
+        assert!(fixture.game.join("mods/existing.bin").exists());
+    }
+
+    #[test]
+    fn an_extension_module_that_differs_from_its_pin_is_refused_before_anything_is_written() {
+        let fixture = Fixture::with_plan(&installer_plan(&"0".repeat(64)));
+        fs::write(fixture.plan.with_file_name("installer.wasm"), INSTALLER).unwrap();
+        let created = Instance::create(
+            &fixture.home,
+            &super::NewInstance {
+                name: &name("demo"),
+                root: &fixture.game,
+                plan: &fixture.plan,
+                loader: "loader",
+                loader_version: None,
+                side: Side::Client,
+                game_version: None,
+                store: None,
+            },
+        );
+        assert!(
+            matches!(created, Err(InstanceError::ExtensionMismatch { .. })),
+            "{created:?}"
+        );
+        assert!(!fixture.home.instance(&name("demo")).exists());
+    }
+
     #[test]
     fn relocking_the_same_intent_on_another_day_is_byte_identical() {
         fn age(directory: &std::path::Path, when: std::time::SystemTime) {
@@ -3729,6 +4270,7 @@ sha512 = "abc"
                 ModEntry {
                     origin: "pack.zip".to_owned(),
                     provider: None,
+                    answers: BTreeMap::new(),
                     files: vec![StoredFile {
                         source: RelPath::new("textures/blocks/stone.png").unwrap(),
                         blob,
@@ -3808,6 +4350,7 @@ sha512 = "abc"
         let entry = |source: &str, blob| ModEntry {
             origin: format!("{source}.zip"),
             provider: None,
+            answers: BTreeMap::new(),
             files: vec![StoredFile {
                 source: RelPath::new(source).unwrap(),
                 blob,

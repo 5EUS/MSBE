@@ -542,6 +542,7 @@ mod tests {
                 source: RelPath::new("mod.jar").unwrap(),
                 blob,
             }],
+            answers: BTreeMap::new(),
         }
     }
 

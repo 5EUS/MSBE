@@ -1215,6 +1215,103 @@ fn deployment(world: &World, instance: &str, profile: &str) -> Value {
 }
 
 /// A Modrinth pack whose files the fake CDN serves under `version`.
+#[test]
+fn run_extension_steps_install_from_answers_recorded_on_the_profile() {
+    const INSTALLER: &[u8] =
+        include_bytes!("../../msbe-plan-host/tests/fixtures/option-installer.wasm");
+    let world = World::new();
+    let plans = world.inputs.join("installer-plan");
+    fs::create_dir_all(&plans).unwrap();
+    fs::write(plans.join("installer.wasm"), INSTALLER).unwrap();
+    let sha256 = msbe_fsops::Digest::of_bytes(INSTALLER).to_string();
+    let plan = plans.join("plan.toml");
+    fs::write(
+        &plan,
+        format!(
+            r#"schema = 1
+id = "installer"
+name = "Installer"
+version = "1.0.0"
+
+[[extensions]]
+id = "installer"
+path = "installer.wasm"
+sha256 = "{}"
+capabilities = ["archive-read", "game-read", "ui-prompt"]
+game_read = ["Data/*.esm"]
+emit = ["place", "write-file"]
+
+[[loaders]]
+id = "default"
+bootstrap = "none"
+targets = [{{ name = "mods", path = "mods" }}]
+
+[[steps]]
+type = "run-extension"
+
+[steps.with]
+id = "install"
+extension = "installer"
+"#,
+            sha256.trim_start_matches("sha256:")
+        ),
+    )
+    .unwrap();
+    let game = world.game.display().to_string();
+    let plan = plan.display().to_string();
+    let added = world.msbe(&[
+        "instance",
+        "add",
+        "ext",
+        "--root",
+        game.as_str(),
+        "--plan",
+        plan.as_str(),
+        "--loader",
+        "default",
+    ]);
+    assert_eq!(added.code, exit::OK, "{}", added.err);
+
+    let manifest = br#"{"format":"option-installer","version":1,"always":"core","groups":[
+        {"id":"textures","prompt":"Textures","default":"standard","options":[
+            {"id":"standard","label":"Standard","directory":"options/standard"},
+            {"id":"high","label":"High","directory":"options/high"}]}]}"#;
+    let archive = world.zip(
+        "pack.zip",
+        &[
+            ("installer.json", manifest),
+            ("core/readme.txt", b"core"),
+            ("options/standard/texture.dds", b"standard"),
+            ("options/high/texture.dds", b"high"),
+        ],
+    );
+    world.json(&["add", "ext", archive.as_str()]);
+    world.json(&["deploy", "ext"]);
+    assert_eq!(
+        fs::read(world.game.join("mods/texture.dds")).unwrap(),
+        b"standard"
+    );
+
+    let refused = world.msbe(&["profile", "answer", "ext", "pack", "textures=high"]);
+    assert_eq!(refused.code, exit::FAILURE);
+    assert!(
+        refused.err.contains("STEP/QUESTION=ANSWER"),
+        "{}",
+        refused.err
+    );
+    let answered = world.json(&["profile", "answer", "ext", "pack", "install/textures=high"]);
+    assert_eq!(at(&answered, "/install/textures"), "high");
+    world.json(&["deploy", "ext"]);
+    assert_eq!(
+        fs::read(world.game.join("mods/texture.dds")).unwrap(),
+        b"high"
+    );
+    assert_eq!(
+        fs::read_to_string(world.game.join("mods/pack.choices.txt")).unwrap(),
+        "textures=high\n"
+    );
+}
+
 fn mrpack(world: &World, version: &str, files: &[(&str, &[u8])]) -> String {
     let mut index_files = Vec::new();
     for (file, bytes) in files {
