@@ -233,9 +233,38 @@ sides         = ["server"]
 [[loaders]]
 id            = "jarmod"                 # pre-1.6: inject into minecraft.jar, in order
 bootstrap     = "none"
-ordering      = "explicit"
-targets       = { container = "versions/{version}/{version}.jar" }
+sides         = ["client"]
 ```
+
+**Jarmods are where M3's finding landed.** Placing files cannot express them, so the step
+vocabulary grew by two kinds, and every step gained a `loaders` list that limits it to the loaders
+it names (an empty or absent list applies to all):
+
+```toml
+[[steps]]
+type = "inject"          # a container built from a game file and the profile's mods, in order
+  [steps.with]
+  loaders = ["jarmod"]
+  base    = "versions/{game_version}/{game_version}.jar"
+  into    = "versions/{game_version}-msbe/{game_version}-msbe.jar"
+  remove  = ["META-INF/**"]
+
+[[steps]]
+type = "edit-json"       # a document derived from a game file by JSON pointer edits
+  [steps.with]
+  loaders = ["jarmod"]
+  base    = "versions/{game_version}/{game_version}.json"
+  into    = "versions/{game_version}-msbe/{game_version}-msbe.json"
+  set     = { "/id" = "{game_version}-msbe" }
+  remove  = ["/downloads/client"]
+```
+
+Both read `base` as it was before MSBE changed anything: from the journal when a live deployment
+replaced it, from disk otherwise. `into` may therefore equal `base` for a true in-place patch, and
+redeploying never patches an already-patched file. The Minecraft plan builds a separate launcher
+version instead, because the official launcher downloads a vanilla jar over a modified one; the
+vanilla version is only read. Entries from later mods in the profile's `order` win, and output
+bytes are deterministic, so redeploying unchanged inputs places nothing. *Implemented in M3.*
 
 The Profile's **Target** names one of these ([01](01-domain-model.md)), the solver
 filters candidates by it before version solving ([05 §5.2](05-solver.md)), and steps

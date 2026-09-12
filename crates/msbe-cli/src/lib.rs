@@ -326,6 +326,19 @@ enum ProfileCommand {
         #[arg(default_value = DEFAULT_PROFILE)]
         name: String,
     },
+    /// Set the order a profile's mods apply in. Where two mods change the same thing, such as a
+    /// class two jarmods replace, the later one wins. Mods not named keep their relative order
+    /// after the named ones.
+    Order {
+        /// The instance.
+        instance: String,
+        /// Mods in the order they apply.
+        #[arg(required = true, value_name = "MOD")]
+        mods: Vec<String>,
+        /// The profile.
+        #[arg(long, short, default_value = DEFAULT_PROFILE)]
+        profile: String,
+    },
     /// Set the loader compatibility target for one profile.
     SetTarget {
         /// The instance.
@@ -895,7 +908,7 @@ fn profile_command(
                 if profile.mods.is_empty() {
                     return writeln!(out, "No mods.");
                 }
-                for (module, entry) in &profile.mods {
+                for (module, entry) in profile.ordered() {
                     let source = entry.provider.as_ref().map_or_else(
                         || format!("from {}", entry.origin),
                         |provider| format!("{} {}", provider.provider, provider.version_number),
@@ -905,6 +918,11 @@ fn profile_command(
                 Ok(())
             })?;
         }
+        ProfileCommand::Order {
+            instance,
+            mods,
+            profile,
+        } => profile_order(home, instance, profile, mods, console)?,
         ProfileCommand::SetTarget {
             instance,
             name,
@@ -936,6 +954,31 @@ fn profile_command(
         }
     }
     Ok(exit::OK)
+}
+
+/// Sets the order a profile's mods apply in, and prints the whole order.
+fn profile_order(
+    home: &Home,
+    instance: &str,
+    profile: &str,
+    mods: &[String],
+    console: &mut Console<'_>,
+) -> Result<(), CliError> {
+    let opened = open(home, instance, console)?;
+    let profile = Name::new(profile)?;
+    let wanted = mods
+        .iter()
+        .map(String::as_str)
+        .map(Name::new)
+        .collect::<Result<Vec<Name>, _>>()?;
+    let order = opened.set_order(&profile, &wanted)?;
+    console.emit(&order, |out, order| {
+        writeln!(out, "{profile} applies its mods in this order:")?;
+        for (position, module) in order.iter().enumerate() {
+            writeln!(out, "  {}. {module}", position + 1)?;
+        }
+        Ok(())
+    })
 }
 
 #[expect(

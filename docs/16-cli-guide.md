@@ -109,6 +109,21 @@ target before version selection. Quilt declares Fabric as a capability, so a Qui
 can use Fabric provider releases. Compatibility-layer widening beyond declared loader
 capabilities is not implemented.
 
+Where the plan makes order matter, a profile applies its mods in an explicit order, and a later
+mod wins where two change the same thing. New mods apply after the ones already there.
+`profile order` puts the named mods first, in the order given, and keeps the rest after them:
+
+```sh
+"$MSBE" profile order mc modloader optifine
+```
+
+**Legacy jarmods.** An instance added with `--loader jarmod --game-version 1.5.2` builds a
+separate launcher version, `versions/1.5.2-msbe`, from the vanilla `versions/1.5.2` jar and
+version manifest. Those must already be installed, and MSBE only reads them. Each jarmod `.zip`
+is injected into the jar in profile order and `META-INF/` is removed; the manifest gets the new
+id and no client download, so the launcher does not replace the jar. Select `1.5.2-msbe` in the
+launcher to play; `purge` removes the version again.
+
 ### 4.3 Add mods
 
 A source may be a local `.jar`, a `.zip` archive, an HTTPS URL, or a Modrinth project.
@@ -176,6 +191,7 @@ plan preserve runtime changes rather than being overwritten or removed.
 | `profile remove INSTANCE NAME`                                                                                                                   | **Implemented** | Delete an inactive profile and its lockfile.        |
 | `profile list INSTANCE`                                                                                                                          | **Implemented** | List profiles and the deployed profile.             |
 | `profile show INSTANCE [NAME]`                                                                                                                   | **Implemented** | Show selected mods.                                 |
+| `profile order INSTANCE MOD... [-p PROFILE]`                                                                                                     | **Implemented** | Set the order mods apply in.                        |
 | `profile set-target INSTANCE [NAME] --loader ID [--loader-version VERSION] --side client\|server`                                                | **Implemented** | Set a profile compatibility target.                 |
 | `search INSTANCE QUERY... [-p PROFILE] [--limit N]`                                                                                              | **Implemented** | Search Modrinth for a profile target.               |
 | `add INSTANCE SOURCE... [-p PROFILE] [--with-deps]`                                                                                              | **Implemented** | Add local, archive, URL, or Modrinth content.       |

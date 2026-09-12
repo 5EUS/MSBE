@@ -21,21 +21,23 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
     fs::{self, File},
-    io::{self, BufReader},
+    io::{self, BufReader, Read},
     path::{Path, PathBuf},
 };
 
-use msbe_archive::{ArchiveError, Limits, ingest, ingest_as_file};
+use msbe_archive::{ArchiveError, Limits, ingest, ingest_as_file, inject};
 use msbe_fsops::{
-    Applier, Backend, Capabilities, Digest, Journal, Observer, Operation, RelPath, Store, TxnId,
-    atomic,
+    Applier, Backend, Capabilities, Digest, Journal, Observer, Operation, Prior, Record, RelPath,
+    Store, TxnId, atomic,
 };
 use msbe_plan_schema::{Component, Plan, Side};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
 
 use crate::bisect::{Error as BisectError, Session as BisectSession};
-use crate::{ExcludedFile, ResolveError, ResolvedFile, config::Home, resolve};
+use crate::{
+    Derivations, ExcludedFile, ResolveError, ResolvedFile, config::Home, derive, edit_json, resolve,
+};
 
 /// The profile every new instance starts with.
 pub const DEFAULT_PROFILE: &str = "default";
@@ -49,6 +51,9 @@ const RESERVED_NAMES: [&str; 22] = [
 static NOTHING_DEPLOYED: BTreeMap<RelPath, Digest> = BTreeMap::new();
 
 type BootstrapClaims = Vec<(RelPath, Claim)>;
+
+/// Claims on the files a plan derives from the game's own files.
+type DerivedClaims = Vec<(RelPath, Claim)>;
 
 const fn default_side() -> Side {
     Side::Client
@@ -161,12 +166,40 @@ pub struct Profile {
     /// instance target until explicitly configured.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<ProfileTarget>,
+    /// The order mods apply in, where the plan makes order matter. Mods missing from it apply
+    /// after the listed ones, by name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub order: Vec<Name>,
     /// Verified bootstrap component bundles, keyed by component ID.
     #[serde(default)]
     pub components: BTreeMap<String, ComponentEntry>,
     /// Mods by name.
     #[serde(default)]
     pub mods: BTreeMap<Name, ModEntry>,
+}
+
+impl Profile {
+    /// Every mod in the order it applies: the ones [`Profile::order`] lists first, then the rest
+    /// by name. A listed name that is not a mod, or is listed again, is skipped.
+    pub fn ordered(&self) -> Vec<(&Name, &ModEntry)> {
+        let mut seen = BTreeSet::new();
+        let mut ordered: Vec<(&Name, &ModEntry)> = self
+            .order
+            .iter()
+            .filter_map(|name| self.mods.get_key_value(name))
+            .filter(|(name, _)| seen.insert(*name))
+            .collect();
+        ordered.extend(self.mods.iter().filter(|(name, _)| !seen.contains(name)));
+        ordered
+    }
+
+    /// The name of every mod, in the order it applies.
+    pub fn load_order(&self) -> Vec<Name> {
+        self.ordered()
+            .into_iter()
+            .map(|(name, _)| name.clone())
+            .collect()
+    }
 }
 
 /// A verified component bundle retained in the content store for one profile.
@@ -204,6 +237,9 @@ pub struct Lockfile {
     pub plan: LockedPlan,
     /// The compatibility target used to select artifacts.
     pub target: LockedTarget,
+    /// The order modules apply in, where the plan makes order matter.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub order: Vec<Name>,
     /// Resolved modules keyed by stable local module name.
     pub mods: BTreeMap<Name, LockedModule>,
     /// Pinned loader component bundles.
@@ -758,6 +794,7 @@ impl Instance {
                 loader_version: target.loader_version,
                 side: target.side,
             },
+            order: selection.load_order(),
             mods: selection
                 .mods
                 .into_iter()
@@ -885,6 +922,7 @@ impl Instance {
     ) -> Result<(), InstanceError> {
         let mut trial = source.clone();
         trial.mods.retain(|name, _| session.trial.contains(name));
+        trial.order.retain(|name| session.trial.contains(name));
         write_toml(&self.profile_path(&session.trial_profile), &trial)
     }
 
@@ -1070,6 +1108,11 @@ impl Instance {
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_default();
+            if placement == Placement::Add {
+                // A new mod applies after every mod already in the profile.
+                selection.order = selection.load_order();
+                selection.order.push(module.clone());
+            }
             selection.mods.insert(
                 module.clone(),
                 ModEntry {
@@ -1123,7 +1166,41 @@ impl Instance {
                 module: module.clone(),
             });
         }
+        selection.order.retain(|name| name != module);
         write_toml(&self.profile_path(profile), &selection)
+    }
+
+    /// Sets the order `profile`'s mods apply in: `order` first, then every other mod in the order
+    /// it already had. Returns the whole order. The deployment changes only when the profile is
+    /// deployed again.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InstanceError::UnknownMod`] for a name the profile does not have,
+    /// [`InstanceError::RepeatedInOrder`] for a name given twice, or an error loading or writing
+    /// the profile.
+    pub fn set_order(&self, profile: &Name, order: &[Name]) -> Result<Vec<Name>, InstanceError> {
+        let mut selection = self.profile(profile)?;
+        let mut named = BTreeSet::new();
+        for module in order {
+            if !selection.mods.contains_key(module) {
+                return Err(InstanceError::UnknownMod {
+                    profile: profile.clone(),
+                    module: module.clone(),
+                });
+            }
+            if !named.insert(module) {
+                return Err(InstanceError::RepeatedInOrder(module.clone()));
+            }
+        }
+        let rest: Vec<Name> = selection
+            .load_order()
+            .into_iter()
+            .filter(|module| !named.contains(module))
+            .collect();
+        selection.order = order.iter().cloned().chain(rest).collect();
+        write_toml(&self.profile_path(profile), &selection)?;
+        Ok(selection.order)
     }
 
     /// Returns `profile`'s target, inheriting the legacy instance target when absent.
@@ -1220,22 +1297,16 @@ impl Instance {
     /// any resolution error.
     pub fn plan_deploy(&self, profile: &Name) -> Result<DeployPlan, InstanceError> {
         let selection = self.profile(profile)?;
-        let target = selection.target.unwrap_or_else(|| self.default_target());
+        let target = selection
+            .target
+            .clone()
+            .unwrap_or_else(|| self.default_target());
         self.validate_target(&target)?;
         let mut claims: BTreeMap<RelPath, Vec<Claim>> = BTreeMap::new();
         let mut mutable = BTreeSet::new();
         let mut excluded = Vec::new();
         for (module, entry) in &selection.mods {
-            let files: Vec<ResolvedFile> = entry
-                .files
-                .iter()
-                .map(|file| ResolvedFile {
-                    source: file.source.clone(),
-                    blob: file.blob,
-                    mutable: false,
-                })
-                .collect();
-            let resolved = resolve(&self.plan, &target.loader, &files)?;
+            let resolved = resolve(&self.plan, &target.loader, &Self::resolved_files(entry))?;
             excluded.extend(resolved.excluded.into_iter().map(|file| ModExclusion {
                 module: module.clone(),
                 file,
@@ -1258,6 +1329,20 @@ impl Instance {
             }
         }
         for (path, claim) in self.bootstrap_claims(&target.loader, &selection.components)? {
+            claims.entry(path).or_default().push(claim);
+        }
+        let ordered: Vec<Vec<ResolvedFile>> = selection
+            .ordered()
+            .into_iter()
+            .map(|(_, entry)| Self::resolved_files(entry))
+            .collect();
+        let derivations = derive(
+            &self.plan,
+            &target.loader,
+            self.config.game_version.as_deref(),
+            &ordered,
+        )?;
+        for (path, claim) in self.derived_claims(&derivations)? {
             claims.entry(path).or_default().push(claim);
         }
         let target = settle_claims(claims)?;
@@ -1300,6 +1385,107 @@ impl Instance {
             target,
             mutable,
         })
+    }
+
+    /// A mod's stored files, as the resolver sees them.
+    fn resolved_files(entry: &ModEntry) -> Vec<ResolvedFile> {
+        entry
+            .files
+            .iter()
+            .map(|file| ResolvedFile {
+                source: file.source.clone(),
+                blob: file.blob,
+                mutable: false,
+            })
+            .collect()
+    }
+
+    /// Builds every file the plan derives from the game's own files into the store, and claims
+    /// each one's destination for the plan.
+    fn derived_claims(&self, derivations: &Derivations) -> Result<DerivedClaims, InstanceError> {
+        /// The most bytes a JSON document a plan edits may be.
+        const JSON_LIMIT: u64 = 16 << 20;
+
+        let owner = Name::new("plan")?;
+        let store = self.applier.store();
+        let mut claims = Vec::new();
+        for injection in &derivations.injections {
+            let base = self.pristine(&injection.base)?;
+            let entries: Vec<(RelPath, Digest)> = injection
+                .entries
+                .iter()
+                .map(|file| (file.source.clone(), file.blob))
+                .collect();
+            let removes = |path: &str| injection.removes(path);
+            let blob = inject(store, &base, &entries, &removes, &Limits::default())?;
+            claims.push((
+                injection.into.clone(),
+                Claim {
+                    module: owner.clone(),
+                    blob,
+                },
+            ));
+        }
+        for edit in &derivations.edits {
+            let base = self.pristine(&edit.base)?;
+            let blob_path = store.blob_path(&base);
+            let mut bytes = Vec::new();
+            store
+                .open_blob(&base)?
+                .take(JSON_LIMIT + 1)
+                .read_to_end(&mut bytes)
+                .map_err(io_error("read", &blob_path))?;
+            if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > JSON_LIMIT {
+                return Err(InstanceError::BaseTooLarge {
+                    path: edit.base.clone(),
+                    limit: JSON_LIMIT,
+                });
+            }
+            let blob = store.put_bytes(&edit_json(&bytes, edit)?)?;
+            claims.push((
+                edit.into.clone(),
+                Claim {
+                    module: owner.clone(),
+                    blob,
+                },
+            ));
+        }
+        Ok(claims)
+    }
+
+    /// What `path` held before MSBE first changed it, kept in the store: what the earliest live
+    /// transaction touching it displaced, or else what is on disk now. Building from this rather
+    /// than the file on disk means a plan that patches a file in place never patches its own
+    /// output.
+    fn pristine(&self, path: &RelPath) -> Result<Digest, InstanceError> {
+        let journal = self.applier.journal();
+        let live: BTreeSet<TxnId> = journal.live_transactions().into_iter().collect();
+        let displaced = journal.records().iter().find_map(|record| match record {
+            Record::Op {
+                txn,
+                operation,
+                prior,
+                ..
+            } if live.contains(txn) && operation.path() == path => Some(prior),
+            _ => None,
+        });
+        match displaced {
+            Some(Prior::File { digest, .. }) => Ok(*digest),
+            Some(Prior::Absent | Prior::Dir) => Err(InstanceError::MissingBase(path.clone())),
+            None => match self
+                .applier
+                .store()
+                .put_file(&path.to_path(&self.config.root))
+            {
+                Ok(digest) => Ok(digest),
+                Err(msbe_fsops::Error::Io { source, .. })
+                    if source.kind() == io::ErrorKind::NotFound =>
+                {
+                    Err(InstanceError::MissingBase(path.clone()))
+                }
+                Err(error) => Err(error.into()),
+            },
+        }
     }
 
     /// Makes the instance match `profile` in one journaled transaction.
@@ -1779,6 +1965,23 @@ pub enum InstanceError {
     /// Mods claim the same paths with different contents.
     #[error("{} path(s) are claimed by more than one mod with different contents", .0.len())]
     Conflicts(Vec<Conflict>),
+
+    /// An order names the same mod more than once.
+    #[error("the order names mod {0} more than once")]
+    RepeatedInOrder(Name),
+
+    /// A file the plan derives from is not in the game directory.
+    #[error("the plan derives files from {0}, which is not in the game directory")]
+    MissingBase(RelPath),
+
+    /// A file the plan edits is larger than such a file may be.
+    #[error("{path} is larger than the {limit}-byte limit for a file the plan edits")]
+    BaseTooLarge {
+        /// The instance-relative file.
+        path: RelPath,
+        /// The limit.
+        limit: u64,
+    },
 
     /// The store would sit inside the game directory it serves.
     #[error("the store {} must not be inside the instance root {}", .store.display(), .root.display())]
@@ -2459,6 +2662,7 @@ sha512 = "abc"
         let blob = instance.applier.store().put_bytes(b"texture").unwrap();
         let profile = Profile {
             target: None,
+            order: Vec::new(),
             components: BTreeMap::new(),
             mods: BTreeMap::from([(
                 name("pack"),
@@ -2551,6 +2755,7 @@ sha512 = "abc"
         };
         let profile = Profile {
             target: None,
+            order: Vec::new(),
             components: BTreeMap::new(),
             mods: BTreeMap::from([
                 (name("first"), entry("a/common.bin", first)),
@@ -2573,5 +2778,148 @@ sha512 = "abc"
             .map(|claim| claim.module.as_str())
             .collect();
         assert_eq!(modules, ["first", "second"]);
+    }
+
+    #[test]
+    fn mods_apply_in_the_order_they_were_added_until_an_order_is_set() {
+        let fixture = Fixture::new();
+        let instance = fixture.create();
+        let default = name("default");
+        instance
+            .add_mods(
+                &default,
+                &[
+                    fixture.input("c.bin", b"c"),
+                    fixture.input("a.bin", b"a"),
+                    fixture.input("b.bin", b"b"),
+                ],
+            )
+            .unwrap();
+        let order = |instance: &Instance| instance.profile(&default).unwrap().load_order();
+        assert_eq!(order(&instance), [name("c"), name("a"), name("b")]);
+
+        assert_eq!(
+            instance.set_order(&default, &[name("b")]).unwrap(),
+            [name("b"), name("c"), name("a")]
+        );
+        instance.remove_mod(&default, &name("a")).unwrap();
+        assert_eq!(order(&instance), [name("b"), name("c")]);
+        assert_eq!(
+            instance.lockfile(&default).unwrap().order,
+            [name("b"), name("c")]
+        );
+
+        assert!(matches!(
+            instance.set_order(&default, &[name("a")]),
+            Err(InstanceError::UnknownMod { .. })
+        ));
+        assert!(matches!(
+            instance.set_order(&default, &[name("b"), name("b")]),
+            Err(InstanceError::RepeatedInOrder(_))
+        ));
+
+        // A hand-edited order naming a missing mod, or one mod twice, still lists each mod once.
+        let mut profile = instance.profile(&default).unwrap();
+        profile.order = vec![name("gone"), name("c"), name("c")];
+        assert_eq!(profile.load_order(), [name("c"), name("b")]);
+    }
+
+    const IN_PLACE: &str = r#"
+schema = 1
+id = "example"
+name = "Example"
+version = "1.0.0"
+
+[[loaders]]
+id = "loader"
+bootstrap = "none"
+
+[[steps]]
+type = "inject"
+
+[steps.with]
+base = "game.jar"
+into = "game.jar"
+remove = ["META-INF/**"]
+"#;
+
+    /// A zip archive holding `entries`, such as a game jar or a jarmod.
+    fn jar(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (entry, bytes) in entries {
+            writer
+                .start_file(*entry, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            std::io::Write::write_all(&mut writer, bytes).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
+    }
+
+    /// The names of every entry in the zip archive at `path`, with their contents.
+    fn jar_entries(path: &std::path::Path) -> BTreeMap<String, Vec<u8>> {
+        let mut archive = zip::ZipArchive::new(fs::File::open(path).unwrap()).unwrap();
+        (0..archive.len())
+            .map(|index| {
+                let mut entry = archive.by_index(index).unwrap();
+                let mut bytes = Vec::new();
+                std::io::Read::read_to_end(&mut entry, &mut bytes).unwrap();
+                (entry.name().to_owned(), bytes)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_in_place_injection_builds_from_the_pristine_file_every_time_and_purges_back() {
+        let fixture = Fixture::with_plan(IN_PLACE);
+        let mut instance = fixture.create();
+        let default = name("default");
+        instance
+            .add_mods(
+                &default,
+                &[fixture.input("patch.zip", &jar(&[("a.class", b"patched a")]))],
+            )
+            .unwrap();
+        assert!(matches!(
+            instance.plan_deploy(&default),
+            Err(InstanceError::MissingBase(path)) if path.as_str() == "game.jar"
+        ));
+
+        let vanilla = jar(&[
+            ("META-INF/MOJANG_C.SF", b"signature"),
+            ("a.class", b"vanilla a"),
+            ("b.class", b"vanilla b"),
+        ]);
+        let game_jar = fixture.game.join("game.jar");
+        fs::write(&game_jar, &vanilla).unwrap();
+        instance
+            .add_mods(
+                &default,
+                &[fixture.input("extra.zip", &jar(&[("c.class", b"extra c")]))],
+            )
+            .unwrap();
+        instance.deploy(&default, &mut NoopObserver).unwrap();
+        let names = |entries: BTreeMap<String, Vec<u8>>| entries.into_keys().collect::<Vec<_>>();
+        let deployed = jar_entries(&game_jar);
+        assert_eq!(
+            deployed.get("a.class").map(Vec::as_slice),
+            Some(&b"patched a"[..])
+        );
+        assert_eq!(names(deployed), ["a.class", "b.class", "c.class"]);
+
+        // Rebuilt from the vanilla jar rather than the patched one on disk, so a removed mod
+        // leaves nothing behind, and an unchanged profile rebuilds the same bytes.
+        instance.remove_mod(&default, &name("extra")).unwrap();
+        assert_eq!(
+            instance.deploy(&default, &mut NoopObserver).unwrap().placed,
+            1
+        );
+        assert_eq!(names(jar_entries(&game_jar)), ["a.class", "b.class"]);
+        assert_eq!(
+            instance.deploy(&default, &mut NoopObserver).unwrap().placed,
+            0
+        );
+
+        instance.purge().unwrap();
+        assert_eq!(fs::read(&game_jar).unwrap(), vanilla);
     }
 }

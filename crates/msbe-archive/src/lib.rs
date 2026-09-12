@@ -9,15 +9,17 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::File,
-    io::{self, BufReader, Read},
+    io::{self, BufReader, Cursor, Read},
     path::{Path, PathBuf},
 };
 
 use msbe_fsops::{Digest, RelPath, Store};
 use thiserror::Error;
-use zip::{CompressionMethod, ZipArchive, result::ZipError};
+use zip::{
+    CompressionMethod, DateTime, ZipArchive, ZipWriter, result::ZipError, write::SimpleFileOptions,
+};
 
 /// Below this many decompressed bytes a high compression ratio is harmless and not checked.
 const RATIO_FLOOR_BYTES: u64 = 1 << 20;
@@ -155,9 +157,109 @@ pub enum ArchiveError {
         entry: String,
     },
 
+    /// A container could not be written.
+    #[error("cannot build the container: {0}")]
+    Build(#[source] ZipError),
+
     /// Writing to the store failed.
     #[error(transparent)]
     Store(msbe_fsops::Error),
+}
+
+/// Builds a zip container from `base` and `entries`, adds it to the store, and returns its
+/// digest.
+///
+/// `base` is a zip archive already in the store, such as a game jar. Its entries are copied
+/// through byte for byte, except those `remove` matches and those an entry in `entries`
+/// replaces. `entries` apply in order, so a later entry with the same path wins, and one the base
+/// does not have is appended where it first appears. Written entries are deflated with a fixed
+/// timestamp, so the same inputs always build the same bytes.
+///
+/// # Errors
+///
+/// Returns [`ArchiveError`] if the base is missing or not a readable zip archive, has too many
+/// entries, the container cannot be written, or it outgrows the total size limit.
+pub fn inject(
+    store: &Store,
+    base: &Digest,
+    entries: &[(RelPath, Digest)],
+    remove: &dyn Fn(&str) -> bool,
+    limits: &Limits,
+) -> Result<Digest, ArchiveError> {
+    let path = store.blob_path(base);
+    let malformed = |source: ZipError| ArchiveError::Malformed {
+        path: path.clone(),
+        source,
+    };
+    let file = store.open_blob(base).map_err(ArchiveError::Store)?;
+    let mut archive = ZipArchive::new(BufReader::new(file)).map_err(malformed)?;
+    if archive.len() > limits.max_entries {
+        return Err(ArchiveError::TooManyEntries {
+            limit: limits.max_entries,
+        });
+    }
+    // The last blob given for each path, and the order paths first appear in.
+    let mut latest: BTreeMap<&str, &Digest> = BTreeMap::new();
+    let mut appended = Vec::new();
+    for (entry, blob) in entries {
+        if latest.insert(entry.as_str(), blob).is_none() {
+            appended.push(entry.as_str());
+        }
+    }
+
+    let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+    let mut written = BTreeSet::new();
+    for index in 0..archive.len() {
+        let entry = archive.by_index_raw(index).map_err(malformed)?;
+        let name = entry.name().trim_end_matches('/').to_owned();
+        if remove(&name) {
+            continue;
+        }
+        match latest.get(name.as_str()) {
+            Some(blob) if !entry.is_dir() => {
+                write_entry(store, &mut writer, &name, blob)?;
+                written.insert(name);
+            }
+            _ => writer.raw_copy_file(entry).map_err(ArchiveError::Build)?,
+        }
+    }
+    for name in appended {
+        if let Some(blob) = latest.get(name)
+            && !written.contains(name)
+            && !remove(name)
+        {
+            write_entry(store, &mut writer, name, blob)?;
+        }
+    }
+    let bytes = writer.finish().map_err(ArchiveError::Build)?.into_inner();
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > limits.max_total_bytes {
+        return Err(ArchiveError::TooLarge {
+            entry: format!("container built from {base}"),
+            limit: limits.max_total_bytes,
+        });
+    }
+    store.put_bytes(&bytes).map_err(ArchiveError::Store)
+}
+
+/// Writes the blob `blob` into `writer` as the entry `name`, deflated, with a fixed timestamp.
+fn write_entry(
+    store: &Store,
+    writer: &mut ZipWriter<Cursor<Vec<u8>>>,
+    name: &str,
+    blob: &Digest,
+) -> Result<(), ArchiveError> {
+    let options = SimpleFileOptions::default()
+        .compression_method(CompressionMethod::Deflated)
+        .last_modified_time(DateTime::default());
+    writer
+        .start_file(name, options)
+        .map_err(ArchiveError::Build)?;
+    let mut source = store.open_blob(blob).map_err(ArchiveError::Store)?;
+    io::copy(&mut source, writer).map_err(|source| ArchiveError::Io {
+        path: store.blob_path(blob),
+        source,
+    })?;
+    Ok(())
 }
 
 /// Adds a local artifact to the store and returns its files.
@@ -395,15 +497,94 @@ impl<R: Read> Read for Limited<R> {
 mod tests {
     use std::{
         fs,
-        io::Write,
+        io::{Read, Write},
         path::{Path, PathBuf},
     };
 
-    use msbe_fsops::{Digest, Store};
+    use msbe_fsops::{Digest, RelPath, Store};
     use tempfile::TempDir;
     use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
-    use super::{ArchiveError, Limits, ingest};
+    use super::{ArchiveError, Limits, ingest, inject};
+
+    /// Every entry of the zip archive `bytes`, in archive order.
+    fn entries_of(bytes: &[u8]) -> Vec<(String, Vec<u8>)> {
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        (0..archive.len())
+            .map(|index| {
+                let mut entry = archive.by_index(index).unwrap();
+                let mut data = Vec::new();
+                entry.read_to_end(&mut data).unwrap();
+                (entry.name().to_owned(), data)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn injection_copies_the_base_lets_later_entries_win_and_leaves_out_removed_ones() {
+        let fx = fixture();
+        let base_path = fx.inputs.join("base.jar");
+        write_zip(
+            &base_path,
+            &[
+                ("META-INF/MANIFEST.MF", b"manifest"),
+                ("a.class", b"vanilla a"),
+                ("b.class", b"vanilla b"),
+            ],
+            CompressionMethod::Deflated,
+        );
+        let base = fx.store.put_file(&base_path).unwrap();
+        let blob = |bytes: &[u8]| fx.store.put_bytes(bytes).unwrap();
+        let path = |raw: &str| RelPath::new(raw).unwrap();
+        let entries = [
+            (path("a.class"), blob(b"first a")),
+            (path("new/C.class"), blob(b"first c")),
+            (path("a.class"), blob(b"second a")),
+            (path("META-INF/SIGNED.SF"), blob(b"signature")),
+        ];
+        let remove = |name: &str| name == "META-INF" || name.starts_with("META-INF/");
+
+        let built = inject(&fx.store, &base, &entries, &remove, &Limits::default()).unwrap();
+        assert_eq!(
+            entries_of(&fs::read(fx.store.blob_path(&built)).unwrap()),
+            [
+                ("a.class".to_owned(), b"second a".to_vec()),
+                ("b.class".to_owned(), b"vanilla b".to_vec()),
+                ("new/C.class".to_owned(), b"first c".to_vec()),
+            ]
+        );
+        assert_eq!(
+            inject(&fx.store, &base, &entries, &remove, &Limits::default()).unwrap(),
+            built,
+            "the same inputs built different bytes"
+        );
+    }
+
+    #[test]
+    fn injection_refuses_a_base_that_is_not_a_zip_and_a_result_past_the_limit() {
+        let fx = fixture();
+        let not_zip = fx.store.put_bytes(b"not a zip").unwrap();
+        assert!(matches!(
+            inject(&fx.store, &not_zip, &[], &|_| false, &Limits::default()),
+            Err(ArchiveError::Malformed { .. })
+        ));
+
+        let base_path = fx.inputs.join("base.jar");
+        write_zip(
+            &base_path,
+            &[("a.class", &[1_u8; 256])],
+            CompressionMethod::Stored,
+        );
+        let base = fx.store.put_file(&base_path).unwrap();
+        let limits = Limits {
+            max_total_bytes: 64,
+            ..Limits::default()
+        };
+        assert!(matches!(
+            inject(&fx.store, &base, &[], &|_| false, &limits),
+            Err(ArchiveError::TooLarge { .. })
+        ));
+    }
 
     struct Fixture {
         _dir: TempDir,

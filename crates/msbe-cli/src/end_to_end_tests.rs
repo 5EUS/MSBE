@@ -743,6 +743,158 @@ fn a_fabric_api_reimplementation_in_the_profile_meets_requirements_on_fabric_api
     );
 }
 
+/// A zip archive of `entries`, stored uncompressed.
+fn zip_bytes(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut writer = ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (entry, bytes) in entries {
+        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+        writer.start_file(*entry, options).unwrap();
+        writer.write_all(bytes).unwrap();
+    }
+    writer.finish().unwrap().into_inner()
+}
+
+/// Every entry of the zip archive at `path`, by name.
+fn zip_entries(path: &Path) -> BTreeMap<String, Vec<u8>> {
+    let mut archive = zip::ZipArchive::new(fs::File::open(path).unwrap()).unwrap();
+    (0..archive.len())
+        .map(|index| {
+            let mut entry = archive.by_index(index).unwrap();
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            (entry.name().to_owned(), bytes)
+        })
+        .collect()
+}
+
+/// Installs a vanilla 1.5.2 client into `game`, as the launcher lays it out: a signed jar and
+/// its version manifest. Returns the jar's bytes.
+fn install_vanilla_1_5_2(game: &Path) -> Vec<u8> {
+    let version = game.join("versions/1.5.2");
+    fs::create_dir_all(&version).unwrap();
+    let jar = zip_bytes(&[
+        ("META-INF/MANIFEST.MF", b"Manifest-Version: 1.0\n"),
+        ("META-INF/MOJANG_C.SF", b"signature"),
+        ("a.class", b"vanilla a"),
+        ("b.class", b"vanilla b"),
+    ]);
+    fs::write(version.join("1.5.2.jar"), &jar).unwrap();
+    let manifest = json!({
+        "id": "1.5.2",
+        "mainClass": "net.minecraft.client.Minecraft",
+        "downloads": {
+            "client": { "sha1": "c", "url": "https://example.test/client.jar" },
+            "server": { "sha1": "s", "url": "https://example.test/server.jar" }
+        }
+    });
+    fs::write(
+        version.join("1.5.2.json"),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+    jar
+}
+
+#[test]
+fn jarmods_build_a_separate_launcher_version_in_profile_order_and_purge_to_vanilla() {
+    let world = World::new();
+    let vanilla_jar = install_vanilla_1_5_2(&world.game);
+    let vanilla_version = world.game.join("versions/1.5.2");
+    let vanilla = snapshot(&world.game);
+
+    let game = world.game.display().to_string();
+    let plan = world.plan.display().to_string();
+    let registered = world.msbe(&[
+        "instance",
+        "add",
+        "mc",
+        "--root",
+        game.as_str(),
+        "--plan",
+        plan.as_str(),
+        "--loader",
+        "jarmod",
+        "--game-version",
+        "1.5.2",
+    ]);
+    assert_eq!(registered.code, exit::OK, "{}", registered.err);
+
+    let modloader = world.zip(
+        "modloader.zip",
+        &[
+            ("a.class", b"modloader a"),
+            ("ModLoader.class", b"modloader"),
+        ],
+    );
+    let optifine = world.zip(
+        "optifine.zip",
+        &[
+            ("a.class", b"optifine a"),
+            ("Config.class", b"optifine"),
+            ("__MACOSX/._Config.class", b"resource fork"),
+        ],
+    );
+    world.json(&["add", "mc", modloader.as_str(), optifine.as_str()]);
+
+    // Added last, OptiFine applies last and wins the class both jarmods replace.
+    let modded = world.game.join("versions/1.5.2-msbe");
+    assert_eq!(at(&world.json(&["deploy", "mc"]), "/placed"), 2);
+    let entries = zip_entries(&modded.join("1.5.2-msbe.jar"));
+    assert_eq!(
+        entries.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["Config.class", "ModLoader.class", "a.class", "b.class"]
+    );
+    assert_eq!(
+        entries.get("a.class").map(Vec::as_slice),
+        Some(&b"optifine a"[..])
+    );
+    assert_eq!(
+        entries.get("b.class").map(Vec::as_slice),
+        Some(&b"vanilla b"[..])
+    );
+    let manifest: Value =
+        serde_json::from_slice(&fs::read(modded.join("1.5.2-msbe.json")).unwrap()).unwrap();
+    assert_eq!(at(&manifest, "/id"), "1.5.2-msbe");
+    assert!(manifest.pointer("/downloads/client").is_none());
+    assert_eq!(at(&manifest, "/downloads/server/sha1"), "s");
+    assert_eq!(
+        fs::read(vanilla_version.join("1.5.2.jar")).unwrap(),
+        vanilla_jar,
+        "the vanilla jar was modified"
+    );
+
+    // The same inputs build the same bytes, so deploying again changes nothing.
+    let again = world.json(&["deploy", "mc"]);
+    assert_eq!(
+        [at(&again, "/placed"), at(&again, "/unchanged")],
+        [&json!(0), &json!(2)]
+    );
+
+    // Reordering changes which jarmod wins, and only the jar is rebuilt.
+    assert_eq!(
+        world.json(&["profile", "order", "mc", "optifine", "modloader"]),
+        json!(["optifine", "modloader"])
+    );
+    assert_eq!(
+        at(&world.json(&["profile", "show", "mc"]), "/order"),
+        &json!(["optifine", "modloader"])
+    );
+    assert_eq!(at(&world.json(&["deploy", "mc"]), "/placed"), 1);
+    assert_eq!(
+        zip_entries(&modded.join("1.5.2-msbe.jar"))
+            .get("a.class")
+            .map(Vec::as_slice),
+        Some(&b"modloader a"[..])
+    );
+
+    world.json(&["purge", "mc"]);
+    assert_eq!(
+        snapshot(&world.game),
+        vanilla,
+        "purge did not restore vanilla"
+    );
+}
+
 #[test]
 fn server_profile_filters_client_only_projects_before_selection() {
     let world = World::new();

@@ -10,9 +10,15 @@ pub mod bisect;
 pub mod config;
 pub mod instance;
 pub mod solver;
+use std::collections::BTreeMap;
+
 use msbe_fsops::{Applier, Digest, Observer, Operation, RelPath, Result as FsResult, TxnReport};
-use msbe_plan_schema::{ExtractStep, Hygiene, Loader, Plan, Step, ValidationError};
+use msbe_plan_schema::{
+    EditJsonStep, ExtractStep, GAME_VERSION, Hygiene, InjectStep, Loader, Plan, Step,
+    ValidationError,
+};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use thiserror::Error;
 
 /// One acquired file available to the resolver.
@@ -82,7 +88,7 @@ impl OperationSet {
 ///
 /// Resolution is pure: it validates only the manifest and paths, never reads or writes an
 /// instance. The caller can therefore use its result for a dry run or pass it to the
-/// transactional applier unchanged.
+/// transactional applier unchanged. Steps limited to other loaders do not apply.
 ///
 /// # Errors
 ///
@@ -100,13 +106,16 @@ pub fn resolve(
         .find(|loader| loader.id == loader_id)
         .ok_or_else(|| ResolveError::UnknownLoader(loader_id.to_owned()))?;
 
-    let (files, excluded) = filter_files(plan, files);
+    let (files, excluded) = filter_files(plan, loader_id, files);
     let mutable_globs = mutable_globs(plan, loader);
     let mut operations = Vec::new();
     for step in &plan.steps {
         let Step::Place(place) = step else {
             continue;
         };
+        if !step.applies_to(loader_id) {
+            continue;
+        }
         let target_name = place
             .into
             .strip_prefix("@loader.targets.")
@@ -164,6 +173,188 @@ pub fn resolve(
     })
 }
 
+/// A container a plan builds from a file in the game and the profile's mods.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Injection {
+    /// The zip container the result starts from, as it was before MSBE changed it.
+    pub base: RelPath,
+    /// Where the result is placed.
+    pub into: RelPath,
+    /// Globs over entries left out of the result.
+    pub remove: Vec<String>,
+    /// The files written into the container, in the order they apply: a later file with the
+    /// same source path replaces an earlier one.
+    pub entries: Vec<ResolvedFile>,
+}
+
+impl Injection {
+    /// Whether the container entry at `path` is left out of the result.
+    pub fn removes(&self, path: &str) -> bool {
+        self.remove
+            .iter()
+            .any(|pattern| matches_glob(pattern, path))
+    }
+}
+
+/// A JSON document a plan derives from a file in the game.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JsonEdit {
+    /// The JSON document the result starts from, as it was before MSBE changed it.
+    pub base: RelPath,
+    /// Where the result is placed.
+    pub into: RelPath,
+    /// JSON pointers and the strings they are set to, with placeholders filled in.
+    pub set: BTreeMap<String, String>,
+    /// JSON pointers deleted before any are set.
+    pub remove: Vec<String>,
+}
+
+/// Files a plan builds from the game's own files rather than placing from a mod.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct Derivations {
+    /// Containers built by injection, in plan order.
+    pub injections: Vec<Injection>,
+    /// JSON documents derived by editing, in plan order.
+    pub edits: Vec<JsonEdit>,
+}
+
+/// Works out the files a plan derives for one loader from files already in the game.
+///
+/// `mods` holds every mod's files in profile order, which is the order injected entries apply
+/// in. Like [`resolve`] this is pure: the caller reads each base file and builds the result.
+///
+/// # Errors
+///
+/// Returns [`ResolveError`] if the plan is invalid, the loader is unknown, a template needs a
+/// game version the instance does not have, or a filled-in path is unsafe.
+pub fn derive(
+    plan: &Plan,
+    loader_id: &str,
+    game_version: Option<&str>,
+    mods: &[Vec<ResolvedFile>],
+) -> Result<Derivations, ResolveError> {
+    plan.validate()?;
+    if !plan.loaders.iter().any(|loader| loader.id == loader_id) {
+        return Err(ResolveError::UnknownLoader(loader_id.to_owned()));
+    }
+    let mut derivations = Derivations::default();
+    for step in plan.steps.iter().filter(|step| step.applies_to(loader_id)) {
+        match step {
+            Step::Inject(inject) => {
+                derivations.injections.push(injection(
+                    plan,
+                    loader_id,
+                    inject,
+                    game_version,
+                    mods,
+                )?);
+            }
+            Step::EditJson(edit) => derivations.edits.push(json_edit(edit, game_version)?),
+            Step::Extract(_) | Step::Place(_) | Step::MergeConfig(_) => {}
+        }
+    }
+    Ok(derivations)
+}
+
+fn injection(
+    plan: &Plan,
+    loader_id: &str,
+    step: &InjectStep,
+    game_version: Option<&str>,
+    mods: &[Vec<ResolvedFile>],
+) -> Result<Injection, ResolveError> {
+    let entries = mods
+        .iter()
+        .flat_map(|files| filter_files(plan, loader_id, files).0)
+        .filter(|file| {
+            step.include.is_empty()
+                || step
+                    .include
+                    .iter()
+                    .any(|pattern| matches_glob(pattern, file.source.as_str()))
+        })
+        .cloned()
+        .collect();
+    Ok(Injection {
+        base: template_path(&step.base, game_version)?,
+        into: template_path(&step.into, game_version)?,
+        remove: step.remove.clone(),
+        entries,
+    })
+}
+
+fn json_edit(step: &EditJsonStep, game_version: Option<&str>) -> Result<JsonEdit, ResolveError> {
+    Ok(JsonEdit {
+        base: template_path(&step.base, game_version)?,
+        into: template_path(&step.into, game_version)?,
+        set: step
+            .set
+            .iter()
+            .map(|(pointer, value)| Ok((pointer.clone(), fill(value, game_version)?)))
+            .collect::<Result<_, ResolveError>>()?,
+        remove: step.remove.clone(),
+    })
+}
+
+/// `template` with `{game_version}` filled in.
+fn fill(template: &str, game_version: Option<&str>) -> Result<String, ResolveError> {
+    if !template.contains(GAME_VERSION) {
+        return Ok(template.to_owned());
+    }
+    let version =
+        game_version.ok_or_else(|| ResolveError::GameVersionRequired(template.to_owned()))?;
+    Ok(template.replace(GAME_VERSION, version))
+}
+
+fn template_path(template: &str, game_version: Option<&str>) -> Result<RelPath, ResolveError> {
+    Ok(RelPath::new(&fill(template, game_version)?)?)
+}
+
+/// Applies `edit` to the JSON document `bytes`, returning pretty, newline-terminated JSON. The
+/// same inputs always give the same bytes.
+///
+/// Removing a pointer that is absent changes nothing. Setting one requires its parent to be an
+/// object.
+///
+/// # Errors
+///
+/// Returns [`ResolveError::InvalidJson`] if `bytes` is not JSON, or
+/// [`ResolveError::JsonPointer`] if a pointer to set has no object to hold it.
+pub fn edit_json(bytes: &[u8], edit: &JsonEdit) -> Result<Vec<u8>, ResolveError> {
+    let invalid = |reason: String| ResolveError::InvalidJson {
+        path: edit.base.clone(),
+        reason,
+    };
+    let mut document: Value =
+        serde_json::from_slice(bytes).map_err(|error| invalid(error.to_string()))?;
+    for pointer in &edit.remove {
+        let (parent, key) = split_pointer(pointer);
+        if let Some(Value::Object(object)) = document.pointer_mut(parent) {
+            object.remove(&key);
+        }
+    }
+    for (pointer, value) in &edit.set {
+        let (parent, key) = split_pointer(pointer);
+        let Some(Value::Object(object)) = document.pointer_mut(parent) else {
+            return Err(ResolveError::JsonPointer {
+                path: edit.base.clone(),
+                pointer: pointer.clone(),
+            });
+        };
+        object.insert(key, Value::String(value.clone()));
+    }
+    let mut edited =
+        serde_json::to_vec_pretty(&document).map_err(|error| invalid(error.to_string()))?;
+    edited.push(b'\n');
+    Ok(edited)
+}
+
+/// A JSON pointer's parent pointer and its final reference token, unescaped.
+fn split_pointer(pointer: &str) -> (&str, String) {
+    let (parent, token) = pointer.rsplit_once('/').unwrap_or(("", pointer));
+    (parent, token.replace("~1", "/").replace("~0", "~"))
+}
+
 /// The plan's mutable globs with `@loader.targets.<name>` expanded for `loader`. A glob naming
 /// a target this loader does not declare cannot match anything it places, so it is dropped.
 fn mutable_globs(plan: &Plan, loader: &Loader) -> Vec<String> {
@@ -186,16 +377,19 @@ fn mutable_globs(plan: &Plan, loader: &Loader) -> Vec<String> {
         .collect()
 }
 
+/// The files the loader's extract steps admit, and the rest with the rule that excluded each.
 fn filter_files<'a>(
     plan: &Plan,
+    loader_id: &str,
     files: &'a [ResolvedFile],
 ) -> (Vec<&'a ResolvedFile>, Vec<ExcludedFile>) {
     let extract_steps: Vec<&ExtractStep> = plan
         .steps
         .iter()
+        .filter(|step| step.applies_to(loader_id))
         .filter_map(|step| match step {
             Step::Extract(extract) => Some(extract),
-            Step::Place(_) | Step::MergeConfig(_) => None,
+            Step::Place(_) | Step::MergeConfig(_) | Step::Inject(_) | Step::EditJson(_) => None,
         })
         .collect();
     if extract_steps.is_empty() {
@@ -344,6 +538,27 @@ pub enum ResolveError {
         /// The required leading directory.
         prefix: String,
     },
+    /// A template uses `{game_version}`, and the instance has no game version.
+    #[error(
+        "the plan's {0:?} needs the instance's game version; set one with `msbe instance set <instance> --game-version <version>`"
+    )]
+    GameVersionRequired(String),
+    /// A file a plan derives from is not valid JSON.
+    #[error("{path} is not valid JSON: {reason}")]
+    InvalidJson {
+        /// The instance-relative file.
+        path: RelPath,
+        /// The parser's message.
+        reason: String,
+    },
+    /// A JSON pointer to set has no object at its parent.
+    #[error("{path} has no object to hold JSON pointer {pointer:?}")]
+    JsonPointer {
+        /// The instance-relative file.
+        path: RelPath,
+        /// The pointer.
+        pointer: String,
+    },
     /// Constructing a final instance-relative destination failed.
     #[error(transparent)]
     InvalidPath(#[from] msbe_fsops::Error),
@@ -353,11 +568,14 @@ pub enum ResolveError {
 mod tests {
     use msbe_fsops::{Digest, Operation, RelPath};
     use msbe_plan_schema::{
-        Deploy, ExtractStep, Hygiene, Loader, NamedPath, PlaceStep, Plan, SCHEMA_VERSION, Side,
-        Step,
+        Deploy, ExtractStep, Hygiene, InjectStep, Loader, NamedPath, PlaceStep, Plan,
+        SCHEMA_VERSION, Side, Step,
     };
 
-    use super::{ExclusionReason, ResolveError, ResolvedFile, matches_glob, resolve};
+    use super::{
+        ExclusionReason, JsonEdit, ResolveError, ResolvedFile, derive, edit_json, matches_glob,
+        resolve,
+    };
 
     fn plan(flatten: bool) -> Plan {
         Plan {
@@ -378,6 +596,7 @@ mod tests {
             }],
             components: Vec::new(),
             steps: vec![Step::Place(PlaceStep {
+                loaders: Vec::new(),
                 into: "@loader.targets.mods".to_owned(),
                 include: Vec::new(),
                 strip_prefix: None,
@@ -392,6 +611,36 @@ mod tests {
             blob: Digest::of_bytes(b"mod"),
             mutable: false,
         }
+    }
+
+    /// `plan(true)` plus a `container` loader whose steps inject into a game jar.
+    fn container_plan() -> Plan {
+        let mut plan = plan(true);
+        plan.loaders.push(Loader {
+            id: "container".to_owned(),
+            provides: Vec::new(),
+            bootstrap: "none".to_owned(),
+            targets: Vec::new(),
+            sides: vec![Side::Client],
+        });
+        if let Some(Step::Place(place)) = plan.steps.first_mut() {
+            place.loaders = vec!["loader".to_owned()];
+        }
+        plan.steps.push(Step::Extract(ExtractStep {
+            loaders: vec!["container".to_owned()],
+            allow: Vec::new(),
+            deny: Vec::new(),
+            quarantine: Vec::new(),
+            hygiene: Hygiene::Default,
+        }));
+        plan.steps.push(Step::Inject(InjectStep {
+            loaders: vec!["container".to_owned()],
+            base: "game/{game_version}.jar".to_owned(),
+            into: "game/{game_version}-modded.jar".to_owned(),
+            remove: vec!["META-INF/**".to_owned()],
+            include: vec!["**/*.class".to_owned()],
+        }));
+        plan
     }
 
     #[test]
@@ -447,12 +696,14 @@ mod tests {
         let mut plan = plan(true);
         plan.steps.clear();
         plan.steps.push(Step::Extract(ExtractStep {
+            loaders: Vec::new(),
             allow: vec!["**/*.jar".to_owned()],
             deny: Vec::new(),
             quarantine: vec!["Docs/**".to_owned()],
             hygiene: Hygiene::Default,
         }));
         plan.steps.push(Step::Place(PlaceStep {
+            loaders: Vec::new(),
             into: "@loader.targets.mods".to_owned(),
             include: Vec::new(),
             strip_prefix: None,
@@ -501,6 +752,7 @@ mod tests {
         plan.steps.insert(
             0,
             Step::Extract(ExtractStep {
+                loaders: Vec::new(),
                 allow: vec!["**/*.jar".to_owned()],
                 deny: vec!["**/*.exe".to_owned()],
                 quarantine: Vec::new(),
@@ -514,6 +766,90 @@ mod tests {
                 pattern: "**/*.exe".to_owned()
             })
         );
+    }
+
+    #[test]
+    fn steps_limited_to_another_loader_neither_place_nor_filter() {
+        let plan = container_plan();
+        let placed = resolve(&plan, "loader", &[file("a/B.class")]).unwrap();
+        assert_eq!(placed.operations.len(), 1);
+        assert!(placed.excluded.is_empty());
+
+        let contained = resolve(&plan, "container", &[file("__MACOSX/._B.class")]).unwrap();
+        assert!(contained.operations.is_empty());
+        assert_eq!(
+            contained.excluded.first().map(|excluded| &excluded.reason),
+            Some(&ExclusionReason::Hygiene)
+        );
+        assert_eq!(
+            derive(&plan, "loader", Some("1.5.2"), &[vec![file("a/B.class")]]).unwrap(),
+            super::Derivations::default()
+        );
+    }
+
+    #[test]
+    fn injected_entries_follow_profile_order_and_templates_take_the_game_version() {
+        let plan = container_plan();
+        let first = vec![file("a/B.class"), file("readme.txt")];
+        let second = vec![file("a/B.class"), file("__MACOSX/._a"), file("c/D.class")];
+        let derived = derive(&plan, "container", Some("1.5.2"), &[first, second]).unwrap();
+        let [injection] = derived.injections.as_slice() else {
+            panic!("expected one injection, got {derived:?}");
+        };
+        assert_eq!(injection.base.as_str(), "game/1.5.2.jar");
+        assert_eq!(injection.into.as_str(), "game/1.5.2-modded.jar");
+        let entries: Vec<&str> = injection
+            .entries
+            .iter()
+            .map(|entry| entry.source.as_str())
+            .collect();
+        assert_eq!(entries, ["a/B.class", "a/B.class", "c/D.class"]);
+        assert!(injection.removes("META-INF/MOJANG_C.SF"));
+        assert!(injection.removes("META-INF"));
+        assert!(!injection.removes("a/B.class"));
+
+        assert!(matches!(
+            derive(&plan, "container", None, &[]),
+            Err(ResolveError::GameVersionRequired(_))
+        ));
+    }
+
+    #[test]
+    fn json_edits_remove_then_set_pointers_and_refuse_a_missing_parent() {
+        let edit = |set: &[(&str, &str)], remove: &[&str]| JsonEdit {
+            base: RelPath::new("versions/1.5.2/1.5.2.json").unwrap(),
+            into: RelPath::new("versions/1.5.2-msbe/1.5.2-msbe.json").unwrap(),
+            set: set
+                .iter()
+                .map(|(pointer, value)| ((*pointer).to_owned(), (*value).to_owned()))
+                .collect(),
+            remove: remove.iter().map(|pointer| (*pointer).to_owned()).collect(),
+        };
+        let vanilla =
+            br#"{"id":"1.5.2","downloads":{"client":{"sha1":"x"},"server":{"sha1":"y"}},"a/b":1}"#;
+        let edited = edit_json(
+            vanilla,
+            &edit(
+                &[("/id", "1.5.2-msbe")],
+                &["/downloads/client", "/absent/entirely", "/a~1b"],
+            ),
+        )
+        .unwrap();
+        let document: serde_json::Value = serde_json::from_slice(&edited).unwrap();
+        assert_eq!(
+            document,
+            serde_json::json!({ "id": "1.5.2-msbe", "downloads": { "server": { "sha1": "y" } } })
+        );
+        assert!(edited.ends_with(b"\n"));
+
+        assert!(matches!(
+            edit_json(vanilla, &edit(&[("/missing/id", "x")], &[])),
+            Err(ResolveError::JsonPointer { .. })
+        ));
+        assert!(matches!(
+            edit_json(b"not json", &edit(&[], &[])),
+            Err(ResolveError::InvalidJson { .. })
+        ));
     }
 
     #[test]

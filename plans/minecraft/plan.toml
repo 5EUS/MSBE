@@ -1,12 +1,20 @@
-# Minecraft with modern mod loaders.
+# Minecraft.
 #
-# Mods are .jar files placed flat into the loader's mods directory. Pack-declared resource and
-# shader ZIP files are retained whole and routed to their respective Minecraft directories.
+# Modern loaders (Fabric, Quilt, NeoForge): mods are .jar files placed flat into the loader's mods
+# directory, and pack-declared resource and shader ZIP files are routed whole to their Minecraft
+# directories.
+#
+# Legacy jarmods (before 1.6): the `jarmod` loader builds a separate launcher version,
+# `versions/<game version>-msbe`, from the vanilla client jar and version manifest, which are only
+# read. Every jarmod's files are injected into the jar in profile order, so a later jarmod wins a
+# class two of them replace, and `META-INF/` is dropped so the client's signature check does not
+# reject the result. The manifest gets the new id and loses its client download, so the official
+# launcher neither rejects the version nor downloads a vanilla jar over it.
 
 schema  = 1
 id      = "minecraft"
 name    = "Minecraft"
-version = "0.1.0"
+version = "0.2.0"
 
 [[loaders]]
 id        = "fabric"
@@ -43,10 +51,18 @@ targets   = [
   { name = "datapacks", path = "datapacks" },
 ]
 
+[[loaders]]
+id        = "jarmod"
+bootstrap = "none"
+sides     = ["client"]
+
+# Modern loaders.
+
 [[steps]]
 type = "extract"
 
   [steps.with]
+  loaders = ["fabric", "quilt", "neoforge"]
   allow   = ["**/*.jar", "resourcepacks/**/*.zip", "shaderpacks/**/*.zip"]
   hygiene = "default"
 
@@ -54,6 +70,7 @@ type = "extract"
 type = "place"
 
   [steps.with]
+  loaders = ["fabric", "quilt", "neoforge"]
   into    = "@loader.targets.mods"
   include = ["**/*.jar"]
   flatten = true
@@ -62,6 +79,7 @@ type = "place"
 type = "place"
 
   [steps.with]
+  loaders       = ["fabric", "quilt", "neoforge"]
   into          = "@loader.targets.resourcepacks"
   include       = ["resourcepacks/**/*.zip"]
   strip_prefix  = "resourcepacks"
@@ -71,7 +89,36 @@ type = "place"
 type = "place"
 
   [steps.with]
+  loaders       = ["fabric", "quilt", "neoforge"]
   into          = "@loader.targets.shaderpacks"
   include       = ["shaderpacks/**/*.zip"]
   strip_prefix  = "shaderpacks"
   flatten       = true
+
+# Legacy jarmods.
+
+[[steps]]
+type = "extract"
+
+  [steps.with]
+  loaders = ["jarmod"]
+  hygiene = "default"
+
+[[steps]]
+type = "inject"
+
+  [steps.with]
+  loaders = ["jarmod"]
+  base    = "versions/{game_version}/{game_version}.jar"
+  into    = "versions/{game_version}-msbe/{game_version}-msbe.jar"
+  remove  = ["META-INF/**"]
+
+[[steps]]
+type = "edit-json"
+
+  [steps.with]
+  loaders = ["jarmod"]
+  base    = "versions/{game_version}/{game_version}.json"
+  into    = "versions/{game_version}-msbe/{game_version}-msbe.json"
+  set     = { "/id" = "{game_version}-msbe" }
+  remove  = ["/downloads/client"]

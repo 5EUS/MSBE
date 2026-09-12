@@ -159,9 +159,14 @@ the normal journal; dependency-closure and pair-interaction analysis remain futu
 The reason Minecraft alone can validate the abstraction: its own history contains install
 models that are structurally unlike the modern one.
 
-- **Jarmods** — pre-1.6 mods whose class files are injected _into_ `minecraft.jar`, in
-  order, with `META-INF/` removed to defeat the signature check. This is Axis D's
-  _in-place container injection_ plus an ordered mutation, and nothing in M1–M2 touches it.
+- **Jarmods** — **implemented**: pre-1.6 mods whose class files are injected _into_ the game
+  jar, in profile order, with `META-INF/` removed to defeat the signature check. The Minecraft
+  plan's `jarmod` loader builds `versions/<version>-msbe` from the untouched vanilla jar and
+  version manifest, so the official launcher runs it instead of re-downloading vanilla. This is
+  Axis D's _in-place container injection_ plus an ordered mutation. **Finding:** it needed two new
+  step kinds, `inject` and `edit-json`, a `loaders` list on steps, and an explicit profile `order`
+  that Bethesda load order will reuse ([02](02-plan-system.md)). A run against a real 1.5.2 setup
+  is still to come.
 - **Coremods and ASM transformers** (1.6–1.12 Forge), `coremods/`, `.cfg` configs, and
   the much weaker `mcmod.info` dependency metadata — the solver must degrade honestly.
 - **Server ecosystems** — Bukkit/Paper `plugins/` are a _different loader for the same
