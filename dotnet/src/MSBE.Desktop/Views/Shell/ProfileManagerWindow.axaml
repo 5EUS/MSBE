@@ -1,0 +1,61 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:MSBE.Desktop.ViewModels"
+        x:Class="MSBE.Desktop.Views.Shell.ProfileManagerWindow"
+        x:DataType="vm:MainViewModel"
+        Title="Manage profiles"
+        Background="#121419"
+        Width="720" Height="520"
+        MinWidth="600" MinHeight="440"
+        CanResize="True">
+    <Grid Margin="22" RowDefinitions="Auto,Auto,*,Auto" RowSpacing="18">
+        <StackPanel Spacing="4">
+            <TextBlock Classes="sectionHeading" Text="Manage profiles" />
+            <TextBlock Classes="caption" Text="Create a clean profile or clone an existing setup before changing it." />
+        </StackPanel>
+
+        <Border Grid.Row="1" Classes="error-banner" IsVisible="{Binding HasProfileMutationError}">
+            <TextBlock Text="{Binding ProfileMutationError}" TextWrapping="Wrap" />
+        </Border>
+
+        <Grid Grid.Row="2" ColumnDefinitions="*,1.25*" ColumnSpacing="20">
+            <Grid RowDefinitions="Auto,*" RowSpacing="8">
+                <TextBlock Classes="field-label" Text="PROFILES" />
+                <ListBox Grid.Row="1" Classes="profile-list" ItemsSource="{Binding Profiles}" SelectedItem="{Binding SelectedProfile}" />
+            </Grid>
+
+            <StackPanel Grid.Column="1" Spacing="14">
+                <StackPanel Spacing="5">
+                    <TextBlock Classes="field-label" Text="NEW PROFILE NAME" />
+                    <TextBox Text="{Binding NewProfileName}" PlaceholderText="testing" />
+                </StackPanel>
+                <StackPanel Spacing="5">
+                    <TextBlock Classes="field-label" Text="COPY FROM" />
+                    <ComboBox ItemsSource="{Binding Profiles}" SelectedItem="{Binding NewProfileSource}" PlaceholderText="Start empty" />
+                    <TextBlock Classes="caption" Text="Clear the selection to create an empty profile." />
+                </StackPanel>
+                <Button Classes="primary-button"
+                        HorizontalAlignment="Stretch"
+                        Content="Create profile"
+                        IsEnabled="{Binding !IsProfileMutationBusy}"
+                        Command="{Binding CreateProfileCommand}" />
+                <Border Height="1" Background="#303540" Margin="0,5" />
+                <StackPanel Spacing="5">
+                    <TextBlock Classes="field-label" Text="SELECTED PROFILE" />
+                    <TextBlock FontWeight="SemiBold" Text="{Binding SelectedProfile}" />
+                    <TextBlock Classes="caption" IsVisible="{Binding IsSelectedProfileDeployed}" Text="This profile is deployed and cannot be deleted." TextWrapping="Wrap" />
+                </StackPanel>
+                <Button Classes="danger-button"
+                        HorizontalAlignment="Stretch"
+                        Content="Delete selected profile"
+                        IsEnabled="{Binding CanRemoveSelectedProfile}"
+                        Command="{Binding RemoveSelectedProfileCommand}" />
+            </StackPanel>
+        </Grid>
+
+        <Grid Grid.Row="3" ColumnDefinitions="*,Auto" ColumnSpacing="8">
+            <ProgressBar Width="120" Height="2" IsIndeterminate="True" IsVisible="{Binding IsProfileMutationBusy}" />
+            <Button Grid.Column="1" Classes="secondary-button" Content="Done" Command="{Binding CloseProfileManagerCommand}" />
+        </Grid>
+    </Grid>
+</Window>

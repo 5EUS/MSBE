@@ -13,4 +13,5 @@ namespace MSBE.Client;
 /// </remarks>
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower)]
 [JsonSerializable(typeof(DaemonInfo))]
+[JsonSerializable(typeof(GameInfo[]))]
 public sealed partial class MsbeJsonContext : JsonSerializerContext;

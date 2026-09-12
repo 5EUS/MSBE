@@ -32,6 +32,24 @@ public sealed class UnixSocketMsbeClient : IMsbeClient
     }
 
     /// <inheritdoc />
+    public async Task<IReadOnlyList<GameInfo>> GetGamesAsync(CancellationToken cancellationToken)
+    {
+        using JsonDocument response = await this.SendAsync("game.list", null, cancellationToken).ConfigureAwait(false);
+        JsonElement result = GetResult(response.RootElement);
+        var games = new List<GameInfo>();
+        foreach (JsonElement game in result.EnumerateArray())
+        {
+            games.Add(new GameInfo(
+                game.GetProperty("id").GetString() ?? string.Empty,
+                game.GetProperty("name").GetString() ?? string.Empty,
+                game.GetProperty("support_version").GetString() ?? string.Empty,
+                game.GetProperty("loaders").EnumerateArray().Select(loader => loader.GetString() ?? string.Empty).ToArray()));
+        }
+
+        return games;
+    }
+
+    /// <inheritdoc />
     public async Task<CommandResult> RunCommandAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(arguments);

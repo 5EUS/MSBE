@@ -43,13 +43,22 @@ internal sealed partial class MainViewModel
     {
         WorkspacePage.Instances => "Instances",
         WorkspacePage.Games => "Games",
-        WorkspacePage.Providers => "Providers",
+        WorkspacePage.Browse => "Browse",
         WorkspacePage.Settings => "Settings",
         _ => "MSBE",
     };
 
     /// <summary>Gets a value indicating whether the instances workspace is active.</summary>
     public bool IsInstancesWorkspace => this.ActiveWorkspace == WorkspacePage.Instances;
+
+    /// <summary>Gets a value indicating whether the browse workspace is active.</summary>
+    public bool IsBrowseWorkspace => this.ActiveWorkspace == WorkspacePage.Browse;
+
+    /// <summary>Gets a value indicating whether the supported games workspace is active.</summary>
+    public bool IsGamesWorkspace => this.ActiveWorkspace == WorkspacePage.Games;
+
+    /// <summary>Gets a value indicating whether a not-yet-implemented workspace is active.</summary>
+    public bool IsPlaceholderWorkspace => !this.IsInstancesWorkspace && !this.IsBrowseWorkspace && !this.IsGamesWorkspace;
 
     /// <summary>Gets the available instance library sort orders.</summary>
     public IReadOnlyList<string> InstanceSorts { get; } = ["Name (A-Z)", "Name (Z-A)"];
@@ -60,6 +69,9 @@ internal sealed partial class MainViewModel
     {
         this.OnPropertyChanged(nameof(this.ActiveWorkspaceTitle));
         this.OnPropertyChanged(nameof(this.IsInstancesWorkspace));
+        this.OnPropertyChanged(nameof(this.IsBrowseWorkspace));
+        this.OnPropertyChanged(nameof(this.IsGamesWorkspace));
+        this.OnPropertyChanged(nameof(this.IsPlaceholderWorkspace));
     }
 
     [RelayCommand]

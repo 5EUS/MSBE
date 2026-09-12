@@ -21,7 +21,9 @@
       <Border Grid.Column="1" Classes="workspace">
         <Grid>
           <pages:InstancesPageView IsVisible="{Binding IsInstancesWorkspace}" />
-          <StackPanel IsVisible="{Binding !IsInstancesWorkspace}" Spacing="8">
+          <pages:BrowsePageView IsVisible="{Binding IsBrowseWorkspace}" />
+          <pages:GamesPageView IsVisible="{Binding IsGamesWorkspace}" />
+          <StackPanel IsVisible="{Binding IsPlaceholderWorkspace}" Spacing="8">
             <TextBlock Classes="sectionHeading" Text="{Binding ActiveWorkspaceTitle}" />
             <TextBlock Classes="caption" Text="This workspace is ready for daemon-backed content." />
           </StackPanel>

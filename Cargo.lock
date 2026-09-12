@@ -412,9 +412,13 @@ name = "msbe-daemon"
 version = "0.0.0"
 dependencies = [
  "msbe-cli",
+ "msbe-plan-schema",
  "msbe-rpc-schema",
  "serde",
  "serde_json",
+ "tempfile",
+ "thiserror",
+ "toml",
 ]
 
 [[package]]

@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.Net.Sockets;
 
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -22,6 +23,12 @@ internal sealed partial class MainViewModel : ViewModelBase
     /// <param name="client">The client used for daemon-owned operations.</param>
     public MainViewModel(IMsbeClient client) => this.client = client;
 
+    /// <summary>Gets games currently supported by the connected daemon.</summary>
+    public ObservableCollection<GameInfo> Games { get; } = [];
+
+    /// <summary>Gets a value indicating whether the daemon reported no supported games.</summary>
+    public bool IsGamesEmpty => this.Games.Count == 0;
+
     /// <summary>Gets or sets the window title.</summary>
     [ObservableProperty]
     public partial string Title { get; set; } = "MSBE";
@@ -37,6 +44,16 @@ internal sealed partial class MainViewModel : ViewModelBase
         try
         {
             DaemonInfo daemon = await this.client.GetInfoAsync(CancellationToken.None).ConfigureAwait(true);
+            IReadOnlyList<GameInfo> games = await this.client.GetGamesAsync(CancellationToken.None).ConfigureAwait(true);
+            this.Games.Clear();
+            foreach (GameInfo game in games)
+            {
+                this.Games.Add(game);
+            }
+
+            this.RefreshGameSearch();
+            this.OnPropertyChanged(nameof(this.IsGamesEmpty));
+
             this.StatusMessage = $"Connected to daemon {daemon.Version} (RPC {daemon.RpcVersion}).";
             await this.RefreshInstancesAsync().ConfigureAwait(true);
         }

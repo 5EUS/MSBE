@@ -13,6 +13,7 @@ namespace MSBE.Desktop.ViewModels;
 internal sealed partial class MainViewModel
 {
     private readonly List<string> allInstances = [];
+    private string selectedGameName = string.Empty;
 
     /// <summary>Gets the registered game instances visible under the current filter.</summary>
     public ObservableCollection<string> Instances { get; } = [];
@@ -36,9 +37,12 @@ internal sealed partial class MainViewModel
     [ObservableProperty]
     public partial string SelectedInstanceRoot { get; set; } = string.Empty;
 
-    /// <summary>Gets or sets the selected instance's plan description.</summary>
-    [ObservableProperty]
-    public partial string SelectedInstancePlan { get; set; } = string.Empty;
+    /// <summary>Gets or sets the selected instance's game.</summary>
+    public string SelectedGameName
+    {
+        get => this.selectedGameName;
+        set => this.SetProperty(ref this.selectedGameName, value);
+    }
 
     /// <summary>Gets or sets the selected instance's game and loader target.</summary>
     [ObservableProperty]
@@ -144,7 +148,7 @@ internal sealed partial class MainViewModel
     private void ClearInstanceDetails()
     {
         this.SelectedInstanceRoot = string.Empty;
-        this.SelectedInstancePlan = string.Empty;
+        this.SelectedGameName = string.Empty;
         this.SelectedInstanceTarget = string.Empty;
         this.SelectedInstanceDeployment = string.Empty;
     }
@@ -167,7 +171,8 @@ internal sealed partial class MainViewModel
             }
 
             this.SelectedInstanceRoot = status.GetProperty("root").GetString() ?? string.Empty;
-            this.SelectedInstancePlan = $"{status.GetProperty("plan_id").GetString()} {status.GetProperty("plan_version").GetString()}";
+            string gameId = status.GetProperty("plan_id").GetString() ?? string.Empty;
+            this.SelectedGameName = this.Games.FirstOrDefault(game => string.Equals(game.Id, gameId, StringComparison.Ordinal))?.Name ?? gameId;
             string gameVersion = status.TryGetProperty("game_version", out JsonElement version) && version.ValueKind == JsonValueKind.String
                 ? version.GetString() ?? "Version not set"
                 : "Version not set";

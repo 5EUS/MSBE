@@ -24,7 +24,7 @@ public sealed class MainViewModelTests
         Assert.Equal(["alpha", "zeta"], vm.Instances);
         Assert.Equal("alpha", vm.SelectedInstance);
         Assert.Equal("/games/alpha", vm.SelectedInstanceRoot);
-        Assert.Equal("minecraft 1", vm.SelectedInstancePlan);
+        Assert.Equal("minecraft", vm.SelectedGameName);
         Assert.Equal("1.21.1 · fabric", vm.SelectedInstanceTarget);
         Assert.Equal("default · 12 managed files", vm.SelectedInstanceDeployment);
         Assert.Equal("2 registered instance(s).", vm.StatusMessage);
@@ -70,7 +70,7 @@ public sealed class MainViewModelTests
             IsAddInstanceOpen = true,
             NewInstanceName = "alpha",
             NewInstanceRoot = "/games/alpha",
-            NewInstancePlan = "/plans/minecraft.toml",
+            NewInstanceGame = new GameInfo("minecraft", "Minecraft", "1", ["fabric"]),
             NewInstanceLoader = "fabric",
             NewInstanceSide = "Client",
             NewInstanceGameVersion = "1.21.1",
@@ -81,13 +81,33 @@ public sealed class MainViewModelTests
         string[] expectedArguments =
         [
             "--format", "json", "instance", "add", "alpha",
-            "--root", "/games/alpha", "--plan", "/plans/minecraft.toml",
+            "--root", "/games/alpha", "--game", "minecraft",
             "--loader", "fabric", "--side", "client", "--game-version", "1.21.1",
         ];
         Assert.Contains(calls, arguments => arguments.SequenceEqual(expectedArguments, StringComparer.Ordinal));
         Assert.False(vm.IsAddInstanceOpen);
         Assert.Equal("alpha", vm.SelectedInstance);
         Assert.False(vm.HasAddInstanceError);
+    }
+
+    /// <summary>The instance wizard filters supported games by name and ecosystem.</summary>
+    [Fact]
+    public void GameSearchFiltersSupportedGames()
+    {
+        MainViewModel vm = new(new TestClient(_ => new CommandResult(0, string.Empty, string.Empty)));
+        vm.Games.Add(new GameInfo("minecraft", "Minecraft", "1", ["fabric", "neoforge"]));
+        vm.Games.Add(new GameInfo("nomanssky", "No Man's Sky", "1", ["native"]));
+
+        vm.AddInstanceCommand.Execute(parameter: null);
+        vm.GameSearchText = "neo";
+
+        Assert.Equal("Minecraft", Assert.Single(vm.FilteredGames).Name);
+        Assert.False(vm.IsGameSearchEmpty);
+
+        vm.GameSearchText = "stardew";
+
+        Assert.Empty(vm.FilteredGames);
+        Assert.True(vm.IsGameSearchEmpty);
     }
 
     /// <summary>The selected instance loads its deployed profile and ordered mods.</summary>
@@ -123,6 +143,205 @@ public sealed class MainViewModelTests
         Assert.False(vm.IsModsEmpty);
     }
 
+    /// <summary>Deployment review preserves operation order and explains withheld files.</summary>
+    /// <returns>A task representing the test.</returns>
+    [Fact]
+    public async Task PreviewDeploymentLoadsOperationsAndExclusions()
+    {
+        const string StatusJson = """{"name":"alpha","root":"/games/alpha","plan_id":"minecraft","plan_version":"1","loader":"fabric","game_version":"1.21.1","deployed_profile":"default","deployed_files":2}""";
+        const string ProfilesJson = """{"profiles":["default"],"deployed":"default"}""";
+        const string ModsJson = """{"order":[],"components":{},"mods":{}}""";
+        const string PlanJson = """{"profile":"default","operations":[{"op":"create_dir","path":"mods"},{"op":"materialize","path":"mods/iris.jar","blob":"sha256:01","mutable":false},{"op":"remove","path":"mods/old.jar"}],"unchanged":7,"kept":["config/iris.properties"],"excluded":[{"module":"iris","file":{"source":"debug/iris.pdb","reason":{"kind":"quarantined","pattern":"**/*.pdb"}}}]}""";
+        List<IReadOnlyList<string>> calls = [];
+        var client = new TestClient(arguments =>
+        {
+            calls.Add(arguments);
+            if (arguments.Contains("status", StringComparer.Ordinal))
+            {
+                return new CommandResult(0, StatusJson, string.Empty);
+            }
+
+            if (arguments.Contains("list", StringComparer.Ordinal))
+            {
+                return new CommandResult(0, ProfilesJson, string.Empty);
+            }
+
+            if (arguments.Contains("deploy", StringComparer.Ordinal))
+            {
+                return new CommandResult(0, PlanJson, string.Empty);
+            }
+
+            return new CommandResult(0, ModsJson, string.Empty);
+        });
+        MainViewModel vm = new(client)
+        {
+            SelectedInstance = "alpha",
+        };
+
+        await vm.PreviewDeploymentCommand.ExecuteAsync(parameter: null);
+
+        string[] expectedArguments = ["--format", "json", "deploy", "alpha", "--profile", "default", "--dry-run"];
+        Assert.Contains(calls, arguments => arguments.SequenceEqual(expectedArguments, StringComparer.Ordinal));
+        Assert.True(vm.IsDeploymentPreviewOpen);
+        Assert.Equal(["Create folder", "Place", "Remove"], vm.DeploymentChanges.Select(change => change.Action));
+        Assert.Equal("mods/iris.jar", vm.DeploymentChanges[1].Path);
+        Assert.Equal(7, vm.DeploymentUnchangedCount);
+        Assert.Equal(1, vm.DeploymentKeptCount);
+        DeploymentExclusionItem exclusion = Assert.Single(vm.DeploymentExclusions);
+        Assert.Equal("iris", exclusion.Module);
+        Assert.Equal("debug/iris.pdb", exclusion.Source);
+        Assert.Equal("quarantined - **/*.pdb", exclusion.Reason);
+        Assert.False(vm.HasDeploymentError);
+    }
+
+    /// <summary>Browse searches the selected target and installs the selected provider result.</summary>
+    /// <returns>A task representing the test.</returns>
+    [Fact]
+    public async Task BrowseSearchesAndAddsWithDependencies()
+    {
+        const string StatusJson = """{"name":"alpha","root":"/games/alpha","plan_id":"minecraft","plan_version":"1","loader":"fabric","game_version":"1.21.1","deployed_profile":"default","deployed_files":2}""";
+        const string ProfilesJson = """{"profiles":["default"],"deployed":"default"}""";
+        const string ModsJson = """{"order":[],"components":{},"mods":{}}""";
+        const string SearchJson = """[{"provider":"modrinth","project":"AANobbMI","slug":"sodium","title":"Sodium","description":"Rendering optimization","downloads":12000000}]""";
+        List<IReadOnlyList<string>> calls = [];
+        var client = new TestClient(arguments =>
+        {
+            calls.Add(arguments);
+            if (arguments.Contains("status", StringComparer.Ordinal))
+            {
+                return new CommandResult(0, StatusJson, string.Empty);
+            }
+
+            if (arguments.Contains("list", StringComparer.Ordinal))
+            {
+                return new CommandResult(0, ProfilesJson, string.Empty);
+            }
+
+            if (arguments.Contains("search", StringComparer.Ordinal))
+            {
+                return new CommandResult(0, SearchJson, string.Empty);
+            }
+
+            if (arguments.Contains("add", StringComparer.Ordinal))
+            {
+                return new CommandResult(0, "{\"added\":[\"sodium\"],\"skipped\":[],\"unresolved\":[],\"incompatible\":[],\"substituted\":[]}", string.Empty);
+            }
+
+            return new CommandResult(0, ModsJson, string.Empty);
+        });
+        MainViewModel vm = new(client) { SelectedInstance = "alpha", BrowseQuery = "rendering" };
+
+        await vm.SearchBrowseCommand.ExecuteAsync(parameter: null);
+        vm.SelectedBrowseResult = Assert.Single(vm.BrowseResults);
+        await vm.AddBrowseResultCommand.ExecuteAsync(parameter: null);
+
+        Assert.Equal("Sodium", vm.SelectedBrowseResult.Title);
+        Assert.Contains(calls, arguments => arguments.SequenceEqual(
+            ["--format", "json", "search", "alpha", "rendering", "--profile", "default", "--limit", "30"],
+            StringComparer.Ordinal));
+        Assert.Contains(calls, arguments => arguments.SequenceEqual(
+            ["--format", "json", "add", "alpha", "modrinth:sodium", "--profile", "default", "--with-deps"],
+            StringComparer.Ordinal));
+        Assert.Contains("Added Sodium", vm.StatusMessage, StringComparison.Ordinal);
+    }
+
+    /// <summary>Profile creation can clone the current profile and selects the result.</summary>
+    /// <returns>A task representing the test.</returns>
+    [Fact]
+    public async Task CreateProfileClonesSelectedProfile()
+    {
+        const string StatusJson = """{"name":"alpha","root":"/games/alpha","plan_id":"minecraft","plan_version":"1","loader":"fabric","game_version":"1.21.1","deployed_profile":"default","deployed_files":2}""";
+        const string ProfilesJson = """{"profiles":["default","testing"],"deployed":"default"}""";
+        const string ModsJson = """{"order":[],"components":{},"mods":{}}""";
+        List<IReadOnlyList<string>> calls = [];
+        var client = new TestClient(arguments =>
+        {
+            calls.Add(arguments);
+            if (arguments.Contains("status", StringComparer.Ordinal))
+            {
+                return new CommandResult(0, StatusJson, string.Empty);
+            }
+
+            if (arguments.Contains("list", StringComparer.Ordinal))
+            {
+                return new CommandResult(0, ProfilesJson, string.Empty);
+            }
+
+            return arguments.Contains("new", StringComparer.Ordinal)
+                ? new CommandResult(0, "\"testing\"", string.Empty)
+                : new CommandResult(0, ModsJson, string.Empty);
+        });
+        MainViewModel vm = new(client) { SelectedInstance = "alpha" };
+        vm.NewProfileName = "testing";
+        vm.NewProfileSource = "default";
+
+        await vm.CreateProfileCommand.ExecuteAsync(parameter: null);
+
+        Assert.Contains(calls, arguments => arguments.SequenceEqual(
+            ["--format", "json", "profile", "new", "alpha", "testing", "--from", "default"],
+            StringComparer.Ordinal));
+        Assert.Equal("testing", vm.SelectedProfile);
+        Assert.False(vm.HasProfileMutationError);
+    }
+
+    /// <summary>Source add, selected removal, and rollback use their structured daemon commands.</summary>
+    /// <returns>A task representing the test.</returns>
+    [Fact]
+    public async Task ModMutationsAndRollbackRefreshState()
+    {
+        const string StatusJson = """{"name":"alpha","root":"/games/alpha","plan_id":"minecraft","plan_version":"1","loader":"fabric","game_version":"1.21.1","deployed_profile":"default","deployed_files":2}""";
+        const string ProfilesJson = """{"profiles":["default"],"deployed":"default"}""";
+        const string ModsJson = """{"order":["iris"],"components":{},"mods":{"iris":{"origin":"iris.jar","files":[]}}}""";
+        List<IReadOnlyList<string>> calls = [];
+        var client = new TestClient(arguments =>
+        {
+            calls.Add(arguments);
+            if (arguments.Contains("status", StringComparer.Ordinal))
+            {
+                return new CommandResult(0, StatusJson, string.Empty);
+            }
+
+            if (arguments.Contains("list", StringComparer.Ordinal))
+            {
+                return new CommandResult(0, ProfilesJson, string.Empty);
+            }
+
+            if (arguments.Contains("rollback", StringComparer.Ordinal))
+            {
+                return new CommandResult(0, "{\"rolled_back\":\"txn-1\"}", string.Empty);
+            }
+
+            if (arguments.Contains("add", StringComparer.Ordinal))
+            {
+                return new CommandResult(0, "{\"added\":[\"iris\"]}", string.Empty);
+            }
+
+            if (arguments.Contains("remove", StringComparer.Ordinal))
+            {
+                return new CommandResult(0, "\"iris\"", string.Empty);
+            }
+
+            return new CommandResult(0, ModsJson, string.Empty);
+        });
+        MainViewModel vm = new(client) { SelectedInstance = "alpha", ModSource = "/mods/iris.jar" };
+
+        await vm.AddModSourceCommand.ExecuteAsync(parameter: null);
+        vm.SelectedMod = Assert.Single(vm.Mods);
+        await vm.RemoveSelectedModCommand.ExecuteAsync(parameter: null);
+        await vm.RollbackLatestCommand.ExecuteAsync(parameter: null);
+
+        Assert.Contains(calls, arguments => arguments.SequenceEqual(
+            ["--format", "json", "add", "alpha", "/mods/iris.jar", "--profile", "default", "--with-deps"],
+            StringComparer.Ordinal));
+        Assert.Contains(calls, arguments => arguments.SequenceEqual(
+            ["--format", "json", "remove", "alpha", "iris", "--profile", "default"],
+            StringComparer.Ordinal));
+        Assert.Contains(calls, arguments => arguments.SequenceEqual(
+            ["--format", "json", "rollback", "alpha"],
+            StringComparer.Ordinal));
+        Assert.Equal("Rolled back the latest deployment.", vm.StatusMessage);
+    }
+
     private sealed class TestClient : IMsbeClient
     {
         private readonly Func<IReadOnlyList<string>, CommandResult> runCommand;
@@ -130,6 +349,9 @@ public sealed class MainViewModelTests
         public TestClient(Func<IReadOnlyList<string>, CommandResult> runCommand) => this.runCommand = runCommand;
 
         public Task<DaemonInfo> GetInfoAsync(CancellationToken cancellationToken) => Task.FromResult(new DaemonInfo("test", 1));
+
+        public Task<IReadOnlyList<GameInfo>> GetGamesAsync(CancellationToken cancellationToken) => Task.FromResult<IReadOnlyList<GameInfo>>(
+            [new GameInfo("minecraft", "Minecraft", "1", ["fabric", "neoforge"])]);
 
         public Task<CommandResult> RunCommandAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken) => Task.FromResult(this.runCommand(arguments));
     }

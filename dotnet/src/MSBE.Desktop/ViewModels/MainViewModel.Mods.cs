@@ -17,9 +17,22 @@ internal sealed partial class MainViewModel
     /// <summary>Gets the mods in the selected profile, in application order.</summary>
     public ObservableCollection<ModListItem> Mods { get; } = [];
 
+    /// <summary>Gets or sets the mod selected for profile actions.</summary>
+    [ObservableProperty]
+    public partial ModListItem? SelectedMod { get; set; }
+
     /// <summary>Gets or sets the selected profile.</summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsSelectedProfileDeployed))]
+    [NotifyPropertyChangedFor(nameof(CanRemoveSelectedProfile))]
     public partial string? SelectedProfile { get; set; }
+
+    /// <summary>Gets or sets the profile currently deployed to disk.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsSelectedProfileDeployed))]
+    [NotifyPropertyChangedFor(nameof(CanRemoveSelectedProfile))]
+    [NotifyPropertyChangedFor(nameof(CanRollbackLatest))]
+    public partial string? DeployedProfile { get; set; }
 
     /// <summary>Gets or sets whether profile mods are loading.</summary>
     [ObservableProperty]
@@ -37,6 +50,15 @@ internal sealed partial class MainViewModel
 
     /// <summary>Gets a value indicating whether the selected profile has no mods.</summary>
     public bool IsModsEmpty => !this.IsModsLoading && !this.HasModsError && this.Mods.Count == 0;
+
+    /// <summary>Gets a value indicating whether the selected profile is currently deployed.</summary>
+    public bool IsSelectedProfileDeployed => this.SelectedProfile is not null && string.Equals(this.SelectedProfile, this.DeployedProfile, StringComparison.Ordinal);
+
+    /// <summary>Gets a value indicating whether the selected profile can be deleted.</summary>
+    public bool CanRemoveSelectedProfile => this.SelectedProfile is not null && !this.IsSelectedProfileDeployed && !this.IsProfileMutationBusy;
+
+    /// <summary>Gets a value indicating whether a deployment is available to roll back.</summary>
+    public bool CanRollbackLatest => this.DeployedProfile is not null && !this.IsRollbackBusy;
 
     private static ModListItem ParseMod(string name, JsonElement entry)
     {
@@ -67,8 +89,10 @@ internal sealed partial class MainViewModel
     private void ClearProfilesAndMods()
     {
         this.SelectedProfile = null;
+        this.DeployedProfile = null;
         this.Profiles.Clear();
         this.Mods.Clear();
+        this.SelectedMod = null;
         this.ModsError = string.Empty;
         this.OnPropertyChanged(nameof(this.IsModsEmpty));
     }
@@ -103,6 +127,7 @@ internal sealed partial class MainViewModel
             string? deployed = document.RootElement.TryGetProperty("deployed", out JsonElement deployedProfile) && deployedProfile.ValueKind == JsonValueKind.String
                 ? deployedProfile.GetString()
                 : null;
+            this.DeployedProfile = deployed;
             this.SelectedProfile = deployed is not null && this.Profiles.Contains(deployed, StringComparer.Ordinal)
                 ? deployed
                 : this.Profiles.FirstOrDefault();
@@ -126,6 +151,7 @@ internal sealed partial class MainViewModel
         this.IsModsLoading = true;
         this.ModsError = string.Empty;
         this.Mods.Clear();
+        this.SelectedMod = null;
         try
         {
             CommandResult result = await this.client.RunCommandAsync(["--format", "json", "profile", "show", instance, profile], CancellationToken.None).ConfigureAwait(true);

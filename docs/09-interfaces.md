@@ -52,14 +52,14 @@ msbe daemon    start | stop | status
 
 Cross-cutting flags, uniform everywhere:
 
-| Flag | Behaviour |
-|---|---|
-| `--format json` | machine-readable on stdout; human text always on stderr so piping is clean |
-| `--dry-run` | resolve and print the `OperationSet`, apply nothing |
-| `--non-interactive` | never prompt; an unanswered `Question` is a non-zero exit with the question serialized |
-| `--answers <file>` | pre-supply wizard answers (FOMOD choices) for CI and scripted installs |
-| `--instance` / `--profile` | override the active selection |
-| `--yes` | accept *safe* confirmations only; destructive ones still prompt unless `--force` |
+| Flag                       | Behaviour                                                                              |
+| -------------------------- | -------------------------------------------------------------------------------------- |
+| `--format json`            | machine-readable on stdout; human text always on stderr so piping is clean             |
+| `--dry-run`                | resolve and print the `OperationSet`, apply nothing                                    |
+| `--non-interactive`        | never prompt; an unanswered `Question` is a non-zero exit with the question serialized |
+| `--answers <file>`         | pre-supply wizard answers (FOMOD choices) for CI and scripted installs                 |
+| `--instance` / `--profile` | override the active selection                                                          |
+| `--yes`                    | accept _safe_ confirmations only; destructive ones still prompt unless `--force`       |
 
 Stable, documented exit codes (`0` ok, `1` generic, `2` usage, `3` unresolvable
 dependencies, `4` conflict requiring a decision, `5` unanswered question, `6` provider
@@ -68,7 +68,7 @@ are part of the compatibility contract.
 
 ## 9.2 `msbe doctor`
 
-Runs the checks that account for most support traffic, and says what to *do*:
+Runs the checks that account for most support traffic, and says what to _do_:
 
 - store & path detection, and whether the game version matches what the profile solved against;
 - materialization results per volume, naming the backend each instance actually got and
@@ -114,7 +114,9 @@ reflection — see [03 §3.3](03-architecture.md)).
 
 Primary surfaces:
 
-- **Instances** — detected games, add manually, per-instance health from `doctor`.
+- **Instances** — detected games, add manually by selecting a daemon-supported game,
+  per-instance health from `doctor`. Plan files and identifiers are not user-facing.
+- **Games** — the daemon's currently loaded game support and available mod ecosystems.
 - **Profiles** — switch, clone, diff two profiles side by side, export/import.
 - **Mod list** — virtualized (must stay smooth at 1000+ rows), drag-reorder where the
   plan declares ordering, inline enable/disable, filter by provider/tag/state.

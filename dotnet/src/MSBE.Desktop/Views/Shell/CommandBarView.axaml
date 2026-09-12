@@ -16,7 +16,7 @@
                     <MenuItem Header="Toggle library" Command="{Binding ToggleSidebarCommand}" InputGesture="Ctrl+B" />
                     <MenuItem Header="Instances" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Instances}" />
                     <MenuItem Header="Games" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Games}" />
-                    <MenuItem Header="Providers" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Providers}" />
+                    <MenuItem Header="Browse" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Browse}" />
                     <MenuItem Header="Settings" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Settings}" InputGesture="Ctrl+," />
                 </MenuItem>
             </Menu>

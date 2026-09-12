@@ -15,14 +15,23 @@ use std::path::PathBuf;
 /// The JSON-RPC version understood by this contract.
 pub const JSON_RPC_VERSION: &str = "2.0";
 
-/// The first MSBE RPC contract version.
-pub const CONTRACT_VERSION: u32 = 1;
+/// The RPC contract with runtime game-support discovery.
+pub const CONTRACT_VERSION: u32 = 2;
 
 /// The method that reports daemon identity and contract compatibility.
 pub const INFO_METHOD: &str = "daemon.info";
 
 /// The method that executes an MSBE command under the daemon's serialized ownership.
 pub const COMMAND_METHOD: &str = "command.run";
+
+/// The method that lists games supported by the daemon's loaded plans.
+pub const GAME_LIST_METHOD: &str = "game.list";
+
+/// The developer method that loads or reloads one plan from the runtime registry directory.
+pub const PLAN_LOAD_METHOD: &str = "plan.load";
+
+/// The developer method that unloads one plan from the runtime registry.
+pub const PLAN_UNLOAD_METHOD: &str = "plan.unload";
 
 /// Returns the local daemon endpoint for the current user.
 #[cfg(unix)]

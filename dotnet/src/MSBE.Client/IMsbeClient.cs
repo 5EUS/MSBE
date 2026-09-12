@@ -12,6 +12,11 @@ public interface IMsbeClient
     /// <returns>The daemon's reported information.</returns>
     Task<DaemonInfo> GetInfoAsync(CancellationToken cancellationToken);
 
+    /// <summary>Lists games currently supported by the daemon.</summary>
+    /// <param name="cancellationToken">Cancels the pending request.</param>
+    /// <returns>The loaded games and their supported ecosystems.</returns>
+    Task<IReadOnlyList<GameInfo>> GetGamesAsync(CancellationToken cancellationToken);
+
     /// <summary>Runs one MSBE command through the daemon.</summary>
     /// <param name="arguments">The command arguments, excluding the executable name.</param>
     /// <param name="cancellationToken">Cancels the pending request.</param>

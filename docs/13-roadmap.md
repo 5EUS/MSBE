@@ -228,6 +228,17 @@ metadata, search and compose a mod list, choose compatible versions and dependen
 add and edit pack-owned configs, then validate and export a reproducible lockfile and
 distributable pack manifest. Accessibility and i18n included, not deferred.
 
+**Current checkpoint (approximately 30%)**: the desktop connects to the local daemon;
+registers and browses instances; creates, clones, selects, and removes profiles; and
+shows profile-ordered mods. Users can add local files, URLs, and provider references,
+remove selected mods, search compatible providers, include required dependencies, and
+install a result into the selected profile. Deployment has a native review of ordered
+filesystem operations, unchanged and locally kept counts, the exclusion report, explicit
+confirmation before apply, and rollback of the latest transaction. Conflict resolution,
+the full journal timeline, wizards, download progress, browser-assisted acquisition,
+updates, pack configuration, validation and import/export, complete accessibility, and
+i18n remain in this milestone.
+
 **Done when**: a user can create a Minecraft modpack in the app from provider search,
 review the resolved list, add configuration files, export it, and import the exported
 pack into a fresh profile with the same resolved result.

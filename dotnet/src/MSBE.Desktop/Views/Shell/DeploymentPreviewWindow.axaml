@@ -1,0 +1,86 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:MSBE.Desktop.ViewModels"
+        x:Class="MSBE.Desktop.Views.Shell.DeploymentPreviewWindow"
+        x:DataType="vm:MainViewModel"
+        Title="Review deployment"
+        Background="#121419"
+        Width="780" Height="640"
+        MinWidth="620" MinHeight="480"
+        CanResize="True">
+    <Grid Margin="22" RowDefinitions="Auto,Auto,*,Auto" RowSpacing="16">
+        <StackPanel Spacing="4">
+            <TextBlock Classes="sectionHeading" Text="Review deployment" />
+            <TextBlock Classes="caption" Text="Inspect every managed filesystem change before applying this profile." />
+        </StackPanel>
+
+        <Grid Grid.Row="1" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="20">
+            <StackPanel Spacing="2">
+                <TextBlock FontWeight="SemiBold" Text="{Binding SelectedProfile}" />
+                <TextBlock Classes="caption" Text="{Binding SelectedInstance}" />
+            </StackPanel>
+            <StackPanel Grid.Column="1" Spacing="2">
+                <TextBlock Classes="detail-label" Text="UNCHANGED" />
+                <TextBlock Text="{Binding DeploymentUnchangedCount}" />
+            </StackPanel>
+            <StackPanel Grid.Column="2" Spacing="2">
+                <TextBlock Classes="detail-label" Text="LOCAL CHANGES KEPT" />
+                <TextBlock Text="{Binding DeploymentKeptCount}" />
+            </StackPanel>
+        </Grid>
+
+        <Grid Grid.Row="2">
+            <ProgressBar Height="2" VerticalAlignment="Top" IsIndeterminate="True" IsVisible="{Binding IsDeploymentBusy}" />
+
+            <Border Classes="error-banner" VerticalAlignment="Top" IsVisible="{Binding HasDeploymentError}">
+                <TextBlock Text="{Binding DeploymentError}" TextWrapping="Wrap" />
+            </Border>
+
+            <TabControl Margin="0,10,0,0" IsVisible="{Binding !HasDeploymentError}">
+                <TabItem Header="Changes">
+                    <Grid RowDefinitions="Auto,*" Margin="0,12,0,0" RowSpacing="8">
+                        <TextBlock Classes="caption" Text="{Binding DeploymentChanges.Count, StringFormat={}{0} ordered operations}" />
+                        <ListBox Grid.Row="1" Classes="preview-list" ItemsSource="{Binding DeploymentChanges}">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate x:DataType="vm:DeploymentPreviewItem">
+                                    <Grid ColumnDefinitions="28,110,*" ColumnSpacing="10">
+                                        <TextBlock Classes="operation-marker" Text="{Binding Marker}" />
+                                        <TextBlock Grid.Column="1" Foreground="#AEB4C0" Text="{Binding Action}" />
+                                        <TextBlock Grid.Column="2" FontFamily="Cascadia Mono, Monospace" Text="{Binding Path}" TextTrimming="CharacterEllipsis" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </Grid>
+                </TabItem>
+
+                <TabItem Header="Excluded">
+                    <Grid RowDefinitions="Auto,*" Margin="0,12,0,0" RowSpacing="8">
+                        <TextBlock Classes="caption" Text="{Binding DeploymentExclusions.Count, StringFormat={}{0} files withheld by policy}" />
+                        <ListBox Grid.Row="1" Classes="preview-list" ItemsSource="{Binding DeploymentExclusions}">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate x:DataType="vm:DeploymentExclusionItem">
+                                    <Grid ColumnDefinitions="130,*" RowDefinitions="Auto,Auto" ColumnSpacing="12">
+                                        <TextBlock FontWeight="SemiBold" Text="{Binding Module}" />
+                                        <TextBlock Grid.Column="1" FontFamily="Cascadia Mono, Monospace" Text="{Binding Source}" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Grid.Row="1" Grid.Column="1" Classes="caption" Text="{Binding Reason}" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </Grid>
+                </TabItem>
+            </TabControl>
+        </Grid>
+
+        <Grid Grid.Row="3" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+            <TextBlock Classes="caption" VerticalAlignment="Center" Text="Unmanaged files are never removed." />
+            <Button Grid.Column="1" Classes="secondary-button" Content="Cancel" Command="{Binding CancelDeploymentPreviewCommand}" />
+            <Button Grid.Column="2"
+                    Classes="primary-button"
+                    Content="Apply deployment"
+                    IsEnabled="{Binding !IsDeploymentBusy}"
+                    Command="{Binding ApplyDeploymentCommand}" />
+        </Grid>
+    </Grid>
+</Window>

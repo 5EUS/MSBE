@@ -3,9 +3,9 @@
 A cross-platform, **game-agnostic** mod manager with a GUI and a first-class CLI.
 
 Most mod managers are built for one game family and encode that game's assumptions
-into the tool itself. MSBE inverts that: the tool knows nothing about any game, and
-every game's install behaviour is described by a **Plan** — a declarative, signed,
-community-contributable document that composes a small, closed vocabulary of steps.
+into the tool itself. MSBE instead loads support for games at runtime. Players choose a
+supported game; developers describe its install behaviour with a declarative, signed,
+community-contributable **Plan** that composes a small, closed vocabulary of steps.
 
 Stack: **Rust** core + daemon + CLI, **C# / Avalonia 12 (NativeAOT)** desktop UI.
 

@@ -38,21 +38,28 @@
           </StackPanel>
 
           <Grid RowDefinitions="Auto,Auto,*" RowSpacing="20" IsVisible="{Binding HasSelectedInstance}">
-            <StackPanel Spacing="4">
-              <TextBlock Classes="instance-name" Text="{Binding SelectedInstance}" />
-              <TextBlock Classes="caption" Text="{Binding SelectedInstanceRoot}" TextWrapping="Wrap" />
-            </StackPanel>
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+              <StackPanel Spacing="4">
+                <TextBlock Classes="instance-name" Text="{Binding SelectedInstance}" />
+                <TextBlock Classes="caption" Text="{Binding SelectedInstanceRoot}" TextWrapping="Wrap" />
+              </StackPanel>
+              <Button Grid.Column="1"
+                      Classes="secondary-button"
+                      Content="Rollback latest"
+                      IsEnabled="{Binding CanRollbackLatest}"
+                      Command="{Binding RollbackLatestCommand}" />
+            </Grid>
             <Grid Grid.Row="1" ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="24" RowSpacing="10">
-              <TextBlock Classes="detail-label" Text="PLAN" />
-              <TextBlock Grid.Column="1" Text="{Binding SelectedInstancePlan}" />
+              <TextBlock Classes="detail-label" Text="GAME" />
+              <TextBlock Grid.Column="1" Text="{Binding SelectedGameName}" />
               <TextBlock Grid.Row="1" Classes="detail-label" Text="TARGET" />
               <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding SelectedInstanceTarget}" />
               <TextBlock Grid.Row="2" Classes="detail-label" Text="DEPLOYMENT" />
               <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding SelectedInstanceDeployment}" />
             </Grid>
 
-            <Grid Grid.Row="2" RowDefinitions="Auto,Auto,*" RowSpacing="10">
-              <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="10">
+            <Grid Grid.Row="2" RowDefinitions="Auto,Auto,Auto,*" RowSpacing="10">
+              <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="10">
                 <StackPanel Spacing="2">
                   <TextBlock FontSize="15" FontWeight="SemiBold" Text="Mods" />
                   <TextBlock Classes="caption" Text="{Binding Mods.Count, StringFormat={}{0} in this profile}" />
@@ -62,17 +69,36 @@
                           MinWidth="140"
                           ItemsSource="{Binding Profiles}"
                           SelectedItem="{Binding SelectedProfile}" />
+                <Button Grid.Column="3"
+                        Classes="secondary-button"
+                        Content="Profiles"
+                        Command="{Binding OpenProfileManagerCommand}" />
+                <Button Grid.Column="4"
+                        Classes="primary-button"
+                        Content="Review deployment"
+                        Command="{Binding PreviewDeploymentCommand}" />
               </Grid>
 
-              <Grid Grid.Row="1">
+              <Grid Grid.Row="1" ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="8">
+                <TextBox Text="{Binding ModSource}" PlaceholderText="Local path, HTTPS URL, or modrinth:project">
+                  <TextBox.KeyBindings>
+                    <KeyBinding Gesture="Enter" Command="{Binding AddModSourceCommand}" />
+                  </TextBox.KeyBindings>
+                </TextBox>
+                <CheckBox Grid.Column="1" VerticalAlignment="Center" Content="Dependencies" IsChecked="{Binding AddModWithDependencies}" />
+                <Button Grid.Column="2" Classes="secondary-button" Content="Remove selected" Command="{Binding RemoveSelectedModCommand}" />
+                <Button Grid.Column="3" Classes="primary-button" Content="Add source" Command="{Binding AddModSourceCommand}" />
+              </Grid>
+
+              <Grid Grid.Row="2">
                 <ProgressBar Height="2" IsIndeterminate="True" IsVisible="{Binding IsModsLoading}" />
                 <Border Classes="mods-error" IsVisible="{Binding HasModsError}">
                   <TextBlock Classes="caption" Text="{Binding ModsError}" TextWrapping="Wrap" />
                 </Border>
               </Grid>
 
-              <Grid Grid.Row="2">
-                <ListBox Classes="mods-list" ItemsSource="{Binding Mods}">
+              <Grid Grid.Row="3">
+                <ListBox Classes="mods-list" ItemsSource="{Binding Mods}" SelectedItem="{Binding SelectedMod}">
                   <ListBox.ItemTemplate>
                     <DataTemplate x:DataType="vm:ModListItem">
                       <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">

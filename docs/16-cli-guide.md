@@ -291,6 +291,12 @@ at `$XDG_RUNTIME_DIR/msbe.sock`, or the temporary-directory fallback when that v
 is unset. When developing from the checkout, build `msbe` and `msbe-daemon` together so
 the launcher can find its sibling binary.
 
+The daemon discovers game support from `plans/<game-id>/plan.toml` beneath its run
+directory. Use `msbe-daemon --plans DIR` to select a different developer registry. The
+Desktop lists those games and never asks users for a plan path. `plan.load` and
+`plan.unload` are developer RPC methods for refreshing one entry without restarting;
+existing instances retain their pinned support definition when an entry is unloaded.
+
 The built-in provider catalog recognizes the `modrinth:` source prefix and HTTPS direct URLs.
 Provider manifests are versioned and constrained configuration, not downloaded code: they can
 describe source recognition, HTTPS metadata origins, policy, and a supported acquisition

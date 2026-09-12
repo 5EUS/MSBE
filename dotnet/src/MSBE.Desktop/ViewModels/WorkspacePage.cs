@@ -9,11 +9,11 @@ public enum WorkspacePage
     /// <summary>The instance management workspace.</summary>
     Instances,
 
-    /// <summary>The game plan workspace.</summary>
+    /// <summary>The supported games workspace.</summary>
     Games,
 
-    /// <summary>The provider management workspace.</summary>
-    Providers,
+    /// <summary>The provider-backed mod discovery workspace.</summary>
+    Browse,
 
     /// <summary>The application settings workspace.</summary>
     Settings,

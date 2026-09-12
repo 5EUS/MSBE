@@ -12,6 +12,8 @@ public partial class MainWindow : Window
 {
     private AddInstanceWindow? addInstanceWindow;
     private CliWindow? cliWindow;
+    private DeploymentPreviewWindow? deploymentPreviewWindow;
+    private ProfileManagerWindow? profileManagerWindow;
 
     /// <summary>Initializes a new instance of the <see cref="MainWindow" /> class.</summary>
     public MainWindow()
@@ -57,6 +59,36 @@ public partial class MainWindow : Window
                 this.addInstanceWindow?.Close();
             }
         }
+
+        if (string.Equals(eventArgs.PropertyName, nameof(MainViewModel.IsDeploymentPreviewOpen), StringComparison.Ordinal))
+        {
+            if (viewModel.IsDeploymentPreviewOpen)
+            {
+                this.deploymentPreviewWindow = new DeploymentPreviewWindow();
+                this.deploymentPreviewWindow.Closed += this.OnDeploymentPreviewWindowClosed;
+                this.deploymentPreviewWindow.DataContext = viewModel;
+                _ = this.deploymentPreviewWindow.ShowDialog(this);
+            }
+            else
+            {
+                this.deploymentPreviewWindow?.Close();
+            }
+        }
+
+        if (string.Equals(eventArgs.PropertyName, nameof(MainViewModel.IsProfileManagerOpen), StringComparison.Ordinal))
+        {
+            if (viewModel.IsProfileManagerOpen)
+            {
+                this.profileManagerWindow = new ProfileManagerWindow();
+                this.profileManagerWindow.Closed += this.OnProfileManagerWindowClosed;
+                this.profileManagerWindow.DataContext = viewModel;
+                _ = this.profileManagerWindow.ShowDialog(this);
+            }
+            else
+            {
+                this.profileManagerWindow?.Close();
+            }
+        }
     }
 
     private void OnAddInstanceWindowClosed(object? sender, EventArgs eventArgs)
@@ -77,5 +109,25 @@ public partial class MainWindow : Window
         }
 
         this.cliWindow = null;
+    }
+
+    private void OnDeploymentPreviewWindowClosed(object? sender, EventArgs eventArgs)
+    {
+        if (sender is DeploymentPreviewWindow closedWindow)
+        {
+            closedWindow.Closed -= this.OnDeploymentPreviewWindowClosed;
+        }
+
+        this.deploymentPreviewWindow = null;
+    }
+
+    private void OnProfileManagerWindowClosed(object? sender, EventArgs eventArgs)
+    {
+        if (sender is ProfileManagerWindow closedWindow)
+        {
+            closedWindow.Closed -= this.OnProfileManagerWindowClosed;
+        }
+
+        this.profileManagerWindow = null;
     }
 }

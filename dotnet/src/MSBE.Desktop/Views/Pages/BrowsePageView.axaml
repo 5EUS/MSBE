@@ -1,0 +1,75 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:MSBE.Desktop.ViewModels"
+             x:Class="MSBE.Desktop.Views.Pages.BrowsePageView"
+             x:DataType="vm:MainViewModel">
+    <Grid Margin="8" RowDefinitions="Auto,Auto,*" RowSpacing="16">
+        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+            <StackPanel Spacing="3">
+                <TextBlock Classes="sectionHeading" Text="Browse compatible mods" />
+                <TextBlock Classes="caption" Text="Provider results are filtered for the selected instance and profile." />
+            </StackPanel>
+            <StackPanel Grid.Column="1" HorizontalAlignment="Right" Spacing="2">
+                <TextBlock Classes="detail-label" Text="INSTALL TARGET" />
+                <TextBlock HorizontalAlignment="Right" Text="{Binding SelectedInstance}" />
+                <TextBlock Classes="caption" HorizontalAlignment="Right" Text="{Binding SelectedProfile}" />
+            </StackPanel>
+        </Grid>
+
+        <Grid Grid.Row="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
+            <TextBox Text="{Binding BrowseQuery}" PlaceholderText="Search Modrinth and configured providers">
+                <TextBox.KeyBindings>
+                    <KeyBinding Gesture="Enter" Command="{Binding SearchBrowseCommand}" />
+                </TextBox.KeyBindings>
+            </TextBox>
+            <Button Grid.Column="1" Classes="primary-button" Content="Search" Command="{Binding SearchBrowseCommand}" />
+        </Grid>
+
+        <Grid Grid.Row="2" RowDefinitions="Auto,*" RowSpacing="8">
+            <ProgressBar Height="2" IsIndeterminate="True" IsVisible="{Binding IsBrowseLoading}" />
+            <Border Classes="error-banner" IsVisible="{Binding HasBrowseError}">
+                <TextBlock Text="{Binding BrowseError}" TextWrapping="Wrap" />
+            </Border>
+
+            <Grid Grid.Row="1" ColumnDefinitions="2*,*" ColumnSpacing="16" IsVisible="{Binding !HasBrowseError}">
+                <ListBox Classes="browse-list" ItemsSource="{Binding BrowseResults}" SelectedItem="{Binding SelectedBrowseResult}">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:BrowseResultItem">
+                            <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="3">
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                                    <TextBlock FontWeight="SemiBold" Text="{Binding Title}" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Grid.Column="1" Classes="caption" Text="{Binding DownloadSummary}" />
+                                </Grid>
+                                <TextBlock Grid.Row="1" Classes="caption" Text="{Binding Description}" TextWrapping="Wrap" MaxLines="2" />
+                                <TextBlock Grid.Row="2" Classes="provider-label" Text="{Binding Provider}" />
+                            </Grid>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+
+                <Border Grid.Column="1" Classes="browse-detail">
+                    <Grid RowDefinitions="Auto,*,Auto" RowSpacing="14">
+                        <StackPanel Spacing="4">
+                            <TextBlock FontSize="18" FontWeight="SemiBold" Text="{Binding SelectedBrowseResult.Title, FallbackValue=Select a mod}" TextWrapping="Wrap" />
+                            <TextBlock Classes="caption" Text="{Binding SelectedBrowseResult.Source}" TextWrapping="Wrap" />
+                        </StackPanel>
+                        <TextBlock Grid.Row="1" Text="{Binding SelectedBrowseResult.Description}" TextWrapping="Wrap" />
+                        <StackPanel Grid.Row="2" Spacing="10">
+                            <CheckBox Content="Include required dependencies" IsChecked="{Binding BrowseWithDependencies}" />
+                            <Button Classes="primary-button"
+                                    HorizontalAlignment="Stretch"
+                                    Content="Add to selected profile"
+                                    IsEnabled="{Binding !IsBrowseInstalling}"
+                                    Command="{Binding AddBrowseResultCommand}" />
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+                <StackPanel Grid.ColumnSpan="2" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="5" IsVisible="{Binding IsBrowseEmpty}">
+                    <TextBlock HorizontalAlignment="Center" FontWeight="SemiBold" Text="Search compatible provider catalogs" />
+                    <TextBlock Classes="caption" Text="Choose an instance and profile, then search by mod name or purpose." />
+                </StackPanel>
+            </Grid>
+        </Grid>
+    </Grid>
+</UserControl>

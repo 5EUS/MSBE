@@ -13,7 +13,7 @@ flowchart TB
   CLI -->|"links msbe-core directly,<br/>or RPC with --daemon"| D
 
   subgraph Server["Server side"]
-    D["<b>msbe-daemon</b><br/>session &amp; auth · job queue · progress<br/><i>single writer: owns all mutation</i>"]
+    D["<b>msbe-daemon</b><br/>game support registry · session &amp; auth · jobs<br/><i>single writer: owns all mutation</i>"]
     C["<b>msbe-core</b><br/>plans · solver · providers<br/>resolve pipeline · detection · wasmtime host"]
     F["<b>msbe-fsops</b><br/>CAS shards · capability probe · journaled applier<br/><i>the only writer to game directories</i>"]
     D --> C
@@ -41,6 +41,20 @@ Why a daemon rather than FFI from C# into a Rust `cdylib`:
 
 Cost: a serialization boundary, and progress/streaming has to be designed rather than
 being a callback. Accepted — see 3.4.
+
+### Runtime game support
+
+Plans are a developer and registry concern. Player-facing clients deal in supported
+games: the daemon validates every `plans/<game-id>/plan.toml` beneath its run directory
+at startup and exposes their game names and ecosystems through `game.list`. The Desktop
+registers an instance with a game ID; the daemon resolves that ID to the currently loaded
+manifest and core pins a copy into the instance for reproducibility.
+
+The developer RPC methods `plan.load` and `plan.unload` reload or remove one game ID at
+runtime. Loading is restricted to the daemon's configured plans directory and validates
+the manifest before replacing an existing entry. Unloading prevents new instances from
+using that game; existing instances keep their pinned copy and continue to work. Pass
+`--plans DIR` to the daemon to override the default `<run-directory>/plans` directory.
 
 ## 3.2 Repository layout
 
