@@ -11,6 +11,7 @@
 
 #[cfg(feature = "test")]
 pub mod cli_test_support;
+mod codec;
 mod client;
 mod reference;
 #[cfg(test)]
@@ -21,8 +22,9 @@ mod updates;
 mod wire;
 
 use msbe_provider_api::{
-    Adapter, AdapterError, HttpClient, ManifestError, PackageId, Provenance, Provider,
-    Registration, Releases, Search, Target, UpdateCheck, Updates,
+    Adapter, AdapterError, HttpClient, ManifestError, PackCodec, PackCodecError,
+    PackCodecRegistration, PackageId, Provenance, Provider, Registration, Releases, Search,
+    Target, UpdateCheck, Updates,
     model::{Project, Release, Request, SearchResult},
 };
 use thiserror::Error;
@@ -44,8 +46,15 @@ pub const REGISTRATION: Registration = Registration {
         include_str!("../overlays/qvIfYCYJ.toml"),
     ],
     build,
-    pack_codecs: &[],
+    pack_codecs: &[PackCodecRegistration {
+        id: "modrinth-mrpack",
+        build: build_pack_codec,
+    }],
 };
+
+fn build_pack_codec() -> Result<Box<dyn PackCodec>, PackCodecError> {
+    Ok(Box::new(codec::ModrinthCodec::new()))
+}
 
 fn build(provider: &Provider) -> Result<Box<dyn Adapter>, ManifestError> {
     let api_base = provider

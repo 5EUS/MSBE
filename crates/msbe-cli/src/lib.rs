@@ -21,10 +21,12 @@ use msbe_core::{
     },
 };
 use msbe_fsops::{Backend, Digest, NoopObserver, Operation, RelPath, Store};
-use msbe_pack::{self as pack, ExportFile, PackError};
+use msbe_pack::host::{ZipPackInput, write_zip_layout};
 use msbe_plan_schema::Side;
 use msbe_provider_api::{
-    AdapterError, HttpClient, HttpError, ManifestError, PackageId, Target, Update, UpdateCheck,
+    AdapterError, Availability, DistributionDecision, HttpClient, HttpError, ManifestError,
+    Observations, PackExportContext, PackFile, PackImportContext, PackOptions, PackageId,
+    RequirementSource, Target, Update, UpdateCheck,
     model::{Request, Selection},
     resolve::{
         InstallPlan, InstalledRelease, ProjectRequest, Requirement, ResolveError, Resolver,
@@ -233,11 +235,11 @@ enum PackCommand {
         #[arg(long, short, default_value = DEFAULT_PROFILE)]
         profile: String,
     },
-    /// Import target-compatible Modrinth pack files through reviewed acquisition.
+    /// Import target-compatible pack files through reviewed acquisition.
     Import {
         /// The instance.
         instance: String,
-        /// Source `.mrpack` or CurseForge `manifest.json`.
+        /// Source pack archive.
         path: PathBuf,
         /// The profile to add imported files to.
         #[arg(long, short, default_value = DEFAULT_PROFILE)]
@@ -246,11 +248,11 @@ enum PackCommand {
         #[arg(long)]
         with_deps: bool,
     },
-    /// Export a profile's verified files as a Modrinth .mrpack archive.
+    /// Export a profile's verified files through a supported pack codec.
     Export {
         /// The instance.
         instance: String,
-        /// Destination .mrpack archive.
+        /// Destination pack archive.
         #[arg(long, short)]
         output: PathBuf,
         /// The profile to export.
@@ -436,16 +438,12 @@ enum CliError {
     #[error(transparent)]
     Provider(#[from] RegistryError),
     #[error(transparent)]
-    Pack(#[from] PackError),
+    Pack(#[from] msbe_provider_api::PackCodecError),
     #[error(transparent)]
     Fs(#[from] msbe_fsops::Error),
-    #[error(
-        "CurseForge pack import is metadata-only until the official adapter can honour its distribution policy"
-    )]
-    CurseForgePackImport,
-    #[error("Modrinth pack file has no HTTPS download URL")]
+    #[error("pack file has no HTTPS download URL")]
     PackDownloadMissing,
-    #[error("Modrinth pack file has no SHA-256 or SHA-512 checksum")]
+    #[error("pack file has no SHA-256 or SHA-512 checksum")]
     PackHashMissing,
     #[error("pass exactly one of --bad or --good")]
     BisectVerdict,
@@ -737,7 +735,7 @@ fn pack_command(
             instance,
             output,
             profile,
-        } => pack_export(home, instance, output, profile, console),
+        } => pack_export(providers, home, instance, output, profile, console),
     }
 }
 
@@ -872,21 +870,32 @@ fn pack_import(
     with_deps: bool,
     console: &mut Console<'_>,
 ) -> Result<u8, CliError> {
-    let pack = pack::import(path)?;
+    let input = ZipPackInput::open(path, &msbe_archive::Limits::default())?;
+    let codec = providers
+        .detect_pack_codec(&input)?
+        .ok_or_else(|| msbe_provider_api::PackCodecError::FormatMismatch)?;
     let opened = open(home, instance, console)?;
-    let target = opened.profile_target(&Name::new(profile)?)?;
-    let selected = match pack {
-        pack::Pack::CurseForge(_) => return Err(CliError::CurseForgePackImport),
-        pack::Pack::Modrinth(pack) => pack
-            .files
-            .into_iter()
-            .filter(|file| match target.side {
-                Side::Client => file.client,
-                Side::Server => file.server,
-            })
-            .map(pack_source)
-            .collect::<Result<Vec<_>, _>>()?,
-    };
+    let profile_name = Name::new(profile)?;
+    let target = opened.lockfile(&profile_name)?.target;
+    let plan = codec.plan_import(
+        &input,
+        &PackImportContext {
+            game: None,
+            target: Some(target.clone()),
+        },
+        &PackOptions::new(),
+    )?;
+    let selected = plan
+        .requirements
+        .into_iter()
+        .filter(|requirement| {
+            matches!(
+                requirement.side,
+                Availability::Required | Availability::Optional
+            )
+        })
+        .map(pack_source)
+        .collect::<Result<Vec<_>, _>>()?;
     let sources: Vec<String> = selected.iter().map(|source| source.url.clone()).collect();
     let paths: BTreeMap<String, RelPath> = selected
         .into_iter()
@@ -909,25 +918,40 @@ struct PackSource {
     path: RelPath,
 }
 
-fn pack_source(file: pack::ModrinthFile) -> Result<PackSource, CliError> {
-    let url = file
-        .downloads
+fn pack_source(requirement: msbe_provider_api::PackRequirement) -> Result<PackSource, CliError> {
+    let urls = requirement
+        .sources
+        .into_iter()
+        .find_map(|source| match source {
+            RequirementSource::Direct { urls } => Some(urls),
+            RequirementSource::Provider { .. } | RequirementSource::UserAction { .. } => None,
+        })
+        .ok_or(CliError::PackDownloadMissing)?;
+    let url = urls
         .into_iter()
         .find(|url| url.starts_with("https://"))
         .ok_or(CliError::PackDownloadMissing)?;
-    let (algorithm, digest) = file
+    let (algorithm, digest) = requirement
         .hashes
         .get("sha512")
         .map(|digest| ("sha512", digest))
-        .or_else(|| file.hashes.get("sha256").map(|digest| ("sha256", digest)))
+        .or_else(|| {
+            requirement
+                .hashes
+                .get("sha256")
+                .map(|digest| ("sha256", digest))
+        })
         .ok_or(CliError::PackHashMissing)?;
     Ok(PackSource {
         url: format!("{url}#{algorithm}={digest}"),
-        path: file.path,
+        path: requirement
+            .destination
+            .ok_or(CliError::PackDownloadMissing)?,
     })
 }
 
 fn pack_export(
+    providers: &Providers,
     home: &Home,
     instance: &str,
     output: &Path,
@@ -937,35 +961,46 @@ fn pack_export(
     let opened = open(home, instance, console)?;
     let profile = Name::new(profile)?;
     let lockfile = opened.lockfile(&profile)?;
-    let game_version = lockfile
-        .target
-        .game_version
-        .as_deref()
-        .ok_or_else(|| CliError::GameVersionRequired(opened.config().name.clone()))?;
-    let mut dependencies = BTreeMap::from([("minecraft".to_owned(), game_version.to_owned())]);
-    if let Some(loader_version) = &lockfile.target.loader_version {
-        dependencies.insert(
-            loader_dependency(&lockfile.target.loader),
-            loader_version.clone(),
-        );
-    }
     let store = Store::open(opened.config().store.clone())?;
-    let files: Vec<ExportFile> = lockfile
+    let files: Vec<PackFile> = lockfile
         .deployment
-        .into_iter()
-        .map(|(path, digest)| ExportFile {
-            source: store.blob_path(&digest),
-            path,
+        .iter()
+        .map(|(path, digest)| {
+            let classification = lockfile.classifications.get(path);
+            PackFile {
+                path: path.clone(),
+                digest: *digest,
+                role: classification
+                    .map_or(msbe_provider_api::PackFileRole::Other, |file| file.role),
+                source: classification.map_or(msbe_provider_api::BlobSource::Local, |file| {
+                    file.source.clone()
+                }),
+                distribution: DistributionDecision::Allowed,
+            }
         })
         .collect();
-    pack::export_modrinth(
-        output,
-        Some(&format!("{}/{}", opened.config().name, profile)),
-        dependencies,
-        &files,
-    )?;
+    let codec = providers
+        .pack_codecs()
+        .into_iter()
+        .find(|codec| codec.directions.export)
+        .and_then(|descriptor| providers.pack_codec(&descriptor.id).ok())
+        .ok_or(msbe_provider_api::PackCodecError::UnsupportedDirection(
+            "export",
+        ))?;
+    let context = PackExportContext {
+        game: &lockfile.plan,
+        target: &lockfile.target,
+        lockfile: &lockfile,
+        files: &files,
+        observations: &Observations::default(),
+    };
+    let plan = codec.plan_export(&context, &PackOptions::new())?;
+    let layout = codec.layout(&plan)?;
+    let output_path = output.to_path_buf();
+    let mut output_file = fs::File::create(output)?;
+    write_zip_layout(&layout, &store, &mut output_file)?;
     let report = PackExportReport {
-        output: output.to_path_buf(),
+        output: output_path,
         files: files.len(),
     };
     console.emit(&report, |out, report| {
@@ -977,14 +1012,6 @@ fn pack_export(
         )
     })?;
     Ok(exit::OK)
-}
-
-fn loader_dependency(loader: &str) -> String {
-    match loader {
-        "fabric" => "fabric-loader".to_owned(),
-        "quilt" => "quilt-loader".to_owned(),
-        _ => loader.to_owned(),
-    }
 }
 
 fn open(home: &Home, name: &str, console: &mut Console<'_>) -> Result<Instance, CliError> {

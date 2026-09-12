@@ -976,7 +976,7 @@ release-channel behavior. The remaining production violations are:
 
 | Location                                    | Violation                                                                                                                                                                      | Required owner                                                                                                                     |
 | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `msbe-pack`                                 | Owns `modrinth.index.json`, `.mrpack` detection and ZIP layout, `ModrinthPack`/`ModrinthFile`, Modrinth export, CurseForge wire records, and a hardcoded `game = "minecraft"`. | Move Modrinth behavior to `msbe-provider-modrinth`; remove CurseForge records until a reviewed CurseForge adapter and codec exist. |
+| `msbe-pack`                                 | Resolved in Phase B: the crate owns only provider-neutral host container utilities and the unregistered native codec. Modrinth wire records, `.mrpack` detection, and export layout live in `msbe-provider-modrinth`; CurseForge records were removed. | Phase B complete. |
 | `msbe-cli::pack_import`                     | Branches on `Pack::Modrinth` and `Pack::CurseForge`, interprets Modrinth environment flags, selects download URLs and hashes, and emits format-specific errors.                | Replace with neutral `PackImportPlan` execution through codec lookup and the provider policy gate.                                 |
 | `msbe-cli::pack_export`                     | Builds Modrinth dependencies and calls `export_modrinth` directly.                                                                                                             | Replace with codec selection, normalized options, and `PackExportPlan` execution.                                                  |
 | `msbe-cli::loader_dependency`               | Maps `fabric` and `quilt` to Modrinth dependency keys.                                                                                                                         | Move the mapping into reviewed data private to the Modrinth codec.                                                                 |
@@ -1055,13 +1055,16 @@ them, so Phase B migrates each format once.
 
 ### Phase B - move existing formats
 
-1. Move Modrinth wire structs and `.mrpack` manifest handling from `msbe-pack` into
+Phase B is implemented. Existing external pack behavior now enters generic clients through the
+reviewed codec registry.
+
+1. [x] Move Modrinth wire structs and `.mrpack` manifest handling from `msbe-pack` into
    `msbe-provider-modrinth` on the Phase A2 contract. ZIP reading and writing stay in the host.
-2. Move Minecraft/loader dependency mapping from `msbe-cli` into Modrinth codec-owned mapping.
-3. Remove CurseForge wire structs from generic code; reintroduce them only with the reviewed
+2. [x] Move Minecraft/loader dependency mapping from `msbe-cli` into Modrinth codec-owned mapping.
+3. [x] Remove CurseForge wire structs from generic code; reintroduce them only with the reviewed
    CurseForge adapter and codec.
-4. Reduce `msbe-pack` to orchestration, probing, option validation, and blob planning.
-5. Replace CLI format branches with codec lookup.
+4. [x] Reduce `msbe-pack` to host-owned container utilities and provider-neutral native codec support.
+5. [x] Replace CLI format branches with codec lookup.
 
 ### Phase C - declarative provider runtimes
 

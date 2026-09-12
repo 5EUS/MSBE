@@ -373,6 +373,7 @@ name = "msbe-cli"
 version = "0.0.0"
 dependencies = [
  "clap",
+ "msbe-archive",
  "msbe-core",
  "msbe-fsops",
  "msbe-http",
@@ -456,7 +457,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "thiserror",
  "toml",
  "zip",
 ]
@@ -504,6 +504,7 @@ dependencies = [
 name = "msbe-provider-modrinth"
 version = "0.0.0"
 dependencies = [
+ "msbe-fsops",
  "msbe-plan-schema",
  "msbe-provider-api",
  "serde",

@@ -38,7 +38,9 @@ impl ZipPackInput {
         let file = File::open(path)?;
         let mut archive = ZipArchive::new(BufReader::new(file)).map_err(codec_error)?;
         if archive.len() > limits.max_entries {
-            return Err(PackCodecError::Limit("archive has too many entries".to_owned()));
+            return Err(PackCodecError::Limit(
+                "archive has too many entries".to_owned(),
+            ));
         }
         let mut total = 0_u64;
         let mut seen = BTreeSet::new();
@@ -48,27 +50,47 @@ impl ZipPackInput {
             if entry.is_dir() {
                 continue;
             }
-            let path = RelPath::new(entry.name()).map_err(|error| PackCodecError::Codec(error.to_string()))?;
+            let path = RelPath::new(entry.name())
+                .map_err(|error| PackCodecError::Codec(error.to_string()))?;
             if !seen.insert(path.as_str().to_ascii_lowercase()) {
-                return Err(PackCodecError::Codec("archive has duplicate normalized paths".to_owned()));
+                return Err(PackCodecError::Codec(
+                    "archive has duplicate normalized paths".to_owned(),
+                ));
             }
             if entry.size() > limits.max_file_bytes {
-                return Err(PackCodecError::Limit(format!("{} exceeds the entry limit", path)));
+                return Err(PackCodecError::Limit(format!(
+                    "{} exceeds the entry limit",
+                    path
+                )));
             }
             if entry.size() > (1 << 20)
                 && (entry.compressed_size() == 0
                     || entry.compressed_size().saturating_mul(limits.max_ratio) < entry.size())
             {
-                return Err(PackCodecError::Limit(format!("{} exceeds the compression ratio limit", path)));
+                return Err(PackCodecError::Limit(format!(
+                    "{} exceeds the compression ratio limit",
+                    path
+                )));
             }
-            total = total.checked_add(entry.size()).ok_or_else(|| PackCodecError::Limit("archive size overflow".to_owned()))?;
+            total = total
+                .checked_add(entry.size())
+                .ok_or_else(|| PackCodecError::Limit("archive size overflow".to_owned()))?;
             if total > limits.max_total_bytes {
-                return Err(PackCodecError::Limit("archive exceeds the total size limit".to_owned()));
+                return Err(PackCodecError::Limit(
+                    "archive exceeds the total size limit".to_owned(),
+                ));
             }
-            entries.push(PackEntry { path, size: entry.size() });
+            entries.push(PackEntry {
+                path,
+                size: entry.size(),
+            });
         }
         entries.sort_by(|left, right| left.path.cmp(&right.path));
-        Ok(Self { entries, archive: Mutex::new(archive), limit: limits.max_file_bytes })
+        Ok(Self {
+            entries,
+            archive: Mutex::new(archive),
+            limit: limits.max_file_bytes,
+        })
     }
 }
 
@@ -83,15 +105,26 @@ impl PackInput for ZipPackInput {
 
     fn read(&self, path: &RelPath, limit: u64) -> Result<Vec<u8>, PackCodecError> {
         let cap = limit.min(self.limit);
-        let mut archive = self.archive.lock().map_err(|_| PackCodecError::Codec("pack input lock poisoned".to_owned()))?;
-        let entry = archive.by_name(path.as_str()).map_err(|_| PackCodecError::FormatMismatch)?;
+        let mut archive = self
+            .archive
+            .lock()
+            .map_err(|_| PackCodecError::Codec("pack input lock poisoned".to_owned()))?;
+        let entry = archive
+            .by_name(path.as_str())
+            .map_err(|_| PackCodecError::FormatMismatch)?;
         if entry.size() > cap {
-            return Err(PackCodecError::Limit(format!("{} exceeds the read limit", path)));
+            return Err(PackCodecError::Limit(format!(
+                "{} exceeds the read limit",
+                path
+            )));
         }
         let mut bytes = Vec::new();
         entry.take(cap.saturating_add(1)).read_to_end(&mut bytes)?;
         if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > cap {
-            return Err(PackCodecError::Limit(format!("{} exceeds the read limit", path)));
+            return Err(PackCodecError::Limit(format!(
+                "{} exceeds the read limit",
+                path
+            )));
         }
         Ok(bytes)
     }
@@ -108,12 +141,16 @@ pub fn write_zip_layout(
     output: &mut dyn WriteSeek,
 ) -> Result<(), PackCodecError> {
     if layout.container != ContainerKind::Zip {
-        return Err(PackCodecError::Codec("ZIP host cannot write this container kind".to_owned()));
+        return Err(PackCodecError::Codec(
+            "ZIP host cannot write this container kind".to_owned(),
+        ));
     }
     let mut entries: BTreeMap<&RelPath, &LayoutEntry> = BTreeMap::new();
     for entry in &layout.entries {
         if entries.insert(&entry.path, entry).is_some() {
-            return Err(PackCodecError::Codec("layout has duplicate paths".to_owned()));
+            return Err(PackCodecError::Codec(
+                "layout has duplicate paths".to_owned(),
+            ));
         }
     }
     let options = SimpleFileOptions::default()
@@ -123,11 +160,15 @@ pub fn write_zip_layout(
         .unix_permissions(0o644);
     let mut archive = ZipWriter::new(output);
     for entry in entries.values() {
-        archive.start_file(entry.path.as_str(), options).map_err(codec_error)?;
+        archive
+            .start_file(entry.path.as_str(), options)
+            .map_err(codec_error)?;
         match &entry.content {
             EntryContent::Inline(bytes) => archive.write_all(bytes)?,
             EntryContent::Blob(digest) => {
-                let mut blob = store.open_blob(digest).map_err(|_| PackCodecError::MissingBlob(*digest))?;
+                let mut blob = store
+                    .open_blob(digest)
+                    .map_err(|_| PackCodecError::MissingBlob(*digest))?;
                 std::io::copy(&mut blob, &mut archive)?;
             }
         }

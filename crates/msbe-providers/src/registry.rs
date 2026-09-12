@@ -397,8 +397,7 @@ mod tests {
         PackCodecDescriptor, PackCodecError, PackCodecRegistration, PackDirections, PackEntry,
         PackExportContext, PackExportPlan, PackImportContext, PackImportPlan, PackInput,
         PackLayout, PackOptionSchema, PackOptions, PackProbe, PackageId, Provider, Registration,
-        SupportSet, Target,
-        model::Request,
+        SupportSet, Target, model::Request,
     };
     use msbe_provider_direct::DirectError;
     use serde_json::json;
@@ -512,8 +511,12 @@ mod tests {
     struct EmptyInput;
 
     impl PackInput for EmptyInput {
-        fn container(&self) -> ContainerKind { ContainerKind::File }
-        fn entries(&self) -> &[PackEntry] { &[] }
+        fn container(&self) -> ContainerKind {
+            ContainerKind::File
+        }
+        fn entries(&self) -> &[PackEntry] {
+            &[]
+        }
         fn read(&self, _: &msbe_fsops::RelPath, _: u64) -> Result<Vec<u8>, PackCodecError> {
             Err(PackCodecError::FormatMismatch)
         }

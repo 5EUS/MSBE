@@ -110,8 +110,9 @@ impl PackCodec for NativeCodec {
         for (path, digest) in &lockfile.deployment {
             if seen.insert(*digest) {
                 let entry = blob_path(digest)?;
-                let entry_path = RelPath::new(&entry)
-                    .map_err(|error| PackCodecError::Codec(format!("invalid native blob path: {error}")))?;
+                let entry_path = RelPath::new(&entry).map_err(|error| {
+                    PackCodecError::Codec(format!("invalid native blob path: {error}"))
+                })?;
                 if let Ok(blob) = input.read(&entry_path, DOCUMENT_LIMIT.max(digest_size_limit())) {
                     if Digest::of_bytes(&blob) != *digest {
                         return Err(PackCodecError::Codec(format!(
@@ -207,20 +208,40 @@ impl PackCodec for NativeCodec {
         .map_err(codec_error)?;
 
         let mut entries = BTreeMap::from([
-            (LOCK_PATH.to_owned(), EntryContent::Inline(state.lock.into_bytes())),
-            (MANIFEST_PATH.to_owned(), EntryContent::Inline(manifest.into_bytes())),
-            (OPTIONS_PATH.to_owned(), EntryContent::Inline(options.into_bytes())),
-            (REQUIREMENTS_PATH.to_owned(), EntryContent::Inline(requirements.into_bytes())),
+            (
+                LOCK_PATH.to_owned(),
+                EntryContent::Inline(state.lock.into_bytes()),
+            ),
+            (
+                MANIFEST_PATH.to_owned(),
+                EntryContent::Inline(manifest.into_bytes()),
+            ),
+            (
+                OPTIONS_PATH.to_owned(),
+                EntryContent::Inline(options.into_bytes()),
+            ),
+            (
+                REQUIREMENTS_PATH.to_owned(),
+                EntryContent::Inline(requirements.into_bytes()),
+            ),
         ]);
         for file in &plan.embedded {
             let path = blob_path(&file.digest)?;
-            entries.entry(path).or_insert(EntryContent::Blob(file.digest));
+            entries
+                .entry(path)
+                .or_insert(EntryContent::Blob(file.digest));
         }
         Ok(PackLayout {
             container: ContainerKind::Zip,
             entries: entries
                 .into_iter()
-                .map(|(path, content)| Ok(LayoutEntry { path: RelPath::new(&path).map_err(|error| PackCodecError::Codec(error.to_string()))?, content }))
+                .map(|(path, content)| {
+                    Ok(LayoutEntry {
+                        path: RelPath::new(&path)
+                            .map_err(|error| PackCodecError::Codec(error.to_string()))?,
+                        content,
+                    })
+                })
                 .collect::<Result<_, PackCodecError>>()?,
         })
     }
@@ -284,14 +305,16 @@ fn no_match() -> PackProbe {
     }
 }
 
-fn read_entry(
-    input: &dyn PackInput,
-    path: &str,
-) -> Result<Vec<u8>, PackCodecError> {
-    input.read(&RelPath::new(path).map_err(|error| PackCodecError::Codec(error.to_string()))?, DOCUMENT_LIMIT)
+fn read_entry(input: &dyn PackInput, path: &str) -> Result<Vec<u8>, PackCodecError> {
+    input.read(
+        &RelPath::new(path).map_err(|error| PackCodecError::Codec(error.to_string()))?,
+        DOCUMENT_LIMIT,
+    )
 }
 
-const fn digest_size_limit() -> u64 { 4 << 30 }
+const fn digest_size_limit() -> u64 {
+    4 << 30
+}
 
 fn parse_toml<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> Result<T, PackCodecError> {
     let text = std::str::from_utf8(bytes)
@@ -374,7 +397,11 @@ mod tests {
         let first = codec.layout(&plan)?;
         let second = codec.layout(&plan)?;
         assert_eq!(first, second);
-        let names: Vec<&str> = first.entries.iter().map(|entry| entry.path.as_str()).collect();
+        let names: Vec<&str> = first
+            .entries
+            .iter()
+            .map(|entry| entry.path.as_str())
+            .collect();
         let mut sorted = names.clone();
         sorted.sort_unstable();
         assert_eq!(names, sorted);

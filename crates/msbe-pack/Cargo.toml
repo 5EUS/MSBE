@@ -22,7 +22,6 @@ msbe-fsops        = { version = "0.0.0", path = "../msbe-fsops" }
 msbe-provider-api = { version = "0.0.0", path = "../msbe-provider-api" }
 serde.workspace      = true
 serde_json.workspace = true
-thiserror.workspace  = true
 toml.workspace       = true
 zip.workspace        = true
 
