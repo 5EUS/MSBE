@@ -15,6 +15,9 @@ public enum WorkspacePage
     /// <summary>The provider-backed mod discovery workspace.</summary>
     Browse,
 
+    /// <summary>Pack configuration, validation, and export.</summary>
+    Pack,
+
     /// <summary>The application settings workspace.</summary>
     Settings,
 }

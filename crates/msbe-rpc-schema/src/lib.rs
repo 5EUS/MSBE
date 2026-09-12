@@ -16,7 +16,7 @@ use std::path::PathBuf;
 pub const JSON_RPC_VERSION: &str = "2.0";
 
 /// The RPC contract with runtime game-support discovery.
-pub const CONTRACT_VERSION: u32 = 2;
+pub const CONTRACT_VERSION: u32 = 3;
 
 /// The method that reports daemon identity and contract compatibility.
 pub const INFO_METHOD: &str = "daemon.info";
@@ -156,7 +156,7 @@ mod tests {
             version: "0.0.0".to_owned(),
             rpc_version: CONTRACT_VERSION,
         })?;
-        assert_eq!(encoded, r#"{"version":"0.0.0","rpc_version":1}"#);
+        assert_eq!(encoded, r#"{"version":"0.0.0","rpc_version":3}"#);
         Ok(())
     }
 

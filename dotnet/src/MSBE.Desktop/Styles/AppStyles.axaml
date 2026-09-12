@@ -313,6 +313,25 @@
     <Setter Property="Padding" Value="14,12" />
   </Style>
 
+  <Style Selector="ListBox.pack-config-list">
+    <Setter Property="Background" Value="#14171C" />
+    <Setter Property="BorderBrush" Value="#2C313C" />
+    <Setter Property="BorderThickness" Value="1" />
+  </Style>
+
+  <Style Selector="ListBox.pack-config-list ListBoxItem">
+    <Setter Property="Padding" Value="10,9" />
+  </Style>
+
+  <Style Selector="TextBox.config-editor">
+    <Setter Property="Background" Value="#0C0E12" />
+    <Setter Property="Foreground" Value="#DCE1E8" />
+    <Setter Property="BorderBrush" Value="#292E38" />
+    <Setter Property="FontFamily" Value="Cascadia Mono, Monospace" />
+    <Setter Property="FontSize" Value="13" />
+    <Setter Property="Padding" Value="12" />
+  </Style>
+
   <Style Selector="Border.ecosystem-badge">
     <Setter Property="Background" Value="#263640" />
     <Setter Property="CornerRadius" Value="4" />

@@ -386,13 +386,81 @@ public sealed class MainViewModelTests
         Assert.Equal("Rolled back the latest deployment.", vm.StatusMessage);
     }
 
+    /// <summary>Pack config editing, validation, and export use structured daemon commands.</summary>
+    /// <returns>A task representing the test.</returns>
+    [Fact]
+    public async Task PackWorkflowEditsValidatesAndExports()
+    {
+        List<IReadOnlyList<string>> calls = [];
+        var client = new TestClient(arguments => PackWorkflowResponse(arguments, calls));
+        MainViewModel vm = new(client) { SelectedInstance = "alpha" };
+        vm.NewPackConfigCommand.Execute(parameter: null);
+        vm.PackConfigPath = "config/example.toml";
+        vm.PackConfigContent = "enabled = true\n";
+
+        await vm.SavePackConfigCommand.ExecuteAsync(parameter: null);
+        await vm.ValidatePackCommand.ExecuteAsync(parameter: null);
+        vm.PackOutputPath = "/home/test/alpha.mrpack";
+        await vm.ExportPackCommand.ExecuteAsync(parameter: null);
+
+        Assert.Contains(calls, arguments => arguments.SequenceEqual(
+            ["--format", "json", "pack", "config", "set", "alpha", "config/example.toml", "--content", "enabled = true\n", "--profile", "default"],
+            StringComparer.Ordinal));
+        Assert.Contains(calls, arguments => arguments.SequenceEqual(
+            ["--format", "json", "pack", "validate", "alpha", "--profile", "default"],
+            StringComparer.Ordinal));
+        Assert.Contains(calls, arguments => arguments.SequenceEqual(
+            ["--format", "json", "pack", "export", "alpha", "--output", "/home/test/alpha.mrpack", "--profile", "default"],
+            StringComparer.Ordinal));
+        Assert.Equal("/home/test/locks/default.toml", vm.PackLockfilePath);
+        Assert.Contains("Exported distributable pack", vm.StatusMessage, StringComparison.Ordinal);
+    }
+
+    private static CommandResult PackWorkflowResponse(IReadOnlyList<string> arguments, List<IReadOnlyList<string>> calls)
+    {
+        calls.Add(arguments);
+        if (arguments.Contains("status", StringComparer.Ordinal))
+        {
+            return new CommandResult(0, """{"name":"alpha","root":"/games/alpha","plan_id":"minecraft","plan_version":"1","loader":"fabric","game_version":"1.21.1","deployed_profile":"default","deployed_files":0}""", string.Empty);
+        }
+
+        if (arguments.SequenceEqual(["--format", "json", "profile", "list", "alpha"], StringComparer.Ordinal))
+        {
+            return new CommandResult(0, """{"profiles":["default"],"deployed":null}""", string.Empty);
+        }
+
+        if (arguments.Contains("config", StringComparer.Ordinal) && arguments.Contains("list", StringComparer.Ordinal))
+        {
+            return new CommandResult(0, """[{"path":"config/example.toml","digest":"sha256:01"}]""", string.Empty);
+        }
+
+        if (arguments.Contains("show", StringComparer.Ordinal) && arguments.Contains("config", StringComparer.Ordinal))
+        {
+            return new CommandResult(0, """{"path":"config/example.toml","digest":"sha256:01","content":"enabled = true\n"}""", string.Empty);
+        }
+
+        if (arguments.Contains("validate", StringComparer.Ordinal))
+        {
+            return new CommandResult(0, """{"lockfile":"/home/test/locks/default.toml","files":1,"configs":1,"mods":0}""", string.Empty);
+        }
+
+        if (arguments.Contains("export", StringComparer.Ordinal))
+        {
+            return new CommandResult(0, """{"output":"/home/test/alpha.mrpack","files":1}""", string.Empty);
+        }
+
+        return arguments.Contains("set", StringComparer.Ordinal)
+            ? new CommandResult(0, """{"path":"config/example.toml","digest":"sha256:01"}""", string.Empty)
+            : new CommandResult(0, """{"target":{"loader":"fabric","loader_version":"0.16.10","side":"client"},"order":[],"components":{},"mods":{},"configs":{}}""", string.Empty);
+    }
+
     private sealed class TestClient : IMsbeClient
     {
         private readonly Func<IReadOnlyList<string>, CommandResult> runCommand;
 
         public TestClient(Func<IReadOnlyList<string>, CommandResult> runCommand) => this.runCommand = runCommand;
 
-        public Task<DaemonInfo> GetInfoAsync(CancellationToken cancellationToken) => Task.FromResult(new DaemonInfo("test", 1));
+        public Task<DaemonInfo> GetInfoAsync(CancellationToken cancellationToken) => Task.FromResult(new DaemonInfo("test", 3));
 
         public Task<IReadOnlyList<GameInfo>> GetGamesAsync(CancellationToken cancellationToken) => Task.FromResult<IReadOnlyList<GameInfo>>(
             [new GameInfo("minecraft", "Minecraft", "1", ["fabric", "neoforge"])]);

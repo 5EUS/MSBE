@@ -1,0 +1,108 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:MSBE.Desktop.ViewModels"
+             x:Class="MSBE.Desktop.Views.Pages.PackPageView"
+             x:DataType="vm:MainViewModel">
+    <Grid RowDefinitions="Auto,*,Auto" RowSpacing="16">
+        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+            <StackPanel Spacing="3">
+                <TextBlock Classes="sectionHeading" Text="Pack configuration" />
+                <TextBlock Classes="caption" Text="Own exact config files, validate the resolved profile, and export a reproducible pack." />
+            </StackPanel>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                <TextBlock Classes="field-label" Text="PROFILE" VerticalAlignment="Center" />
+                <ComboBox Width="180" ItemsSource="{Binding Profiles}" SelectedItem="{Binding SelectedProfile}" />
+            </StackPanel>
+        </Grid>
+
+        <Grid Grid.Row="1" ColumnDefinitions="260,*" ColumnSpacing="16" IsEnabled="{Binding IsPackConfigurationSupported}">
+            <Grid RowDefinitions="Auto,*,Auto" RowSpacing="8">
+                <TextBlock Classes="field-label" Text="PACK-OWNED FILES" />
+                <ListBox Grid.Row="1"
+                         Classes="pack-config-list"
+                         ItemsSource="{Binding PackConfigs}"
+                         SelectedItem="{Binding SelectedPackConfig}">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:PackConfigItem">
+                            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
+                                <LucideIcon Kind="FileCog" Size="17" StrokeWidth="1.7" Foreground="#9FC9BA" />
+                                <StackPanel Grid.Column="1" Spacing="2">
+                                    <TextBlock Text="{Binding Path}" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Classes="caption" FontFamily="Cascadia Mono, Monospace" Text="{Binding Digest}" TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+                            </Grid>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+                <Grid Grid.Row="2" ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                    <Button Classes="secondary-button" Command="{Binding NewPackConfigCommand}">
+                        <StackPanel Orientation="Horizontal" Spacing="7">
+                            <LucideIcon Kind="Plus" Size="16" />
+                            <TextBlock Text="New config" />
+                        </StackPanel>
+                    </Button>
+                    <Button Grid.Column="1"
+                            Classes="danger-button"
+                            Command="{Binding RemovePackConfigCommand}"
+                            IsEnabled="{Binding SelectedPackConfig, Converter={x:Static ObjectConverters.IsNotNull}}"
+                            ToolTip.Tip="Remove selected config">
+                        <LucideIcon Kind="Trash" Size="16" />
+                    </Button>
+                </Grid>
+            </Grid>
+
+            <Grid Grid.Column="1" RowDefinitions="Auto,*,Auto" RowSpacing="8">
+                <StackPanel Spacing="5">
+                    <TextBlock Classes="field-label" Text="GAME-RELATIVE PATH" />
+                    <TextBox Text="{Binding PackConfigPath}" PlaceholderText="config/example.toml" />
+                </StackPanel>
+                <TextBox Grid.Row="1"
+                         Classes="config-editor"
+                         AcceptsReturn="True"
+                         MinHeight="240"
+                         Text="{Binding PackConfigContent}"
+                         TextWrapping="NoWrap"
+                         PlaceholderText="Config contents" />
+                <Button Grid.Row="2"
+                        Classes="primary-button"
+                        HorizontalAlignment="Right"
+                        Command="{Binding SavePackConfigCommand}"
+                        IsEnabled="{Binding !IsPackBusy}">
+                    <StackPanel Orientation="Horizontal" Spacing="7">
+                        <LucideIcon Kind="Save" Size="16" />
+                        <TextBlock Text="Save config" />
+                    </StackPanel>
+                </Button>
+            </Grid>
+        </Grid>
+
+        <Grid Grid.Row="2" RowDefinitions="Auto,Auto" RowSpacing="10">
+            <Border Classes="error-banner" IsVisible="{Binding HasPackError}">
+                <TextBlock Text="{Binding PackError}" TextWrapping="Wrap" />
+            </Border>
+            <Grid Grid.Row="1" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10" IsEnabled="{Binding IsPackConfigurationSupported}">
+                <Button Classes="secondary-button" Command="{Binding ValidatePackCommand}" IsEnabled="{Binding !IsPackBusy}">
+                    <StackPanel Orientation="Horizontal" Spacing="7">
+                        <LucideIcon Kind="BadgeCheck" Size="16" />
+                        <TextBlock Text="Validate &amp; lock" />
+                    </StackPanel>
+                </Button>
+                <StackPanel Grid.Column="1" Spacing="3">
+                    <TextBlock Classes="field-label" Text="EXPORT DESTINATION" />
+                    <TextBox Text="{Binding PackOutputPath}" PlaceholderText="/path/to/pack.mrpack" />
+                    <TextBlock Classes="caption" IsVisible="{Binding HasPackValidation}" Text="{Binding PackLockfilePath, StringFormat='Lockfile: {0}'}" TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+                <Button Grid.Column="2"
+                        Classes="primary-button"
+                        Command="{Binding ExportPackCommand}"
+                        IsEnabled="{Binding HasPackValidation}"
+                        VerticalAlignment="Bottom">
+                    <StackPanel Orientation="Horizontal" Spacing="7">
+                        <LucideIcon Kind="PackageCheck" Size="16" />
+                        <TextBlock Text="Export .mrpack" />
+                    </StackPanel>
+                </Button>
+            </Grid>
+        </Grid>
+    </Grid>
+</UserControl>

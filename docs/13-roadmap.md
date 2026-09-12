@@ -233,12 +233,13 @@ registers and browses instances; creates, clones, selects, and removes profiles;
 shows profile-ordered mods. Profile-specific loader, loader version, and side targets are
 visible and editable, and changing them invalidates stale provider results. Users can add local files, URLs, and provider references,
 remove selected mods, search compatible providers, include required dependencies, and
-install a result into the selected profile. Deployment has a native review of ordered
+install a result into the selected profile. Pack-owned text configs can be added, edited,
+removed, validated into a canonical lockfile, and exported with the resolved profile as a
+distributable Modrinth pack. Deployment has a native review of ordered
 filesystem operations, unchanged and locally kept counts, the exclusion report, explicit
 confirmation before apply, and rollback of the latest transaction. Conflict resolution,
 the full journal timeline, wizards, download progress, browser-assisted acquisition,
-updates, pack configuration, validation and import/export, complete accessibility, and
-i18n remain in this milestone.
+updates, pack import, complete accessibility, and i18n remain in this milestone.
 
 **Done when**: a user can create a Minecraft modpack in the app from provider search,
 review the resolved list, add configuration files, export it, and import the exported

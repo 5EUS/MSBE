@@ -77,6 +77,7 @@ internal sealed partial class MainViewModel
     partial void OnSelectedProfileChanged(string? value)
     {
         this.ClearBrowseResultsForTargetChange();
+        this.ClearPackState();
         if (value is null || this.SelectedInstance is null)
         {
             this.Mods.Clear();
@@ -85,7 +86,16 @@ internal sealed partial class MainViewModel
             return;
         }
 
+        this.SetDefaultPackOutputPath(this.SelectedInstance, value);
         _ = this.LoadModsAsync(this.SelectedInstance, value);
+        if (this.IsPackConfigurationSupported)
+        {
+            _ = this.LoadPackConfigsAsync(this.SelectedInstance, value);
+        }
+        else
+        {
+            this.PackError = "The running daemon is older than the Pack workspace. Stop it and restart MSBE to load the updated daemon.";
+        }
     }
 
     private void ClearProfilesAndMods()

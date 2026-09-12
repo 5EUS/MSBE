@@ -176,6 +176,9 @@ pub struct Profile {
     /// Mods by name.
     #[serde(default)]
     pub mods: BTreeMap<Name, ModEntry>,
+    /// Pack-owned files by game-relative path and exact content digest.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub configs: BTreeMap<RelPath, Digest>,
 }
 
 impl Profile {
@@ -1217,6 +1220,43 @@ impl Instance {
         Ok(target)
     }
 
+    /// Adds or replaces a pack-owned config file in a profile.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the profile cannot be loaded, the bytes cannot be stored, or the
+    /// updated profile cannot be written.
+    pub fn set_profile_config(
+        &self,
+        profile: &Name,
+        path: RelPath,
+        contents: &[u8],
+    ) -> Result<Digest, InstanceError> {
+        let mut selection = self.profile(profile)?;
+        let digest = self.applier.store().put_bytes(contents)?;
+        selection.configs.insert(path, digest);
+        write_toml(&self.profile_path(profile), &selection)?;
+        Ok(digest)
+    }
+
+    /// Removes a pack-owned config file from a profile.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InstanceError::UnknownConfig`] if the path is not pack-owned, or an error
+    /// loading or writing the profile.
+    pub fn remove_profile_config(
+        &self,
+        profile: &Name,
+        path: &RelPath,
+    ) -> Result<(), InstanceError> {
+        let mut selection = self.profile(profile)?;
+        if selection.configs.remove(path).is_none() {
+            return Err(InstanceError::UnknownConfig(path.clone()));
+        }
+        write_toml(&self.profile_path(profile), &selection)
+    }
+
     fn component(&self, id: &str) -> Result<&Component, InstanceError> {
         self.plan
             .components
@@ -1345,7 +1385,8 @@ impl Instance {
         for (path, claim) in self.derived_claims(&derivations)? {
             claims.entry(path).or_default().push(claim);
         }
-        let target = settle_claims(claims)?;
+        let mut target = settle_claims(claims)?;
+        target.extend(selection.configs);
 
         let current = self.deployed_files();
         let removing: BTreeSet<RelPath> = current
@@ -1932,6 +1973,10 @@ pub enum InstanceError {
         module: Name,
     },
 
+    /// The profile does not own this config path.
+    #[error("profile has no pack-owned config at {0}")]
+    UnknownConfig(RelPath),
+
     /// The plan does not declare this component.
     #[error("plan does not declare component {0:?}")]
     UnknownComponent(String),
@@ -2404,6 +2449,41 @@ flatten = true
     }
 
     #[test]
+    fn pack_owned_configs_override_mod_files_and_are_reproducible() {
+        let fixture = Fixture::new();
+        let instance = fixture.create();
+        let profile = name("default");
+        instance
+            .add_mods(
+                &profile,
+                &[fixture.input("example.toml", b"from-mod = true\n")],
+            )
+            .unwrap();
+        let path = RelPath::new("mods/example.toml").unwrap();
+
+        let digest = instance
+            .set_profile_config(&profile, path.clone(), b"pack-owned = true\n")
+            .unwrap();
+        assert_eq!(
+            instance.profile(&profile).unwrap().configs.get(&path),
+            Some(&digest)
+        );
+        assert_eq!(
+            instance.lockfile(&profile).unwrap().deployment.get(&path),
+            Some(&digest)
+        );
+
+        instance.remove_profile_config(&profile, &path).unwrap();
+        assert!(
+            !instance
+                .profile(&profile)
+                .unwrap()
+                .configs
+                .contains_key(&path)
+        );
+    }
+
+    #[test]
     fn a_crash_after_commit_is_promoted_on_the_next_open() {
         let fixture = Fixture::new();
         let mut instance = fixture.create();
@@ -2664,6 +2744,7 @@ sha512 = "abc"
             target: None,
             order: Vec::new(),
             components: BTreeMap::new(),
+            configs: BTreeMap::new(),
             mods: BTreeMap::from([(
                 name("pack"),
                 ModEntry {
@@ -2757,6 +2838,7 @@ sha512 = "abc"
             target: None,
             order: Vec::new(),
             components: BTreeMap::new(),
+            configs: BTreeMap::new(),
             mods: BTreeMap::from([
                 (name("first"), entry("a/common.bin", first)),
                 (name("second"), entry("b/common.bin", second)),

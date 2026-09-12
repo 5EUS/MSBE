@@ -44,6 +44,7 @@ internal sealed partial class MainViewModel : ViewModelBase
         try
         {
             DaemonInfo daemon = await this.client.GetInfoAsync(CancellationToken.None).ConfigureAwait(true);
+            this.IsPackConfigurationSupported = daemon.RpcVersion >= 3;
             IReadOnlyList<GameInfo> games = await this.client.GetGamesAsync(CancellationToken.None).ConfigureAwait(true);
             this.Games.Clear();
             foreach (GameInfo game in games)
@@ -54,8 +55,10 @@ internal sealed partial class MainViewModel : ViewModelBase
             this.RefreshGameSearch();
             this.OnPropertyChanged(nameof(this.IsGamesEmpty));
 
-            this.StatusMessage = $"Connected to daemon {daemon.Version} (RPC {daemon.RpcVersion}).";
             await this.RefreshInstancesAsync().ConfigureAwait(true);
+            this.StatusMessage = this.IsPackConfigurationSupported
+                ? $"Connected to daemon {daemon.Version} (RPC {daemon.RpcVersion})."
+                : $"Daemon RPC {daemon.RpcVersion} is outdated; restart MSBE to enable Pack configuration.";
         }
         catch (Exception exception) when (exception is IOException or SocketException or InvalidOperationException)
         {

@@ -27,6 +27,7 @@
           <pages:InstancesPageView IsVisible="{Binding IsInstancesWorkspace}" />
           <pages:BrowsePageView IsVisible="{Binding IsBrowseWorkspace}" />
           <pages:GamesPageView IsVisible="{Binding IsGamesWorkspace}" />
+          <pages:PackPageView IsVisible="{Binding IsPackWorkspace}" />
           <StackPanel IsVisible="{Binding IsPlaceholderWorkspace}" Spacing="8">
             <TextBlock Classes="sectionHeading" Text="{Binding ActiveWorkspaceTitle}" />
             <TextBlock Classes="caption" Text="This workspace is ready for daemon-backed content." />

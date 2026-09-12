@@ -6,6 +6,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::OsString,
+    fs,
     io::{self, Write},
     path::{Path, PathBuf},
 };
@@ -19,7 +20,7 @@ use msbe_core::{
         Name, NewInstance, Profile, ProfileTarget, Provenance, Status,
     },
 };
-use msbe_fsops::{Backend, NoopObserver, Operation, RelPath, Store};
+use msbe_fsops::{Backend, Digest, NoopObserver, Operation, RelPath, Store};
 use msbe_pack::{self as pack, ExportFile, PackError};
 use msbe_plan_schema::Side;
 use msbe_provider_api::{
@@ -221,6 +222,17 @@ enum BisectCommand {
 
 #[derive(Debug, Subcommand)]
 enum PackCommand {
+    /// Manage files owned by a profile rather than by an installed mod.
+    #[command(subcommand)]
+    Config(PackConfigCommand),
+    /// Validate a profile and write its canonical lockfile.
+    Validate {
+        /// The instance.
+        instance: String,
+        /// The profile to validate.
+        #[arg(long, short, default_value = DEFAULT_PROFILE)]
+        profile: String,
+    },
     /// Import target-compatible Modrinth pack files through reviewed acquisition.
     Import {
         /// The instance.
@@ -242,6 +254,54 @@ enum PackCommand {
         #[arg(long, short)]
         output: PathBuf,
         /// The profile to export.
+        #[arg(long, short, default_value = DEFAULT_PROFILE)]
+        profile: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum PackConfigCommand {
+    /// List pack-owned config files.
+    List {
+        /// The instance.
+        instance: String,
+        /// The profile.
+        #[arg(long, short, default_value = DEFAULT_PROFILE)]
+        profile: String,
+    },
+    /// Show one pack-owned text config.
+    Show {
+        /// The instance.
+        instance: String,
+        /// Game-relative config path.
+        path: String,
+        /// The profile.
+        #[arg(long, short, default_value = DEFAULT_PROFILE)]
+        profile: String,
+    },
+    /// Add or replace a pack-owned config.
+    Set {
+        /// The instance.
+        instance: String,
+        /// Game-relative config path.
+        path: String,
+        /// Text content supplied directly by an editor.
+        #[arg(long, conflicts_with = "file", required_unless_present = "file")]
+        content: Option<String>,
+        /// Local file whose exact bytes should be stored.
+        #[arg(long, conflicts_with = "content")]
+        file: Option<PathBuf>,
+        /// The profile.
+        #[arg(long, short, default_value = DEFAULT_PROFILE)]
+        profile: String,
+    },
+    /// Remove a pack-owned config.
+    Remove {
+        /// The instance.
+        instance: String,
+        /// Game-relative config path.
+        path: String,
+        /// The profile.
         #[arg(long, short, default_value = DEFAULT_PROFILE)]
         profile: String,
     },
@@ -390,6 +450,14 @@ enum CliError {
     GameVersionRequired(Name),
     #[error("cannot create scratch space for downloads: {0}")]
     Scratch(#[source] io::Error),
+    #[error("cannot read config {}: {source}", .path.display())]
+    ReadConfig {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("pack-owned config {0} is not UTF-8 text")]
+    ConfigNotText(RelPath),
     #[error("cannot write output: {0}")]
     Output(#[from] io::Error),
     #[error("cannot encode output: {0}")]
@@ -464,6 +532,27 @@ struct UpdateReport {
 struct PackExportReport {
     output: PathBuf,
     files: usize,
+}
+
+#[derive(Serialize)]
+struct PackConfigSummary {
+    path: RelPath,
+    digest: Digest,
+}
+
+#[derive(Serialize)]
+struct PackConfigDocument {
+    path: RelPath,
+    digest: Digest,
+    content: String,
+}
+
+#[derive(Serialize)]
+struct PackValidationReport {
+    lockfile: PathBuf,
+    files: usize,
+    configs: usize,
+    mods: usize,
 }
 
 /// A mod in a profile and the provenance recorded for it.
@@ -621,6 +710,10 @@ fn pack_command(
     console: &mut Console<'_>,
 ) -> Result<u8, CliError> {
     match command {
+        PackCommand::Config(command) => pack_config(home, command, console),
+        PackCommand::Validate { instance, profile } => {
+            pack_validate(home, instance, profile, console)
+        }
         PackCommand::Import {
             instance,
             path,
@@ -635,6 +728,124 @@ fn pack_command(
             profile,
         } => pack_export(home, instance, output, profile, console),
     }
+}
+
+fn pack_config(
+    home: &Home,
+    command: &PackConfigCommand,
+    console: &mut Console<'_>,
+) -> Result<u8, CliError> {
+    match command {
+        PackConfigCommand::List { instance, profile } => {
+            let opened = open(home, instance, console)?;
+            let configs = opened
+                .profile(&Name::new(profile)?)?
+                .configs
+                .into_iter()
+                .map(|(path, digest)| PackConfigSummary { path, digest })
+                .collect::<Vec<_>>();
+            console.emit(&configs, |out, configs| {
+                for config in configs {
+                    writeln!(out, "{}  {}", config.path, config.digest)?;
+                }
+                Ok(())
+            })?;
+        }
+        PackConfigCommand::Show {
+            instance,
+            path,
+            profile,
+        } => {
+            let opened = open(home, instance, console)?;
+            let profile = opened.profile(&Name::new(profile)?)?;
+            let path = RelPath::new(path)?;
+            let digest = *profile
+                .configs
+                .get(&path)
+                .ok_or_else(|| InstanceError::UnknownConfig(path.clone()))?;
+            let blob = Store::open(opened.config().store.clone())?.blob_path(&digest);
+            let bytes =
+                fs::read(&blob).map_err(|source| CliError::ReadConfig { path: blob, source })?;
+            let content =
+                String::from_utf8(bytes).map_err(|_| CliError::ConfigNotText(path.clone()))?;
+            let document = PackConfigDocument {
+                path,
+                digest,
+                content,
+            };
+            console.emit(&document, |out, document| {
+                write!(out, "{}", document.content)
+            })?;
+        }
+        PackConfigCommand::Set {
+            instance,
+            path,
+            content,
+            file,
+            profile,
+        } => {
+            let opened = open(home, instance, console)?;
+            let path = RelPath::new(path)?;
+            let contents = match file {
+                Some(file) => fs::read(file).map_err(|source| CliError::ReadConfig {
+                    path: file.clone(),
+                    source,
+                })?,
+                None => content.as_deref().unwrap_or_default().as_bytes().to_vec(),
+            };
+            let digest =
+                opened.set_profile_config(&Name::new(profile)?, path.clone(), &contents)?;
+            let summary = PackConfigSummary { path, digest };
+            console.emit(&summary, |out, summary| {
+                writeln!(out, "Saved pack-owned config {}.", summary.path)
+            })?;
+        }
+        PackConfigCommand::Remove {
+            instance,
+            path,
+            profile,
+        } => {
+            let opened = open(home, instance, console)?;
+            let path = RelPath::new(path)?;
+            opened.remove_profile_config(&Name::new(profile)?, &path)?;
+            console.emit(&path, |out, path| {
+                writeln!(out, "Removed pack-owned config {path}.")
+            })?;
+        }
+    }
+    Ok(exit::OK)
+}
+
+fn pack_validate(
+    home: &Home,
+    instance: &str,
+    profile: &str,
+    console: &mut Console<'_>,
+) -> Result<u8, CliError> {
+    let opened = open(home, instance, console)?;
+    let profile = Name::new(profile)?;
+    let configs = opened.profile(&profile)?.configs.len();
+    let lockfile = opened.write_lockfile(&profile)?;
+    let report = PackValidationReport {
+        lockfile: home
+            .instance(opened.name())
+            .join("locks")
+            .join(format!("{profile}.toml")),
+        files: lockfile.deployment.len(),
+        configs,
+        mods: lockfile.mods.len(),
+    };
+    console.emit(&report, |out, report| {
+        writeln!(
+            out,
+            "Validated {} mod(s), {} config(s), and {} file(s); wrote {}.",
+            report.mods,
+            report.configs,
+            report.files,
+            report.lockfile.display()
+        )
+    })?;
+    Ok(exit::OK)
 }
 
 #[expect(

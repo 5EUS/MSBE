@@ -44,6 +44,7 @@ internal sealed partial class MainViewModel
         WorkspacePage.Instances => "Instances",
         WorkspacePage.Games => "Games",
         WorkspacePage.Browse => "Browse",
+        WorkspacePage.Pack => "Pack",
         WorkspacePage.Settings => "Settings",
         _ => "MSBE",
     };
@@ -57,8 +58,11 @@ internal sealed partial class MainViewModel
     /// <summary>Gets a value indicating whether the supported games workspace is active.</summary>
     public bool IsGamesWorkspace => this.ActiveWorkspace == WorkspacePage.Games;
 
+    /// <summary>Gets a value indicating whether the pack workspace is active.</summary>
+    public bool IsPackWorkspace => this.ActiveWorkspace == WorkspacePage.Pack;
+
     /// <summary>Gets a value indicating whether a not-yet-implemented workspace is active.</summary>
-    public bool IsPlaceholderWorkspace => !this.IsInstancesWorkspace && !this.IsBrowseWorkspace && !this.IsGamesWorkspace;
+    public bool IsPlaceholderWorkspace => !this.IsInstancesWorkspace && !this.IsBrowseWorkspace && !this.IsGamesWorkspace && !this.IsPackWorkspace;
 
     /// <summary>Gets the available instance library sort orders.</summary>
     public IReadOnlyList<string> InstanceSorts { get; } = ["Name (A-Z)", "Name (Z-A)"];
@@ -71,6 +75,7 @@ internal sealed partial class MainViewModel
         this.OnPropertyChanged(nameof(this.IsInstancesWorkspace));
         this.OnPropertyChanged(nameof(this.IsBrowseWorkspace));
         this.OnPropertyChanged(nameof(this.IsGamesWorkspace));
+        this.OnPropertyChanged(nameof(this.IsPackWorkspace));
         this.OnPropertyChanged(nameof(this.IsPlaceholderWorkspace));
     }
 

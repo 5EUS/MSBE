@@ -391,6 +391,54 @@ fn pack_export_writes_verified_profile_files_as_overrides() {
 }
 
 #[test]
+fn pack_configs_can_be_edited_validated_and_exported() {
+    let world = World::new();
+    world.add_instance(Some("1.21.1"));
+
+    world.json(&[
+        "pack",
+        "config",
+        "set",
+        "mc",
+        "config/example.toml",
+        "--content",
+        "enabled = false\n",
+    ]);
+    world.json(&[
+        "pack",
+        "config",
+        "set",
+        "mc",
+        "config/example.toml",
+        "--content",
+        "enabled = true\n",
+    ]);
+    let listed = world.json(&["pack", "config", "list", "mc"]);
+    assert_eq!(at(&listed, "/0/path"), "config/example.toml");
+    let shown = world.json(&["pack", "config", "show", "mc", "config/example.toml"]);
+    assert_eq!(at(&shown, "/content"), "enabled = true\n");
+
+    let validated = world.json(&["pack", "validate", "mc"]);
+    assert_eq!(at(&validated, "/configs"), 1);
+    assert_eq!(at(&validated, "/files"), 1);
+    assert!(Path::new(at(&validated, "/lockfile").as_str().unwrap()).is_file());
+
+    let output = world.inputs.join("configured.mrpack");
+    world.json(&["pack", "export", "mc", "--output", output.to_str().unwrap()]);
+    let mut archive = zip::ZipArchive::new(fs::File::open(output).unwrap()).unwrap();
+    let mut exported = String::new();
+    archive
+        .by_name("overrides/config/example.toml")
+        .unwrap()
+        .read_to_string(&mut exported)
+        .unwrap();
+    assert_eq!(exported, "enabled = true\n");
+
+    world.json(&["pack", "config", "remove", "mc", "config/example.toml"]);
+    assert_eq!(world.json(&["pack", "config", "list", "mc"]), json!([]));
+}
+
+#[test]
 fn pack_import_acquires_target_compatible_verified_modrinth_files() {
     let world = World::new();
     world.add_instance(Some("1.21.1"));
