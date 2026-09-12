@@ -4,53 +4,53 @@
              xmlns:vm="using:MSBE.Desktop.ViewModels"
              x:Class="MSBE.Desktop.Views.Components.GameSearchView"
              x:DataType="vm:MainViewModel">
-  <Grid RowDefinitions="Auto,200" RowSpacing="8">
-    <TextBox Text="{Binding GameSearchText}"
-             PlaceholderText="Search games or ecosystems"
-             AutomationProperties.Name="Search supported games" />
+    <Grid RowDefinitions="Auto,200" RowSpacing="8">
+        <TextBox Text="{Binding GameSearchText}"
+                 PlaceholderText="Search games or ecosystems"
+                 AutomationProperties.Name="Search supported games" />
 
-    <Grid Grid.Row="1">
-      <ListBox Classes="game-search-list"
-               ItemsSource="{Binding FilteredGames}"
-               SelectedItem="{Binding NewInstanceGame}"
-               AutomationProperties.Name="Supported games">
-        <ListBox.ItemTemplate>
-          <DataTemplate x:DataType="client:GameInfo">
-            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="11">
-              <StackPanel VerticalAlignment="Center" Spacing="3">
-                <TextBlock FontWeight="SemiBold" Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
-                <ItemsControl ItemsSource="{Binding Loaders}">
-                  <ItemsControl.ItemsPanel>
-                    <ItemsPanelTemplate>
-                      <WrapPanel Orientation="Horizontal" />
-                    </ItemsPanelTemplate>
-                  </ItemsControl.ItemsPanel>
-                  <ItemsControl.ItemTemplate>
-                    <DataTemplate>
-                      <Border Classes="game-search-ecosystem">
-                        <TextBlock Text="{Binding}" />
-                      </Border>
+        <Grid Grid.Row="1">
+            <ListBox Classes="game-search-list"
+                     ItemsSource="{Binding FilteredGames}"
+                     SelectedItem="{Binding NewInstanceGame}"
+                     AutomationProperties.Name="Supported games">
+                <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="client:GameInfo">
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="11">
+                            <StackPanel VerticalAlignment="Center" Spacing="3">
+                                <TextBlock FontWeight="SemiBold" Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
+                                <ItemsControl ItemsSource="{Binding Loaders}">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <WrapPanel Orientation="Horizontal" />
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Classes="game-search-ecosystem">
+                                                <TextBlock Text="{Binding}" />
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                            <TextBlock Grid.Column="1"
+                                       Classes="caption"
+                                       VerticalAlignment="Center"
+                                       Text="{Binding SupportVersion, StringFormat=Support {0}}" />
+                        </Grid>
                     </DataTemplate>
-                  </ItemsControl.ItemTemplate>
-                </ItemsControl>
-              </StackPanel>
-              <TextBlock Grid.Column="1"
-                         Classes="caption"
-                         VerticalAlignment="Center"
-                         Text="{Binding SupportVersion, StringFormat=Support {0}}" />
-            </Grid>
-          </DataTemplate>
-        </ListBox.ItemTemplate>
-      </ListBox>
+                </ListBox.ItemTemplate>
+            </ListBox>
 
-      <StackPanel HorizontalAlignment="Center"
-                  VerticalAlignment="Center"
-                  Spacing="4"
-                  IsVisible="{Binding IsGameSearchEmpty}">
-        <TextBlock HorizontalAlignment="Center" FontWeight="SemiBold" Text="No matching games" />
-        <TextBlock Classes="caption" IsVisible="{Binding HasGameSearchText}" Text="Try a game name or ecosystem." />
-        <TextBlock Classes="caption" IsVisible="{Binding !HasGameSearchText}" Text="No game support is loaded by the daemon." />
-      </StackPanel>
+            <StackPanel HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        Spacing="4"
+                        IsVisible="{Binding IsGameSearchEmpty}">
+                <TextBlock HorizontalAlignment="Center" FontWeight="SemiBold" Text="No matching games" />
+                <TextBlock Classes="caption" IsVisible="{Binding HasGameSearchText}" Text="Try a game name or ecosystem." />
+                <TextBlock Classes="caption" IsVisible="{Binding !HasGameSearchText}" Text="No game support is loaded by the daemon." />
+            </StackPanel>
+        </Grid>
     </Grid>
-  </Grid>
 </UserControl>
