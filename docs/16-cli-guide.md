@@ -184,7 +184,22 @@ contents. `verify` exits `7` if a deployed file is missing or has changed.
 instance to the state recorded before MSBE first changed it. Mutable paths declared by a
 plan preserve runtime changes rather than being overwritten or removed.
 
-## 5. Implemented command reference
+## 5. Current No Man's Sky workflow
+
+The local-only No Man's Sky plan accepts local `.pak` files and archives containing them.
+It extracts eligible files and deploys them flat to `GAMEDATA/MODS`; acquisition and the
+optional pak-check component are not implemented.
+
+```sh
+"$MSBE" instance add nms \
+  --root "$HOME/Games/No Man's Sky" \
+  --plan plans/nomanssky/plan.toml \
+  --loader none
+"$MSBE" add nms "$HOME/Downloads/example.pak"
+"$MSBE" deploy nms
+```
+
+## 6. Implemented command reference
 
 | Command                                                                                                                                          | Status          | Notes                                               |
 | ------------------------------------------------------------------------------------------------------------------------------------------------ | --------------- | --------------------------------------------------- |
@@ -219,7 +234,7 @@ and retain ZIP resource packs and shader packs for `resourcepacks/` and `shaderp
 The archive `overrides/` directory is not yet imported, so packs that depend on configuration,
 scripts, or other overrides remain incomplete.
 
-## 6. Planned command surface
+## 7. Planned command surface
 
 These commands are part of the documented product direction, but they are not available
 in the current binary. Their names and arguments can change before implementation.
@@ -244,7 +259,7 @@ milestones add legacy Minecraft topologies, a No Man's Sky validation plan, the
 acquisition stack, the desktop UI, a signed registry, and Bethesda/KSP support. See
 [13 - Roadmap](13-roadmap.md) for the milestone definitions and completion criteria.
 
-### 6.1 Planned Steam Workshop acquisition and imports
+### 7.1 Planned Steam Workshop acquisition and imports
 
 Steam Workshop acquisition is **not implemented**. The planned opt-in adapter may invoke a
 SteamCMD binary supplied by the user to acquire content their account is entitled to receive.
@@ -258,7 +273,7 @@ display-only provenance. See
 [06 - Providers & policy](06-providers-and-policy.md#65-steam-workshop-steamcmd-or-user-supplied-content)
 for the binding policy boundary.
 
-## 7. Automation and troubleshooting
+## 8. Automation and troubleshooting
 
 Use JSON output for scripts and check the exit code:
 

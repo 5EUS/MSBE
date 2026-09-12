@@ -1026,6 +1026,28 @@ fn paper_routes_plugins_to_the_server_plugin_directory() {
 }
 
 #[test]
+fn no_mans_sky_plan_deploys_local_pak_archives_without_core_changes() {
+    let mut world = World::new();
+    world.plan = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plans/nomanssky/plan.toml");
+    world.add_instance_with_loader("none", None);
+    let archive = world.zip(
+        "nms-mod.zip",
+        &[
+            ("release/EXAMPLE.pak", b"nms mod"),
+            ("release/readme.txt", b"not deployable"),
+        ],
+    );
+
+    world.json(&["add", "mc", archive.as_str()]);
+    world.json(&["deploy", "mc"]);
+    let pak = world.game.join("GAMEDATA/MODS/EXAMPLE.pak");
+    assert_eq!(fs::read(&pak).unwrap(), b"nms mod");
+
+    world.json(&["purge", "mc"]);
+    assert!(!pak.exists());
+}
+
+#[test]
 fn usage_errors_and_bad_references_have_distinct_exit_codes() {
     let world = World::new();
     assert_eq!(world.msbe(&["deploy"]).code, exit::USAGE);
