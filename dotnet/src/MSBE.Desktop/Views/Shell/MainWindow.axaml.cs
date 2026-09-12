@@ -1,6 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 
 using Avalonia.Controls;
+using Avalonia.Input;
 
 using MSBE.Desktop.ViewModels;
 
@@ -20,6 +21,35 @@ public partial class MainWindow : Window
     {
         this.InitializeComponent();
         this.DataContextChanged += this.OnDataContextChanged;
+    }
+
+    private void OnResizeGripPointerPressed(object? sender, PointerPressedEventArgs eventArgs)
+    {
+        if (!this.CanResize || this.WindowState != WindowState.Normal ||
+            !eventArgs.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+        {
+            return;
+        }
+
+        WindowEdge? edge = (sender as Control)?.Name switch
+        {
+            nameof(this.NorthResizeGrip) => WindowEdge.North,
+            nameof(this.SouthResizeGrip) => WindowEdge.South,
+            nameof(this.WestResizeGrip) => WindowEdge.West,
+            nameof(this.EastResizeGrip) => WindowEdge.East,
+            nameof(this.NorthWestResizeGrip) => WindowEdge.NorthWest,
+            nameof(this.NorthEastResizeGrip) => WindowEdge.NorthEast,
+            nameof(this.SouthWestResizeGrip) => WindowEdge.SouthWest,
+            nameof(this.SouthEastResizeGrip) => WindowEdge.SouthEast,
+            _ => null,
+        };
+        if (edge is not { } resizeEdge)
+        {
+            return;
+        }
+
+        this.BeginResizeDrag(resizeEdge, eventArgs);
+        eventArgs.Handled = true;
     }
 
     private void OnDataContextChanged(object? sender, EventArgs eventArgs)
