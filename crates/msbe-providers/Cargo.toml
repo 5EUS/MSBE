@@ -22,6 +22,7 @@ msbe-provider-api      = { version = "0.0.0", path = "../msbe-provider-api" }
 msbe-provider-direct   = { version = "0.0.0", path = "../msbe-provider-direct" }
 msbe-provider-local    = { version = "0.0.0", path = "../msbe-provider-local" }
 msbe-provider-modrinth = { version = "0.0.0", path = "../msbe-provider-modrinth" }
+msbe-wasm-codec        = { version = "0.0.0", path = "../msbe-wasm-codec" }
 serde_json.workspace      = true
 serde.workspace           = true
 thiserror.workspace    = true

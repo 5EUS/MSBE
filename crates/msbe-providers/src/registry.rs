@@ -12,6 +12,7 @@ use msbe_provider_api::{
     model::{Request, SearchResult},
     resolve::{Adapters, ResolveError},
 };
+use msbe_wasm_codec::WasmPackCodec;
 use thiserror::Error;
 
 use crate::runtime;
@@ -78,11 +79,71 @@ pub struct Providers {
 
 #[derive(Debug)]
 struct RegisteredCodec {
-    provider: String,
+    provider: Option<String>,
     codec: Box<dyn PackCodec>,
 }
 
 impl Providers {
+    /// Adds a trusted, provider-neutral WASM pack codec to this registry.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RegistryError`] when the envelope is untrusted, incompatible, invalid, or its
+    /// codec descriptor conflicts with an existing registration.
+    pub fn register_wasm_codec(
+        &mut self,
+        envelope: &ExtensionEnvelope<Vec<u8>>,
+        trusted_keys: &BTreeMap<String, VerifyingKey>,
+    ) -> Result<(), RegistryError> {
+        let codec = WasmPackCodec::load_signed(envelope, trusted_keys)?;
+        let descriptor = codec.descriptor();
+        if descriptor.provider.is_some() {
+            return Err(RegistryError::WasmCodecHasProvider(descriptor.id.clone()));
+        }
+        if self.codecs.contains_key(&descriptor.id) {
+            return Err(RegistryError::DuplicateCodec(descriptor.id.clone()));
+        }
+        for existing in self.codecs.values() {
+            let existing = existing.codec.descriptor();
+            for hint in &descriptor.extensions {
+                if existing
+                    .extensions
+                    .iter()
+                    .any(|other| other.eq_ignore_ascii_case(hint))
+                {
+                    return Err(RegistryError::DuplicateCodecHint {
+                        hint: hint.to_ascii_lowercase(),
+                        first: existing.id.clone(),
+                        second: descriptor.id.clone(),
+                    });
+                }
+            }
+            for hint in &descriptor.media_types {
+                if existing
+                    .media_types
+                    .iter()
+                    .any(|other| other.eq_ignore_ascii_case(hint))
+                {
+                    return Err(RegistryError::DuplicateCodecHint {
+                        hint: hint.to_ascii_lowercase(),
+                        first: existing.id.clone(),
+                        second: descriptor.id.clone(),
+                    });
+                }
+            }
+        }
+        let pin = envelope_pin(envelope)?;
+        self.codecs.insert(
+            descriptor.id.clone(),
+            RegisteredCodec {
+                provider: None,
+                codec: Box::new(codec),
+            },
+        );
+        self.extensions.push(pin);
+        Ok(())
+    }
+
     /// The providers MSBE ships.
     ///
     /// # Errors
@@ -252,9 +313,11 @@ impl Providers {
         self.codecs
             .values()
             .filter(|registered| {
-                self.catalog
-                    .provider(&registered.provider)
-                    .is_ok_and(|provider| authorize(provider).is_ok())
+                registered.provider.as_ref().is_none_or(|provider_id| {
+                    self.catalog
+                        .provider(provider_id)
+                        .is_ok_and(|provider| authorize(provider).is_ok())
+                })
             })
             .map(|registered| registered.codec.descriptor())
             .collect()
@@ -289,7 +352,9 @@ impl Providers {
             .codecs
             .get(id)
             .ok_or_else(|| RegistryError::UnknownCodec(id.to_owned()))?;
-        authorize(self.catalog.provider(&registered.provider)?)?;
+        if let Some(provider_id) = &registered.provider {
+            authorize(self.catalog.provider(provider_id)?)?;
+        }
         Ok(registered.codec.as_ref())
     }
 
@@ -480,7 +545,7 @@ impl CodecTable {
         self.codecs.insert(
             descriptor.id.clone(),
             RegisteredCodec {
-                provider: provider.to_owned(),
+                provider: Some(provider.to_owned()),
                 codec,
             },
         );
@@ -531,6 +596,20 @@ fn native_pin(
     })
 }
 
+fn envelope_pin(envelope: &ExtensionEnvelope<Vec<u8>>) -> Result<ExtensionPin, RegistryError> {
+    let digest = format!("sha256:{}", envelope.package_digest)
+        .parse()
+        .map_err(|error: msbe_fsops::Error| RegistryError::NativeCanonical(error.to_string()))?;
+    Ok(ExtensionPin {
+        id: envelope.id.clone(),
+        version: envelope.version.clone(),
+        digest,
+        host_api_minimum: envelope.host_api.minimum,
+        host_api_maximum: envelope.host_api.maximum,
+        signer: envelope.signer.clone(),
+    })
+}
+
 fn register_hint(
     hints: &mut BTreeMap<String, String>,
     hint: &str,
@@ -551,6 +630,9 @@ fn register_hint(
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum RegistryError {
+    /// A WASM codec claims provider ownership, which only reviewed native registrations may use.
+    #[error("WASM codec {0:?} must be provider-neutral")]
+    WasmCodecHasProvider(String),
     /// Native registration identity differs from the provider or codec it serves.
     #[error("native extension identity {identity:?} does not match registration {registration:?}")]
     MismatchedNativeIdentity {
