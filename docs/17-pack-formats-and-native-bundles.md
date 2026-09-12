@@ -1166,13 +1166,16 @@ Carried forward:
 - Installer questions have no producer in pack workflows, so `job.answer` is not in contract 4.
 - The daemon serves Unix domain sockets only.
 
-### Phase E - compatibility and removal
+### Phase E - removal
 
-1. Read legacy lockfile schema 1 and classify missing source roles conservatively.
-2. Continue importing existing `.mrpack` archives through the relocated codec.
-3. Remove `loader_dependency`, hardcoded `minecraft`, `Pack::Modrinth`,
+This is a private project: Phase E deliberately does not add compatibility handling for legacy
+lockfiles or removed APIs.
+
+1. [x] Continue importing existing `.mrpack` archives through the relocated codec.
+2. [x] Remove `loader_dependency`, hardcoded `minecraft`, `Pack::Modrinth`,
    `Pack::CurseForge`, and `export_modrinth` from generic crates.
-4. Add CI guards forbidding provider/game/format literals in anything but provider-specific crates
+3. [x] Add CI guards forbidding provider/game/format literals in generic runtime crates outside
+  provider-specific crates, fixtures, and user-facing neutral examples.
    outside fixtures and user-facing neutral examples.
 
 ### Phase F - sandboxed codecs

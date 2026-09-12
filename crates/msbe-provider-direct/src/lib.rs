@@ -7,12 +7,12 @@
 
 use std::collections::BTreeMap;
 
+use msbe_core::instance::NativeExtensionIdentity;
 use msbe_fsops::RelPath;
 use msbe_provider_api::{
     AcquiredArtifact, Adapter, AdapterError, Availability, PackageId, Provenance, Registration,
     model::{Channel, Project, Release, ReleaseFile, Request, Selection},
 };
-use msbe_core::instance::NativeExtensionIdentity;
 use thiserror::Error;
 
 /// The provider id the direct URL manifest declares.

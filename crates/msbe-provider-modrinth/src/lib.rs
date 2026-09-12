@@ -11,8 +11,8 @@
 
 #[cfg(feature = "test")]
 pub mod cli_test_support;
-mod codec;
 mod client;
+mod codec;
 mod reference;
 #[cfg(test)]
 mod resolution_tests;
@@ -21,13 +21,13 @@ mod test_support;
 mod updates;
 mod wire;
 
+use msbe_core::instance::NativeExtensionIdentity;
 use msbe_provider_api::{
     Adapter, AdapterError, HttpClient, ManifestError, PackCodec, PackCodecError,
-    PackCodecRegistration, PackageId, Provenance, Provider, Registration, Releases, Search,
-    Target, UpdateCheck, Updates,
+    PackCodecRegistration, PackageId, Provenance, Provider, Registration, Releases, Search, Target,
+    UpdateCheck, Updates,
     model::{Project, Release, Request, SearchResult},
 };
-use msbe_core::instance::NativeExtensionIdentity;
 use thiserror::Error;
 
 use crate::{client::Client, reference::Spec};

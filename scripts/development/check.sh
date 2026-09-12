@@ -7,6 +7,7 @@ cd "$root"
 printf '== rustfmt ==\n';  cargo fmt --all --check
 printf '== clippy ==\n';   cargo clippy --workspace --all-targets --all-features -- -D warnings
 printf '== tests ==\n';    cargo test --workspace --all-features
+printf '== architecture guards ==\n'; sh scripts/development/check-architecture.sh
 printf '== xaml guards ==\n'; sh scripts/development/check-xaml.sh
 
 if command -v cargo-deny >/dev/null 2>&1; then

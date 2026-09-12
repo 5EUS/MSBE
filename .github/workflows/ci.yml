@@ -32,6 +32,8 @@ jobs:
         run: cargo fmt --all --check
       - name: clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Architecture guards
+        run: sh scripts/development/check-architecture.sh
       - name: XAML guards
         run: sh scripts/development/check-xaml.sh
       - name: Typos
