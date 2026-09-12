@@ -2,7 +2,8 @@
 #
 # Modern loaders (Fabric, Quilt, NeoForge): mods are .jar files placed flat into the loader's mods
 # directory, and pack-declared resource and shader ZIP files are routed whole to their Minecraft
-# directories.
+# directories. Mid-era Forge uses the same mod directory plus an explicit coremods source
+# directory for ASM transformers and a mutable config directory for .cfg files.
 #
 # Legacy jarmods (before 1.6): the `jarmod` loader builds a separate launcher version,
 # `versions/<game version>-msbe`, from the vanilla client jar and version manifest, which are only
@@ -52,6 +53,16 @@ targets   = [
 ]
 
 [[loaders]]
+id        = "forge"
+bootstrap = "none"
+sides     = ["client", "server"]
+targets   = [
+  { name = "mods", path = "mods" },
+  { name = "coremods", path = "coremods" },
+  { name = "config", path = "config" },
+]
+
+[[loaders]]
 id        = "jarmod"
 bootstrap = "none"
 sides     = ["client"]
@@ -94,6 +105,50 @@ type = "place"
   include       = ["shaderpacks/**/*.zip"]
   strip_prefix  = "shaderpacks"
   flatten       = true
+
+# Mid-era Forge. Coremods are intentionally explicit: an artifact must package an ASM
+# transformer beneath coremods/ before MSBE routes it to Forge's coremod directory.
+
+[[steps]]
+type = "extract"
+
+  [steps.with]
+  loaders = ["forge"]
+  allow   = ["**/*.jar", "config/**/*.cfg"]
+  hygiene = "default"
+
+[[steps]]
+type = "place"
+
+  [steps.with]
+  loaders = ["forge"]
+  into    = "@loader.targets.mods"
+  include = ["**/*.jar"]
+  exclude = ["coremods/**"]
+  flatten = true
+
+[[steps]]
+type = "place"
+
+  [steps.with]
+  loaders      = ["forge"]
+  into         = "@loader.targets.coremods"
+  include      = ["coremods/**/*.jar"]
+  strip_prefix = "coremods"
+  flatten      = true
+
+[[steps]]
+type = "place"
+
+  [steps.with]
+  loaders      = ["forge"]
+  into         = "@loader.targets.config"
+  include      = ["config/**/*.cfg"]
+  strip_prefix = "config"
+  flatten      = false
+
+[deploy]
+mutable = ["@loader.targets.config/**"]
 
 # Legacy jarmods.
 

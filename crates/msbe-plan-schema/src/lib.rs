@@ -396,6 +396,9 @@ pub struct PlaceStep {
     /// Source glob patterns eligible for this target. Empty selects every source file.
     #[serde(default)]
     pub include: Vec<String>,
+    /// Source glob patterns excluded from this target after inclusion checks.
+    #[serde(default)]
+    pub exclude: Vec<String>,
     /// A source-directory prefix removed before placement.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strip_prefix: Option<String>,
@@ -412,7 +415,7 @@ impl PlaceStep {
         if name.is_empty() || name.contains(['/', '\\', ':']) {
             return Err(ValidationError::InvalidTargetReference(self.into.clone()));
         }
-        if self.include.iter().any(String::is_empty) {
+        if self.include.iter().any(String::is_empty) || self.exclude.iter().any(String::is_empty) {
             return Err(ValidationError::EmptyPattern);
         }
         if self
@@ -627,6 +630,7 @@ mod tests {
                     loaders: Vec::new(),
                     into: "@loader.targets.mods".to_owned(),
                     include: Vec::new(),
+                    exclude: Vec::new(),
                     strip_prefix: None,
                     flatten: true,
                 }),
@@ -722,6 +726,7 @@ mod tests {
             loaders: Vec::new(),
             into: "mods".to_owned(),
             include: Vec::new(),
+            exclude: Vec::new(),
             strip_prefix: None,
             flatten: false,
         }));

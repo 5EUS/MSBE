@@ -116,6 +116,10 @@ impl World {
     }
 
     fn add_instance(&self, game_version: Option<&str>) {
+        self.add_instance_with_loader("fabric", game_version);
+    }
+
+    fn add_instance_with_loader(&self, loader: &str, game_version: Option<&str>) {
         let game = self.game.display().to_string();
         let plan = self.plan.display().to_string();
         let mut args = vec![
@@ -127,7 +131,7 @@ impl World {
             "--plan",
             plan.as_str(),
             "--loader",
-            "fabric",
+            loader,
         ];
         if let Some(version) = game_version {
             args.extend(["--game-version", version]);
@@ -949,6 +953,41 @@ fn conflicting_mods_exit_with_the_conflict_code_and_change_nothing() {
     assert_eq!(outcome.code, exit::CONFLICT);
     assert!(outcome.err.contains("mods/common.jar"), "{}", outcome.err);
     assert_eq!(snapshot(&world.game), vanilla);
+}
+
+#[test]
+fn forge_routes_explicit_coremods_and_preserves_cfg_files() {
+    let world = World::new();
+    world.add_instance_with_loader("forge", Some("1.7.10"));
+    let forge_pack = world.zip(
+        "forge-pack.zip",
+        &[
+            ("mods/utility.jar", b"regular forge mod"),
+            ("coremods/transformer.jar", b"asm transformer"),
+            ("config/example.cfg", b"enabled=true\n"),
+        ],
+    );
+
+    world.json(&["add", "mc", forge_pack.as_str()]);
+    world.json(&["deploy", "mc"]);
+    assert_eq!(
+        fs::read(world.game.join("mods/utility.jar")).unwrap(),
+        b"regular forge mod"
+    );
+    assert_eq!(
+        fs::read(world.game.join("coremods/transformer.jar")).unwrap(),
+        b"asm transformer"
+    );
+    assert!(!world.game.join("mods/transformer.jar").exists());
+    let config = world.game.join("config/example.cfg");
+    fs::write(&config, b"enabled=false\n").unwrap();
+    world.json(&["deploy", "mc"]);
+    assert_eq!(fs::read(&config).unwrap(), b"enabled=false\n");
+
+    world.json(&["purge", "mc"]);
+    assert!(!world.game.join("mods/utility.jar").exists());
+    assert!(!world.game.join("coremods/transformer.jar").exists());
+    assert!(!config.exists());
 }
 
 #[test]

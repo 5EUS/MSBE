@@ -138,6 +138,13 @@ pub fn resolve(
             {
                 continue;
             }
+            if place
+                .exclude
+                .iter()
+                .any(|pattern| matches_glob(pattern, file.source.as_str()))
+            {
+                continue;
+            }
             let source = place.strip_prefix.as_deref().map_or_else(
                 || Ok(file.source.as_str()),
                 |prefix| {
@@ -599,6 +606,7 @@ mod tests {
                 loaders: Vec::new(),
                 into: "@loader.targets.mods".to_owned(),
                 include: Vec::new(),
+                exclude: Vec::new(),
                 strip_prefix: None,
                 flatten,
             })],
@@ -706,6 +714,7 @@ mod tests {
             loaders: Vec::new(),
             into: "@loader.targets.mods".to_owned(),
             include: Vec::new(),
+            exclude: Vec::new(),
             strip_prefix: None,
             flatten: true,
         }));
