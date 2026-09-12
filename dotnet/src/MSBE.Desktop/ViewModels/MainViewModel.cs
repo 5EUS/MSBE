@@ -21,7 +21,11 @@ internal sealed partial class MainViewModel : ViewModelBase
 
     /// <summary>Initializes a new instance of the <see cref="MainViewModel" /> class.</summary>
     /// <param name="client">The client used for daemon-owned operations.</param>
-    public MainViewModel(IMsbeClient client) => this.client = client;
+    public MainViewModel(IMsbeClient client)
+    {
+        this.client = client;
+        this.BrowseResults.CollectionChanged += this.OnBrowseResultsChanged;
+    }
 
     /// <summary>Gets games currently supported by the connected daemon.</summary>
     public ObservableCollection<GameInfo> Games { get; } = [];

@@ -67,11 +67,12 @@ internal sealed partial class MainViewModel
         if (entry.TryGetProperty("provider", out JsonElement provider) && provider.ValueKind == JsonValueKind.Object)
         {
             string source = provider.GetProperty("provider").GetString() ?? "Provider";
+            string project = provider.GetProperty("project").GetString() ?? string.Empty;
             string version = provider.GetProperty("version_number").GetString() ?? string.Empty;
-            return new ModListItem(name, origin, source, version, fileCount);
+            return new ModListItem(name, origin, source, project, version, fileCount);
         }
 
-        return new ModListItem(name, origin, "Local file", string.Empty, fileCount);
+        return new ModListItem(name, origin, "Local file", string.Empty, string.Empty, fileCount);
     }
 
     partial void OnSelectedProfileChanged(string? value)

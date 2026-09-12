@@ -41,7 +41,7 @@
                 <ListBox Classes="browse-list" ItemsSource="{Binding BrowseResults}" SelectedItem="{Binding SelectedBrowseResult}">
                     <ListBox.ItemTemplate>
                         <DataTemplate x:DataType="vm:BrowseResultItem">
-                            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="11">
+                            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="11">
                                 <Border Classes="mod-search-icon" Width="36" Height="36" ClipToBounds="True" ToolTip.Tip="{Binding Title}">
                                     <Grid>
                                         <LucideIcon Kind="PackageSearch" Size="18" StrokeWidth="1.8" />
@@ -58,24 +58,47 @@
                                     <TextBlock Grid.Row="1" Classes="caption" Text="{Binding Description}" TextWrapping="Wrap" MaxLines="2" />
                                     <TextBlock Grid.Row="2" Classes="provider-label" Text="{Binding Provider}" />
                                 </Grid>
+                                <CheckBox Grid.Column="2"
+                                          VerticalAlignment="Center"
+                                          IsChecked="{Binding IsMarked}"
+                                          IsEnabled="{Binding !IsInstalled}"
+                                          AutomationProperties.Name="Mark for installation"
+                                          ToolTip.Tip="Installed items are already included in this profile" />
                             </Grid>
                         </DataTemplate>
                     </ListBox.ItemTemplate>
                 </ListBox>
 
-                <Border Grid.Column="1" Classes="browse-detail">
+                <Border Grid.Column="1" Classes="browse-detail" IsVisible="{Binding !HasMarkedBrowseResults}">
                     <Grid RowDefinitions="Auto,*,Auto" RowSpacing="14">
                         <StackPanel Spacing="4">
                             <TextBlock FontSize="18" FontWeight="SemiBold" Text="{Binding SelectedBrowseResult.Title, FallbackValue=Select a mod}" TextWrapping="Wrap" />
                             <TextBlock Classes="caption" Text="{Binding SelectedBrowseResult.Source}" TextWrapping="Wrap" />
                         </StackPanel>
                         <TextBlock Grid.Row="1" Text="{Binding SelectedBrowseResult.Description}" TextWrapping="Wrap" />
+                        <TextBlock Grid.Row="2" Classes="caption" Text="Use the checkboxes to mark mods for installation." TextWrapping="Wrap" />
+                    </Grid>
+                </Border>
+
+                <Border Grid.Column="1" Classes="browse-detail" IsVisible="{Binding HasMarkedBrowseResults}">
+                    <Grid RowDefinitions="Auto,*,Auto" RowSpacing="12">
+                        <StackPanel Spacing="3">
+                            <TextBlock FontSize="18" FontWeight="SemiBold" Text="{Binding MarkedBrowseResultCount}" />
+                            <TextBlock Classes="caption" Text="Marked for installation" />
+                        </StackPanel>
+                        <ListBox Grid.Row="1" ItemsSource="{Binding MarkedBrowseResults}">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate x:DataType="vm:BrowseResultItem">
+                                    <TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis" />
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
                         <StackPanel Grid.Row="2" Spacing="10">
                             <CheckBox Content="Include required dependencies" IsChecked="{Binding BrowseWithDependencies}" />
                             <Button Classes="primary-button"
                                     HorizontalAlignment="Stretch"
-                                    Content="Add to selected profile"
-                                    IsEnabled="{Binding !IsBrowseInstalling}"
+                                    Content="Install selected mods"
+                                    IsEnabled="{Binding CanInstallMarkedBrowseResults}"
                                     Command="{Binding AddBrowseResultCommand}" />
                         </StackPanel>
                     </Grid>

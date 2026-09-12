@@ -6,10 +6,11 @@ namespace MSBE.Desktop.ViewModels;
 /// <param name="Name">The stable local mod name.</param>
 /// <param name="Origin">The original artifact name.</param>
 /// <param name="Source">The provider or local-source label.</param>
+/// <param name="Project">The provider project identity, when known.</param>
 /// <param name="Version">The provider version, when known.</param>
 /// <param name="FileCount">The number of stored files in the artifact.</param>
 [SuppressMessage("Design", "CA1515:Consider making public types internal", Justification = "Compiled AXAML item templates reference this type directly.")]
-public sealed record ModListItem(string Name, string Origin, string Source, string Version, int FileCount)
+public sealed record ModListItem(string Name, string Origin, string Source, string Project, string Version, int FileCount)
 {
     /// <summary>Gets a compact file-count label.</summary>
     public string FileSummary => this.FileCount == 1 ? "1 file" : $"{this.FileCount} files";

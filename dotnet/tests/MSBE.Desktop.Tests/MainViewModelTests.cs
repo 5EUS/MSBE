@@ -195,15 +195,15 @@ public sealed class MainViewModelTests
         Assert.False(vm.HasDeploymentError);
     }
 
-    /// <summary>Browse searches the selected target and installs the selected provider result.</summary>
+    /// <summary>Browse searches the selected target and installs marked provider results in bulk.</summary>
     /// <returns>A task representing the test.</returns>
     [Fact]
     public async Task BrowseSearchesAndAddsWithDependencies()
     {
         const string StatusJson = """{"name":"alpha","root":"/games/alpha","plan_id":"minecraft","plan_version":"1","loader":"fabric","game_version":"1.21.1","deployed_profile":"default","deployed_files":2}""";
         const string ProfilesJson = """{"profiles":["default"],"deployed":"default"}""";
-        const string ModsJson = """{"order":[],"components":{},"mods":{}}""";
-        const string SearchJson = """[{"provider":"modrinth","project":"AANobbMI","slug":"sodium","title":"Sodium","description":"Rendering optimization","icon_url":"https://cdn.modrinth.com/data/AANobbMI/icon.png","downloads":12000000}]""";
+        const string ModsJson = """{"order":["sodium"],"components":{},"mods":{"sodium":{"origin":"sodium.jar","provider":{"provider":"modrinth","project":"AANobbMI","version":"v1","version_number":"1.0","hashes":{}},"files":[]}}}""";
+        const string SearchJson = """[{"provider":"modrinth","project":"AANobbMI","slug":"sodium","title":"Sodium","description":"Rendering optimization","icon_url":"https://cdn.modrinth.com/data/AANobbMI/icon.png","downloads":12000000},{"provider":"modrinth","project":"YL57xq9U","slug":"iris","title":"Iris","description":"Shader support","icon_url":null,"downloads":9000000}]""";
         List<IReadOnlyList<string>> calls = [];
         var client = new TestClient(arguments =>
         {
@@ -233,7 +233,12 @@ public sealed class MainViewModelTests
         MainViewModel vm = new(client) { SelectedInstance = "alpha", BrowseQuery = "rendering" };
 
         await vm.SearchBrowseCommand.ExecuteAsync(parameter: null);
-        vm.SelectedBrowseResult = Assert.Single(vm.BrowseResults);
+        vm.SelectedBrowseResult = vm.BrowseResults[0];
+        vm.BrowseResults[1].IsMarked = true;
+
+        Assert.True(vm.BrowseResults[0].IsInstalled);
+        Assert.True(vm.BrowseResults[0].IsMarked);
+        Assert.Equal("1 selected", vm.MarkedBrowseResultCount);
         await vm.AddBrowseResultCommand.ExecuteAsync(parameter: null);
 
         Assert.Equal("Sodium", vm.SelectedBrowseResult.Title);
@@ -242,9 +247,10 @@ public sealed class MainViewModelTests
             ["--format", "json", "search", "alpha", "rendering", "--profile", "default", "--limit", "30"],
             StringComparer.Ordinal));
         Assert.Contains(calls, arguments => arguments.SequenceEqual(
-            ["--format", "json", "add", "alpha", "modrinth:sodium", "--profile", "default", "--with-deps"],
+            ["--format", "json", "add", "alpha", "modrinth:iris", "--profile", "default", "--with-deps"],
             StringComparer.Ordinal));
-        Assert.Contains("Added Sodium", vm.StatusMessage, StringComparison.Ordinal);
+        Assert.Contains("Added 1 mod(s)", vm.StatusMessage, StringComparison.Ordinal);
+        Assert.Empty(vm.MarkedBrowseResults);
     }
 
     /// <summary>Profile creation can clone the current profile and selects the result.</summary>
@@ -313,7 +319,8 @@ public sealed class MainViewModelTests
                 : new CommandResult(0, ProfileJson, string.Empty);
         });
         MainViewModel vm = new(client) { SelectedInstance = "alpha" };
-        vm.BrowseResults.Add(new BrowseResultItem("modrinth", "create", "Create", "Aesthetic technology", null, 1));
+        var browseResult = new BrowseResultItem("modrinth", "LNytGWDc", "create", "Create", "Aesthetic technology", null, 1, false) { IsMarked = true };
+        vm.BrowseResults.Add(browseResult);
         vm.SelectedProfileLoader = "neoforge";
         vm.SelectedProfileLoaderVersion = "21.1.200";
         vm.SelectedProfileSide = "Server";
@@ -324,6 +331,7 @@ public sealed class MainViewModelTests
             ["--format", "json", "profile", "set-target", "alpha", "default", "--loader", "neoforge", "--side", "server", "--loader-version", "21.1.200"],
             StringComparer.Ordinal));
         Assert.Empty(vm.BrowseResults);
+        Assert.Empty(vm.MarkedBrowseResults);
         Assert.Equal("neoforge 21.1.200 · Server", vm.SelectedProfileTargetSummary);
         Assert.Equal("Updated compatibility for default.", vm.StatusMessage);
     }
