@@ -621,6 +621,42 @@ blob is hashed and every referenced digest is resolved independently.
 
 Migration is incremental, but the end state is non-negotiable.
 
+### Verified boundary audit (2026-09-12)
+
+The Rust workspace was audited for explicit Modrinth names and implicit assumptions such as
+`.mrpack` paths, provider wire fields, loader dependency keys, API endpoints, hash choices, and
+release-channel behavior. The remaining production violations are:
+
+| Location                                    | Violation                                                                                                                                                                      | Required owner                                                                                                                     |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `msbe-pack`                                 | Owns `modrinth.index.json`, `.mrpack` detection and ZIP layout, `ModrinthPack`/`ModrinthFile`, Modrinth export, CurseForge wire records, and a hardcoded `game = "minecraft"`. | Move Modrinth behavior to `msbe-provider-modrinth`; remove CurseForge records until a reviewed CurseForge adapter and codec exist. |
+| `msbe-cli::pack_import`                     | Branches on `Pack::Modrinth` and `Pack::CurseForge`, interprets Modrinth environment flags, selects download URLs and hashes, and emits format-specific errors.                | Replace with neutral `PackImportPlan` execution through codec lookup and the provider policy gate.                                 |
+| `msbe-cli::pack_export`                     | Builds Modrinth dependencies and calls `export_modrinth` directly.                                                                                                             | Replace with codec selection, normalized options, and `PackExportPlan` execution.                                                  |
+| `msbe-cli::loader_dependency`               | Maps `fabric` and `quilt` to Modrinth dependency keys.                                                                                                                         | Move the mapping into reviewed data private to the Modrinth codec.                                                                 |
+| `msbe-cli::UpdateReport::not_from_modrinth` | Exposes a provider-specific JSON field even though the implementation means that no registered provider has update capability.                                                 | Rename to a provider-neutral field in a versioned CLI/RPC contract change and retain an explicit compatibility path if required.   |
+| CLI help and pack errors                    | Name Modrinth, CurseForge and `.mrpack` as built-in command behavior.                                                                                                          | Generate format descriptions from codec descriptors and use neutral orchestration errors.                                          |
+
+The following matches were reviewed and are **not** boundary violations:
+
+- `msbe-core` stores opaque provider/project/version provenance and a hash map. Its Modrinth
+  mentions are examples and migration fixtures; it has no provider-name branches.
+- SHA-256 and SHA-512 support in `msbe-provider-api` and `msbe-core` is generic integrity and
+  legacy-data handling, not a Modrinth protocol assumption.
+- `msbe-providers` names `msbe-provider-modrinth::REGISTRATION` in `BUILTIN` and verifies routing
+  in integration tests. The reviewed registry is the one generic crate allowed to list shipped
+  extensions.
+- `msbe-cli` has a dev-only dependency on `msbe-provider-modrinth` for end-to-end fixtures. Test
+  coupling to a provider-owned fake is intentional and does not put provider behavior in the CLI.
+- `msbe-http` mentions the Modrinth CDN and API in comments and an ignored live transport test.
+  Its production user agent, TLS, limits, and request behavior are provider-neutral.
+- `msbe-provider-api` overlay and manifest tests use `modrinth` as a concrete sample provider ID
+  without branching on it.
+
+This audit is a baseline, not an allowlist. New provider, game, loader, endpoint, or external
+format literals in generic production code require either relocation to an extension or an
+explicit architecture review. Phase D adds an automated guard after the current violations have
+been removed.
+
 ### Phase A - neutral contracts
 
 1. Add `PackCodec`, descriptors, plans, option schemas, file roles, source classifications, and
