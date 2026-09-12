@@ -1,3 +1,4 @@
+using MSBE.Client;
 using MSBE.Desktop.ViewModels;
 
 using Xunit;
@@ -12,10 +13,17 @@ public sealed class MainViewModelTests
     [Fact]
     public async Task DetectInstancesReportsCount()
     {
-        MainViewModel vm = new();
+        MainViewModel vm = new(new TestClient());
 
         await vm.DetectInstancesCommand.ExecuteAsync(parameter: null);
 
         Assert.Equal("0 instance(s) detected.", vm.StatusMessage);
+    }
+
+    private sealed class TestClient : IMsbeClient
+    {
+        public Task<DaemonInfo> GetInfoAsync(CancellationToken cancellationToken) => Task.FromResult(new DaemonInfo("test", 1));
+
+        public Task<CommandResult> RunCommandAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken) => Task.FromResult(new CommandResult(0, string.Empty, string.Empty));
     }
 }

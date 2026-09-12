@@ -11,4 +11,10 @@ public interface IMsbeClient
     /// <param name="cancellationToken">Cancels the pending request.</param>
     /// <returns>The daemon's reported information.</returns>
     Task<DaemonInfo> GetInfoAsync(CancellationToken cancellationToken);
+
+    /// <summary>Runs one MSBE command through the daemon.</summary>
+    /// <param name="arguments">The command arguments, excluding the executable name.</param>
+    /// <param name="cancellationToken">Cancels the pending request.</param>
+    /// <returns>The command result produced by the daemon.</returns>
+    Task<CommandResult> RunCommandAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken);
 }

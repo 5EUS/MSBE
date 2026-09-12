@@ -2,15 +2,32 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:MSBE.Desktop.ViewModels"
         xmlns:pages="using:MSBE.Desktop.Views.Pages"
+        xmlns:shell="using:MSBE.Desktop.Views.Shell"
         x:Class="MSBE.Desktop.Views.Shell.MainWindow"
         x:DataType="vm:MainViewModel"
         Title="{Binding Title}"
         Width="1100" Height="720"
         MinWidth="640" MinHeight="480">
-  <DockPanel>
-    <Border DockPanel.Dock="Bottom" Padding="12,6" Background="{DynamicResource SystemControlBackgroundListLowBrush}">
-      <TextBlock Classes="caption" Text="{Binding StatusMessage}" />
-    </Border>
-    <pages:InstancesPageView />
-  </DockPanel>
+  <Window.KeyBindings>
+    <KeyBinding Gesture="Ctrl+B" Command="{Binding ToggleSidebarCommand}" />
+    <KeyBinding Gesture="Ctrl+Shift+P" Command="{Binding ToggleCliCommand}" />
+    <KeyBinding Gesture="Ctrl+R" Command="{Binding DetectInstancesCommand}" />
+    <KeyBinding Gesture="Ctrl+," Command="{Binding NavigateCommand}" CommandParameter="Settings" />
+  </Window.KeyBindings>
+  <Grid RowDefinitions="Auto,*,Auto">
+    <shell:CommandBarView />
+    <Grid Grid.Row="1" ColumnDefinitions="Auto,*">
+      <shell:NavigationSidebarView />
+      <Border Grid.Column="1" Classes="workspace">
+        <Grid>
+          <pages:InstancesPageView IsVisible="{Binding IsInstancesWorkspace}" />
+          <StackPanel IsVisible="{Binding !IsInstancesWorkspace}" Spacing="8">
+            <TextBlock Classes="sectionHeading" Text="{Binding ActiveWorkspaceTitle}" />
+            <TextBlock Classes="caption" Text="This workspace is ready for daemon-backed content." />
+          </StackPanel>
+        </Grid>
+      </Border>
+    </Grid>
+    <Border Grid.Row="2" Classes="status-bar"><TextBlock Classes="caption" Text="{Binding StatusMessage}" /></Border>
+  </Grid>
 </Window>

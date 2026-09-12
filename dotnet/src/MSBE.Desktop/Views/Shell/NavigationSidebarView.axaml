@@ -1,0 +1,24 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:MSBE.Desktop.ViewModels"
+             x:Class="MSBE.Desktop.Views.Shell.NavigationSidebarView"
+             x:DataType="vm:MainViewModel">
+    <Border Classes="sidebar" Width="260" IsVisible="{Binding IsSidebarExpanded}">
+        <Grid RowDefinitions="Auto,Auto,Auto,*,Auto" RowSpacing="12">
+            <TextBlock Classes="sidebar-label" Text="WORKSPACE" />
+            <StackPanel Grid.Row="1" Spacing="2">
+                <Button Classes="nav-button" Content="Instances" Command="{Binding NavigateCommand}" CommandParameter="Instances" />
+                <Button Classes="nav-button" Content="Games" Command="{Binding NavigateCommand}" CommandParameter="Games" />
+                <Button Classes="nav-button" Content="Providers" Command="{Binding NavigateCommand}" CommandParameter="Providers" />
+                <Button Classes="nav-button" Content="Settings" Command="{Binding NavigateCommand}" CommandParameter="Settings" />
+            </StackPanel>
+            <TextBlock Grid.Row="2" Classes="sidebar-label" Text="LIBRARY" />
+            <StackPanel Grid.Row="3" Spacing="8">
+                <TextBox PlaceholderText="Search instances" Text="{Binding InstanceSearchText}" />
+                <ComboBox ItemsSource="{Binding InstanceSorts}" SelectedItem="{Binding InstanceSort}" />
+                <ListBox ItemsSource="{Binding Instances}" SelectedItem="{Binding SelectedInstance}" />
+            </StackPanel>
+            <TextBlock Grid.Row="4" Classes="caption" Text="Custom groups are stored per user." TextWrapping="Wrap" />
+        </Grid>
+    </Border>
+</UserControl>

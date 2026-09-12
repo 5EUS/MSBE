@@ -1,0 +1,27 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:MSBE.Desktop.ViewModels"
+             x:Class="MSBE.Desktop.Views.Shell.CommandBarView"
+             x:DataType="vm:MainViewModel">
+    <Border Classes="shell-header">
+        <Grid ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="16">
+            <TextBlock Classes="brand" Text="MSBE" />
+            <Menu Grid.Column="1" Background="Transparent">
+                <MenuItem Header="File">
+                    <MenuItem Header="Detect instances" Command="{Binding DetectInstancesCommand}" InputGesture="Ctrl+R" />
+                    <Separator />
+                    <MenuItem Header="Open command line" Command="{Binding ToggleCliCommand}" InputGesture="Ctrl+Shift+P" />
+                </MenuItem>
+                <MenuItem Header="View">
+                    <MenuItem Header="Toggle library" Command="{Binding ToggleSidebarCommand}" InputGesture="Ctrl+B" />
+                    <MenuItem Header="Instances" Command="{Binding NavigateCommand}" CommandParameter="Instances" />
+                    <MenuItem Header="Games" Command="{Binding NavigateCommand}" CommandParameter="Games" />
+                    <MenuItem Header="Providers" Command="{Binding NavigateCommand}" CommandParameter="Providers" />
+                    <MenuItem Header="Settings" Command="{Binding NavigateCommand}" CommandParameter="Settings" InputGesture="Ctrl+," />
+                </MenuItem>
+            </Menu>
+            <TextBlock Grid.Column="2" Classes="header-context" Text="{Binding ActiveWorkspaceTitle}" />
+            <Button Grid.Column="3" Classes="command-button" Content="Command" Command="{Binding ToggleCliCommand}" ToolTip.Tip="Open command line (Ctrl+Shift+P)" />
+        </Grid>
+    </Border>
+</UserControl>
