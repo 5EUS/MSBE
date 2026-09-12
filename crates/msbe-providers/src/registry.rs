@@ -1,10 +1,10 @@
 //! The fail-closed mapping from provider manifests to reviewed adapters.
 
-use std::{collections::BTreeMap, io::SeekFrom};
+use std::collections::BTreeMap;
 
 use msbe_provider_api::{
     Adapter, AdapterError, Catalog, HttpClient, ManifestError, Overlay, OverlayError, PackCodec,
-    PackCodecDescriptor, PackCodecError, Provider, ReadSeek, Registration, Target,
+    PackCodecDescriptor, PackCodecError, PackInput, Provider, Registration, Target,
     model::{Request, SearchResult},
     resolve::{Adapters, ResolveError},
 };
@@ -189,23 +189,20 @@ impl Providers {
 
     /// Detects a pack format using every policy-permitted codec.
     ///
-    /// The input is rewound before each probe. A tie at the highest non-zero confidence is
-    /// rejected rather than resolved by registration order.
+    /// Each codec receives the same bounded, immutable input. A tie at the highest non-zero
+    /// confidence is rejected rather than resolved by registration order.
     ///
     /// # Errors
     ///
     /// Returns [`RegistryError`] when seeking or probing fails, or detection is ambiguous.
     pub fn detect_pack_codec(
         &self,
-        input: &mut dyn ReadSeek,
+        input: &dyn PackInput,
     ) -> Result<Option<&dyn PackCodec>, RegistryError> {
         let mut best: Option<(&dyn PackCodec, u8)> = None;
         let mut tied = Vec::new();
         for descriptor in self.pack_codecs() {
             let codec = self.pack_codec(&descriptor.id)?;
-            input
-                .seek(SeekFrom::Start(0))
-                .map_err(PackCodecError::from)?;
             let confidence = codec.probe(input)?.confidence;
             if confidence == 0 {
                 continue;
@@ -392,14 +389,15 @@ pub enum RegistryError {
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Cursor, Write};
+    use std::io::Write;
 
     use msbe_plan_schema::Side;
     use msbe_provider_api::{
-        Adapter, AdapterError, BlobReader, HttpClient, HttpError, PackCodec, PackCodecDescriptor,
-        PackCodecError, PackCodecRegistration, PackDirections, PackExportContext, PackExportPlan,
-        PackExportResult, PackImportContext, PackImportPlan, PackOptionSchema, PackOptions,
-        PackProbe, PackageId, Provider, ReadSeek, Registration, SupportSet, Target, WriteSeek,
+        Adapter, AdapterError, ContainerKind, HttpClient, HttpError, PackCodec,
+        PackCodecDescriptor, PackCodecError, PackCodecRegistration, PackDirections, PackEntry,
+        PackExportContext, PackExportPlan, PackImportContext, PackImportPlan, PackInput,
+        PackLayout, PackOptionSchema, PackOptions, PackProbe, PackageId, Provider, Registration,
+        SupportSet, Target,
         model::Request,
     };
     use msbe_provider_direct::DirectError;
@@ -481,7 +479,7 @@ mod tests {
             &self.descriptor
         }
 
-        fn probe(&self, _: &mut dyn ReadSeek) -> Result<PackProbe, PackCodecError> {
+        fn probe(&self, _: &dyn PackInput) -> Result<PackProbe, PackCodecError> {
             Ok(PackProbe {
                 confidence: self.confidence,
                 reason: None,
@@ -490,7 +488,7 @@ mod tests {
 
         fn plan_import(
             &self,
-            _: &mut dyn ReadSeek,
+            _: &dyn PackInput,
             _: &PackImportContext,
             _: &PackOptions,
         ) -> Result<PackImportPlan, PackCodecError> {
@@ -505,13 +503,19 @@ mod tests {
             Err(PackCodecError::UnsupportedDirection("export"))
         }
 
-        fn export(
-            &self,
-            _: &PackExportPlan,
-            _: &dyn BlobReader,
-            _: &mut dyn WriteSeek,
-        ) -> Result<PackExportResult, PackCodecError> {
+        fn layout(&self, _: &PackExportPlan) -> Result<PackLayout, PackCodecError> {
             Err(PackCodecError::UnsupportedDirection("export"))
+        }
+    }
+
+    #[derive(Debug)]
+    struct EmptyInput;
+
+    impl PackInput for EmptyInput {
+        fn container(&self) -> ContainerKind { ContainerKind::File }
+        fn entries(&self) -> &[PackEntry] { &[] }
+        fn read(&self, _: &msbe_fsops::RelPath, _: u64) -> Result<Vec<u8>, PackCodecError> {
+            Err(PackCodecError::FormatMismatch)
         }
     }
 
@@ -675,7 +679,7 @@ mod tests {
         assert_eq!(providers.pack_codec("alpha")?.descriptor().id, "alpha");
         assert_eq!(
             providers
-                .detect_pack_codec(&mut Cursor::new(b"pack"))?
+                .detect_pack_codec(&EmptyInput)?
                 .map(|codec| codec.descriptor().id.as_str()),
             Some("alpha")
         );
@@ -715,7 +719,7 @@ mod tests {
 
         let providers = Providers::new(&[registration(&[ALPHA, BETA])], &[]).unwrap();
         assert!(matches!(
-            providers.detect_pack_codec(&mut Cursor::new(b"pack")),
+            providers.detect_pack_codec(&EmptyInput),
             Err(RegistryError::AmbiguousCodec(ids)) if ids == ["alpha", "beta"]
         ));
     }

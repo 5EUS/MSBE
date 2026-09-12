@@ -517,6 +517,7 @@ dependencies = [
 name = "msbe-providers"
 version = "0.0.0"
 dependencies = [
+ "msbe-fsops",
  "msbe-plan-schema",
  "msbe-provider-api",
  "msbe-provider-direct",

@@ -934,7 +934,7 @@ never sees an entry the host rejected and cannot raise a limit itself.
 | Expanded bytes per entry                       | 4 GiB   | Implemented: `Limits::max_file_bytes`                          |
 | Expanded bytes per input                       | 16 GiB  | Implemented: `Limits::max_total_bytes`                         |
 | Compression ratio, entries over 1 MiB          | 1,000:1 | Implemented: `Limits::max_ratio`                               |
-| Manifest ceiling per entry read by a codec     | 16 MiB  | Implemented per format in `msbe-pack`; becomes host-wide in A2 |
+| Manifest ceiling per entry read by a codec     | 16 MiB  | Implemented by the host-owned `PackInput` read bound            |
 | Download without a declared size               | 2 GiB   | Implemented: `msbe_provider_api::DOWNLOAD_LIMIT`               |
 | Archive nesting opened by the host             | 0       | Proposed                                                       |
 | Path length                                    | 1 KiB   | Proposed                                                       |
@@ -1006,19 +1006,19 @@ been removed.
 
 ### Contract audit (2026-09-12)
 
-The implemented Phase A contracts were reviewed against §17.4 through §17.6. These gaps are not
-boundary violations, but each would be migrated again if an external format moved onto the
-current contract:
+The Phase A contracts were reviewed against §17.4 through §17.6 before the A2 revision. The
+first, second, fourth, fifth, sixth, and seventh entries below are now implemented by A2; the
+remaining daemon and capture work belongs to Phase D.
 
 | Location                                           | Gap                                                                                                                                                                                                  | Resolved by                                             |
 | -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| `msbe-provider-api::codec::PackCodec`              | `probe` and `plan_import` take `&mut dyn ReadSeek` and `export` writes a `WriteSeek`, so each codec parses and writes its own container. Host limits and determinism cannot be enforced centrally, directory inputs are impossible, and the contract cannot be hosted in WASM. | `PackInput` and `PackLayout` (§17.4).                   |
-| `msbe-provider-api::codec::PackRequirement`        | One source per requirement, no digest, and no installer answers.                                                                                                                                     | Per-digest requirements with ordered sources (§17.4).   |
+| `msbe-provider-api::codec::PackCodec`              | Resolved: codecs now receive bounded `PackInput` views and produce `PackLayout`; `msbe-pack` owns ZIP validation and deterministic writing.                                                        | `PackInput` and `PackLayout` (§17.4).                   |
+| `msbe-provider-api::codec::PackRequirement`        | Resolved: requirements carry an optional exact digest, ordered source alternatives, and installer answers.                                                                                           | Per-digest requirements with ordered sources (§17.4).   |
 | `msbe-provider-api::codec::PackExportPlan`         | Serializable with an editable `embedded` list and opaque `codec_state`, and nothing binds a preview to its execution.                                                                                 | Daemon-held plan IDs and digests (§17.11).              |
-| `msbe-core::instance::LockedFileClassification`    | Stores `currently_acquirable` and a live `DistributionDecision` inside the lockfile.                                                                                                                 | Facts and observations (§17.5).                         |
-| `msbe-core::instance::BlobSource`                  | No variant for installation-owned inputs, so jarmod bases classify as `Unknown`; `Derived` records inputs but not the transform.                                                                     | `Environment` and `TransformId` (§17.5).                |
-| `msbe-core::instance::LockedPlan`, `LockedTarget`  | The plan is pinned by version string only; the target pins `game_version` but no installation fingerprint.                                                                                           | Plan digest and fingerprint (§17.5).                    |
-| `msbe-core::instance::LockedModule`, `Profile`     | No layer attribution and no installer answers.                                                                                                                                                       | Profile lineage and installer answers (§17.5).          |
+| `msbe-core::instance::LockedFileClassification`    | Resolved: the lockfile retains only role and source facts; dated live state is represented by export observations.                                                                                   | Facts and observations (§17.5).                         |
+| `msbe-core::instance::BlobSource`                  | Resolved: installation-owned inputs use `Environment`; derived outputs name `TransformId` when relocked.                                                                                            | `Environment` and `TransformId` (§17.5).                |
+| `msbe-core::instance::LockedPlan`, `LockedTarget`  | Resolved: plan digest and optional installation fingerprint are lockfile facts.                                                                                                                      | Plan digest and fingerprint (§17.5).                    |
+| `msbe-core::instance::LockedModule`, `Profile`     | Resolved: modules record their introducing layer and installer answers; profiles retain layer records.                                                                                               | Profile lineage and installer answers (§17.5).          |
 | `msbe-daemon::handle`                              | Serves one request at a time with no job model.                                                                                                                                                      | Jobs ([03](03-architecture.md)), Phase D.               |
 | `[deploy] mutable` paths                           | `verify` reports runtime changes, but nothing can adopt them into the profile.                                                                                                                       | Capture (§17.5).                                        |
 
@@ -1036,21 +1036,21 @@ the existing external formats remain on their temporary paths until Phase B.
 
 ### Phase A2 - reproducibility contract revision
 
-Phase A2 revises the Phase A contracts before any external format moves onto them, so Phase B
-migrates each format once.
+Phase A2 is implemented. It revised the Phase A contracts before any external format moves onto
+them, so Phase B migrates each format once.
 
-1. Replace `ReadSeek`/`WriteSeek` codec I/O with host-owned `PackInput` and `PackLayout`, and move
+1. [x] Replace `ReadSeek`/`WriteSeek` codec I/O with host-owned `PackInput` and `PackLayout`, and move
    container reading, writing, limits, and determinism into the host.
-2. Make `PackRequirement` per-digest with ordered sources and installer answers; add `PackOrigin`
+2. [x] Make `PackRequirement` per-digest with ordered sources and installer answers; add `PackOrigin`
    and environment requirements to `PackImportPlan`.
-3. Revise the lockfile schema: plan digest, installation fingerprint, `BlobSource::Environment`,
+3. [x] Revise the lockfile schema: plan digest, installation fingerprint, `BlobSource::Environment`,
    `TransformId`, installer answers, and layer attribution. Remove `currently_acquirable` and the
    live distribution decision.
-4. Add the dated observation cache and record relied-on observations in export plans.
-5. Read the previous lockfile schema conservatively: a profile without layers becomes one
+4. [x] Add the dated observation cache and record relied-on observations in export plans.
+5. [x] Read the previous lockfile schema conservatively: a profile without layers becomes one
    `changes` layer, a missing fingerprint is detected and recorded at the next lock with a
    warning, and a derived blob without a transform identity is unsourceable until relocked.
-6. Extend native codec conformance fixtures to layered profiles, environment inputs, and derived
+6. [x] Extend native codec conformance fixtures to layered profiles, environment inputs, and derived
    outputs.
 
 ### Phase B - move existing formats

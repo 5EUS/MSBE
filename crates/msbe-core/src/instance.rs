@@ -179,6 +179,31 @@ pub struct Profile {
     /// Pack-owned files by game-relative path and exact content digest.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub configs: BTreeMap<RelPath, Digest>,
+    /// Ordered upstream pack layers and the user changes applied above them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub layers: Vec<ProfileLayer>,
+}
+
+/// One source layer in a profile lineage.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProfileLayer {
+    /// Stable layer ID.
+    pub id: String,
+    /// `pack` or `changes`.
+    pub kind: String,
+    /// Codec that produced an imported pack layer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codec: Option<String>,
+    /// Upstream pack identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pack: Option<String>,
+    /// Upstream pack version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// Imported pack content identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digest: Option<Digest>,
 }
 
 impl Profile {
@@ -263,8 +288,6 @@ pub struct LockedFileClassification {
     pub role: PackFileRole,
     /// How its exact bytes can be reproduced.
     pub source: BlobSource,
-    /// Whether an exporter may embed the bytes.
-    pub distribution: DistributionDecision,
 }
 
 /// Semantic role of a deployed file.
@@ -295,8 +318,6 @@ pub enum BlobSource {
         provenance: Provenance,
         /// Whether the reference and hashes identify exact bytes.
         exact: bool,
-        /// Whether policy currently permits acquisition.
-        currently_acquirable: bool,
     },
     /// One or more direct locations with integrity metadata.
     Direct {
@@ -304,19 +325,24 @@ pub enum BlobSource {
         urls: Vec<String>,
         /// Integrity values keyed by normalized algorithm.
         hashes: BTreeMap<String, String>,
-        /// Whether the URLs are currently acquirable.
-        currently_acquirable: bool,
     },
     /// User-supplied local content.
     Local,
     /// Content authored as part of the pack.
     PackOwned,
+    /// An input supplied by the user's own installation.
+    Environment {
+        /// Named installation root.
+        root: String,
+        /// Path beneath the installation root.
+        path: RelPath,
+    },
     /// Content derived from other blobs.
     Derived {
         /// Exact input blobs.
         inputs: Vec<Digest>,
-        /// Whether the pinned plan reproduces identical bytes.
-        deterministic: bool,
+        /// Pinned identity of the transform that produced the output.
+        transform: TransformId,
     },
     /// A reviewed component bundle.
     Component {
@@ -349,6 +375,29 @@ pub struct LockedPlan {
     pub id: String,
     /// Exact plan version.
     pub version: String,
+    /// Digest of the normalized pinned plan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digest: Option<Digest>,
+}
+
+/// Every input that can affect a derived output.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TransformId {
+    /// Digest of the plan that supplied the step.
+    pub plan: Digest,
+    /// Step identifier in that plan.
+    pub step: String,
+    /// Digests of extensions executed by the step.
+    #[serde(default)]
+    pub extensions: Vec<Digest>,
+    /// Digest of normalized parameters and installer answers.
+    pub parameters: Digest,
+    /// Digests of external data the step read.
+    #[serde(default)]
+    pub data: Vec<Digest>,
+    /// Whether identical identity promises byte-identical output.
+    pub deterministic: bool,
 }
 
 /// Instance facts needed to reproduce provider compatibility filtering.
@@ -363,6 +412,19 @@ pub struct LockedTarget {
     pub loader_version: Option<String>,
     /// Player-client or dedicated-server target.
     pub side: Side,
+    /// Installation edition and identifying file digests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<InstallationFingerprint>,
+}
+
+/// Installation facts required by environment-bound deployments.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InstallationFingerprint {
+    /// Detected edition or store variant.
+    pub edition: String,
+    /// Identifying installation files and their content digests.
+    pub identifying: BTreeMap<RelPath, Digest>,
 }
 
 /// One resolved module and its exact content-addressed files.
@@ -375,6 +437,19 @@ pub struct LockedModule {
     pub provider: Option<Provenance>,
     /// Exact CAS files included by this module.
     pub files: Vec<StoredFile>,
+    /// The profile layer that introduced this module.
+    #[serde(default = "default_changes_layer")]
+    pub layer: String,
+    /// Answers used by installer steps for this module.
+    #[serde(default)]
+    pub answers: InstallAnswers,
+}
+
+/// Opaque installer choices keyed by step and question ID.
+pub type InstallAnswers = BTreeMap<String, BTreeMap<String, String>>;
+
+fn default_changes_layer() -> String {
+    "changes".to_owned()
 }
 
 /// One mod in a profile: an artifact whose files are already in the store.
@@ -889,12 +964,14 @@ impl Instance {
             plan: LockedPlan {
                 id: self.plan.id.clone(),
                 version: self.plan.version.clone(),
+                digest: None,
             },
             target: LockedTarget {
                 game_version: self.config.game_version.clone(),
                 loader: target.loader,
                 loader_version: target.loader_version,
                 side: target.side,
+                fingerprint: None,
             },
             order: selection.load_order(),
             mods: selection
@@ -907,6 +984,8 @@ impl Instance {
                             origin: module.origin,
                             provider: module.provider,
                             files: module.files,
+                            layer: default_changes_layer(),
+                            answers: InstallAnswers::new(),
                         },
                     )
                 })
@@ -1454,7 +1533,6 @@ impl Instance {
                 LockedFileClassification {
                     role: PackFileRole::PackOwnedConfig,
                     source: BlobSource::PackOwned,
-                    distribution: DistributionDecision::Allowed,
                 },
             );
         }
@@ -1569,7 +1647,6 @@ impl Instance {
                         id: id.to_owned(),
                         version,
                     },
-                    distribution: DistributionDecision::Unknown,
                 },
             );
             resolved.claims.entry(path).or_default().push(claim);
@@ -1594,17 +1671,15 @@ impl Instance {
             self.config.game_version.as_deref(),
             &ordered,
         )?;
-        for (path, claim, inputs) in self.derived_claims(&derivations)? {
+        for (path, claim, _) in self.derived_claims(&derivations)? {
             merge_classification(
                 &mut resolved.classifications,
                 path.clone(),
                 LockedFileClassification {
                     role: PackFileRole::Generated,
-                    source: BlobSource::Derived {
-                        inputs,
-                        deterministic: true,
-                    },
-                    distribution: DistributionDecision::Allowed,
+                    // The current derivation API cannot yet record a complete TransformId.
+                    // Treat its outputs as unsourceable until a subsequent relock can do so.
+                    source: BlobSource::Unknown,
                 },
             );
             resolved.claims.entry(path).or_default().push(claim);
@@ -2298,7 +2373,6 @@ fn merge_classification(
             *existing = LockedFileClassification {
                 role: PackFileRole::Other,
                 source: BlobSource::Unknown,
-                distribution: DistributionDecision::Unknown,
             };
         }
     } else {
@@ -2315,14 +2389,11 @@ fn module_classification(entry: &ModEntry, blob: &Digest) -> LockedFileClassific
             source: BlobSource::Provider {
                 provenance: provenance.clone(),
                 exact: provenance.hashes.get("sha256").map(String::as_str) == sha256,
-                currently_acquirable: false,
             },
-            distribution: DistributionDecision::Unknown,
         },
         None => LockedFileClassification {
             role: PackFileRole::LocalArtifact,
             source: BlobSource::Local,
-            distribution: DistributionDecision::Unknown,
         },
     }
 }
@@ -2670,7 +2741,6 @@ flatten = true
             Some(&super::LockedFileClassification {
                 role: super::PackFileRole::LocalArtifact,
                 source: super::BlobSource::Local,
-                distribution: super::DistributionDecision::Unknown,
             })
         );
 
@@ -2723,7 +2793,6 @@ flatten = true
             Some(&super::LockedFileClassification {
                 role: super::PackFileRole::PackOwnedConfig,
                 source: super::BlobSource::PackOwned,
-                distribution: super::DistributionDecision::Allowed,
             })
         );
 
@@ -2999,6 +3068,7 @@ sha512 = "abc"
             order: Vec::new(),
             components: BTreeMap::new(),
             configs: BTreeMap::new(),
+            layers: Vec::new(),
             mods: BTreeMap::from([(
                 name("pack"),
                 ModEntry {
@@ -3093,6 +3163,7 @@ sha512 = "abc"
             order: Vec::new(),
             components: BTreeMap::new(),
             configs: BTreeMap::new(),
+            layers: Vec::new(),
             mods: BTreeMap::from([
                 (name("first"), entry("a/common.bin", first)),
                 (name("second"), entry("b/common.bin", second)),

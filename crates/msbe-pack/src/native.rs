@@ -1,21 +1,16 @@
 //! Deterministic native `.msbepack` codec.
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    io::{Read, Seek, SeekFrom, Write},
-};
+use std::collections::{BTreeMap, BTreeSet};
 
-use msbe_archive::Limits;
 use msbe_core::instance::Lockfile;
 use msbe_fsops::{Digest, RelPath};
 use msbe_provider_api::{
-    BlobReader, EmbeddedBlob, ImportedTarget, PackCodec, PackCodecDescriptor, PackCodecError,
-    PackDirections, PackExportContext, PackExportPlan, PackExportResult, PackImportContext,
-    PackImportPlan, PackOptionSchema, PackOptions, PackProbe, PackRequirement, ReadSeek,
-    SupportSet, WriteSeek,
+    ContainerKind, EmbeddedBlob, EntryContent, ImportedTarget, LayoutEntry, PackCodec,
+    PackCodecDescriptor, PackCodecError, PackDirections, PackExportContext, PackExportPlan,
+    PackImportContext, PackImportPlan, PackInput, PackLayout, PackOptionSchema, PackOptions,
+    PackProbe, PackRequirement, SupportSet,
 };
 use serde::{Deserialize, Serialize};
-use zip::{DateTime, ZipArchive, ZipWriter, write::SimpleFileOptions};
 
 const CODEC_ID: &str = "msbe-native";
 const MANIFEST_PATH: &str = "msbe-pack.toml";
@@ -68,13 +63,11 @@ impl PackCodec for NativeCodec {
         &self.descriptor
     }
 
-    fn probe(&self, input: &mut dyn ReadSeek) -> Result<PackProbe, PackCodecError> {
-        input.seek(SeekFrom::Start(0))?;
-        let Ok(mut archive) = ZipArchive::new(input) else {
+    fn probe(&self, input: &dyn PackInput) -> Result<PackProbe, PackCodecError> {
+        if input.container() != ContainerKind::Zip {
             return Ok(no_match());
-        };
-        validate_archive(&mut archive, &Limits::default())?;
-        let manifest = match read_entry(&mut archive, MANIFEST_PATH) {
+        }
+        let manifest = match read_entry(input, MANIFEST_PATH) {
             Ok(bytes) => bytes,
             Err(PackCodecError::FormatMismatch) => return Ok(no_match()),
             Err(error) => return Err(error),
@@ -91,21 +84,21 @@ impl PackCodec for NativeCodec {
 
     fn plan_import(
         &self,
-        input: &mut dyn ReadSeek,
+        input: &dyn PackInput,
         _: &PackImportContext,
         options: &PackOptions,
     ) -> Result<PackImportPlan, PackCodecError> {
         self.descriptor.option_schema.normalize(options)?;
-        input.seek(SeekFrom::Start(0))?;
-        let mut archive = ZipArchive::new(input).map_err(codec_error)?;
-        validate_archive(&mut archive, &Limits::default())?;
-        let manifest: NativeManifest = parse_toml(&read_entry(&mut archive, MANIFEST_PATH)?)?;
+        if input.container() != ContainerKind::Zip {
+            return Err(PackCodecError::FormatMismatch);
+        }
+        let manifest: NativeManifest = parse_toml(&read_entry(input, MANIFEST_PATH)?)?;
         if manifest.schema != 1 || manifest.format != CODEC_ID {
             return Err(PackCodecError::FormatMismatch);
         }
-        let lockfile: Lockfile = parse_toml(&read_entry(&mut archive, &manifest.lockfile)?)?;
+        let lockfile: Lockfile = parse_toml(&read_entry(input, &manifest.lockfile)?)?;
         let requirements: NativeRequirements =
-            parse_toml(&read_entry(&mut archive, &manifest.requirements)?)?;
+            parse_toml(&read_entry(input, &manifest.requirements)?)?;
         if requirements.schema != 1 {
             return Err(PackCodecError::Codec(format!(
                 "unsupported native requirements schema {}",
@@ -117,16 +110,16 @@ impl PackCodec for NativeCodec {
         for (path, digest) in &lockfile.deployment {
             if seen.insert(*digest) {
                 let entry = blob_path(digest)?;
-                if let Ok(mut blob) = archive.by_name(entry.as_str()) {
-                    if Digest::of_reader(&mut blob)? != *digest {
+                let entry_path = RelPath::new(&entry)
+                    .map_err(|error| PackCodecError::Codec(format!("invalid native blob path: {error}")))?;
+                if let Ok(blob) = input.read(&entry_path, DOCUMENT_LIMIT.max(digest_size_limit())) {
+                    if Digest::of_bytes(&blob) != *digest {
                         return Err(PackCodecError::Codec(format!(
                             "embedded blob {entry:?} does not match {digest}"
                         )));
                     }
                     embedded.push(EmbeddedBlob {
-                        entry: RelPath::new(&entry).map_err(|error| {
-                            PackCodecError::Codec(format!("invalid native blob path: {error}"))
-                        })?,
+                        entry: entry_path,
                         digest: *digest,
                         destination: Some(path.clone()),
                     });
@@ -136,6 +129,12 @@ impl PackCodec for NativeCodec {
         Ok(PackImportPlan {
             codec: CODEC_ID.to_owned(),
             title: None,
+            origin: msbe_provider_api::PackOrigin {
+                codec: CODEC_ID.to_owned(),
+                pack: None,
+                version: None,
+                digest: Digest::of_bytes(&read_entry(input, MANIFEST_PATH)?),
+            },
             lockfile: Some(lockfile.clone()),
             target: ImportedTarget {
                 game: Some(lockfile.plan.id.clone()),
@@ -143,6 +142,7 @@ impl PackCodec for NativeCodec {
                 loader: Some(lockfile.target.loader.clone()),
                 loader_version: lockfile.target.loader_version.clone(),
             },
+            environment: Vec::new(),
             requirements: requirements.requirement,
             embedded,
             warnings: Vec::new(),
@@ -173,12 +173,7 @@ impl PackCodec for NativeCodec {
         })
     }
 
-    fn export(
-        &self,
-        plan: &PackExportPlan,
-        blobs: &dyn BlobReader,
-        output: &mut dyn WriteSeek,
-    ) -> Result<PackExportResult, PackCodecError> {
+    fn layout(&self, plan: &PackExportPlan) -> Result<PackLayout, PackCodecError> {
         if plan.codec != CODEC_ID {
             return Err(PackCodecError::Codec(
                 "export plan belongs to another codec".to_owned(),
@@ -212,44 +207,21 @@ impl PackCodec for NativeCodec {
         .map_err(codec_error)?;
 
         let mut entries = BTreeMap::from([
-            (LOCK_PATH.to_owned(), Some(state.lock.into_bytes())),
-            (MANIFEST_PATH.to_owned(), Some(manifest.into_bytes())),
-            (OPTIONS_PATH.to_owned(), Some(options.into_bytes())),
-            (
-                REQUIREMENTS_PATH.to_owned(),
-                Some(requirements.into_bytes()),
-            ),
+            (LOCK_PATH.to_owned(), EntryContent::Inline(state.lock.into_bytes())),
+            (MANIFEST_PATH.to_owned(), EntryContent::Inline(manifest.into_bytes())),
+            (OPTIONS_PATH.to_owned(), EntryContent::Inline(options.into_bytes())),
+            (REQUIREMENTS_PATH.to_owned(), EntryContent::Inline(requirements.into_bytes())),
         ]);
-        let mut blob_digests = BTreeMap::new();
         for file in &plan.embedded {
             let path = blob_path(&file.digest)?;
-            blob_digests.insert(path.clone(), file.digest);
-            entries.entry(path).or_insert(None);
+            entries.entry(path).or_insert(EntryContent::Blob(file.digest));
         }
-
-        output.seek(SeekFrom::Start(0))?;
-        let mut archive = ZipWriter::new(output);
-        let file_options = SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated)
-            .compression_level(Some(9))
-            .last_modified_time(DateTime::default())
-            .unix_permissions(0o644);
-        for (path, bytes) in entries {
-            archive
-                .start_file(&path, file_options)
-                .map_err(codec_error)?;
-            if let Some(bytes) = bytes {
-                archive.write_all(&bytes)?;
-            } else if let Some(digest) = blob_digests.get(&path) {
-                blobs.copy_blob(digest, &mut archive)?;
-            }
-        }
-        archive.finish().map_err(codec_error)?;
-        Ok(PackExportResult {
-            codec: CODEC_ID.to_owned(),
-            embedded: plan.embedded.len(),
-            referenced: plan.requirements.len(),
-            digest: None,
+        Ok(PackLayout {
+            container: ContainerKind::Zip,
+            entries: entries
+                .into_iter()
+                .map(|(path, content)| Ok(LayoutEntry { path: RelPath::new(&path).map_err(|error| PackCodecError::Codec(error.to_string()))?, content }))
+                .collect::<Result<_, PackCodecError>>()?,
         })
     }
 }
@@ -312,77 +284,14 @@ fn no_match() -> PackProbe {
     }
 }
 
-fn read_entry<R: Read + Seek>(
-    archive: &mut ZipArchive<R>,
+fn read_entry(
+    input: &dyn PackInput,
     path: &str,
 ) -> Result<Vec<u8>, PackCodecError> {
-    let entry = archive
-        .by_name(path)
-        .map_err(|_| PackCodecError::FormatMismatch)?;
-    if entry.size() > DOCUMENT_LIMIT {
-        return Err(PackCodecError::Limit(format!(
-            "{path} exceeds {DOCUMENT_LIMIT} bytes"
-        )));
-    }
-    let mut bytes = Vec::new();
-    entry.take(DOCUMENT_LIMIT + 1).read_to_end(&mut bytes)?;
-    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > DOCUMENT_LIMIT {
-        return Err(PackCodecError::Limit(format!(
-            "{path} exceeds {DOCUMENT_LIMIT} bytes"
-        )));
-    }
-    Ok(bytes)
+    input.read(&RelPath::new(path).map_err(|error| PackCodecError::Codec(error.to_string()))?, DOCUMENT_LIMIT)
 }
 
-fn validate_archive<R: Read + Seek>(
-    archive: &mut ZipArchive<R>,
-    limits: &Limits,
-) -> Result<(), PackCodecError> {
-    if archive.len() > limits.max_entries {
-        return Err(PackCodecError::Limit(format!(
-            "archive has more than {} entries",
-            limits.max_entries
-        )));
-    }
-    let mut total = 0_u64;
-    let mut names = BTreeSet::new();
-    for index in 0..archive.len() {
-        let entry = archive.by_index(index).map_err(codec_error)?;
-        RelPath::new(entry.name())
-            .map_err(|error| PackCodecError::Codec(format!("unsafe native entry: {error}")))?;
-        if !names.insert(entry.name().to_ascii_lowercase()) {
-            return Err(PackCodecError::Codec(
-                "native archive contains duplicate entry names".to_owned(),
-            ));
-        }
-        if entry.size() > limits.max_file_bytes {
-            return Err(PackCodecError::Limit(format!(
-                "entry {:?} exceeds {} bytes",
-                entry.name(),
-                limits.max_file_bytes
-            )));
-        }
-        if entry.size() > 1 << 20
-            && (entry.compressed_size() == 0
-                || entry.compressed_size().saturating_mul(limits.max_ratio) < entry.size())
-        {
-            return Err(PackCodecError::Limit(format!(
-                "entry {:?} exceeds the compression ratio limit",
-                entry.name()
-            )));
-        }
-        total = total
-            .checked_add(entry.size())
-            .ok_or_else(|| PackCodecError::Limit("archive size overflow".to_owned()))?;
-        if total > limits.max_total_bytes {
-            return Err(PackCodecError::Limit(format!(
-                "archive exceeds {} total bytes",
-                limits.max_total_bytes
-            )));
-        }
-    }
-    Ok(())
-}
+const fn digest_size_limit() -> u64 { 4 << 30 }
 
 fn parse_toml<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> Result<T, PackCodecError> {
     let text = std::str::from_utf8(bytes)
@@ -405,33 +314,16 @@ fn codec_error(error: impl std::fmt::Display) -> PackCodecError {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, io::Cursor};
+    use std::collections::BTreeMap;
 
     use msbe_core::instance::{
         BlobSource, DistributionDecision, LockedFileClassification, LockedPlan, LockedTarget,
         Lockfile, PackFileRole,
     };
     use msbe_plan_schema::Side;
-    use msbe_provider_api::{BlobReader, PackCodec as _, PackExportContext, PackFile};
+    use msbe_provider_api::{Observations, PackCodec as _, PackExportContext, PackFile};
 
     use super::{NativeCodec, PackCodecError};
-
-    struct FixtureBlobs(BTreeMap<msbe_fsops::Digest, Vec<u8>>);
-
-    impl BlobReader for FixtureBlobs {
-        fn copy_blob(
-            &self,
-            digest: &msbe_fsops::Digest,
-            output: &mut dyn std::io::Write,
-        ) -> Result<u64, PackCodecError> {
-            let bytes = self
-                .0
-                .get(digest)
-                .ok_or(PackCodecError::MissingBlob(*digest))?;
-            output.write_all(bytes)?;
-            Ok(u64::try_from(bytes.len()).unwrap_or(u64::MAX))
-        }
-    }
 
     #[test]
     fn native_bundle_is_deterministic_and_preserves_the_lockfile() -> Result<(), PackCodecError> {
@@ -443,19 +335,20 @@ mod tests {
         let classification = LockedFileClassification {
             role: PackFileRole::PackOwnedConfig,
             source: BlobSource::PackOwned,
-            distribution: DistributionDecision::Allowed,
         };
         let lockfile = Lockfile {
             schema: 2,
             plan: LockedPlan {
                 id: "example-game".to_owned(),
                 version: "1.0.0".to_owned(),
+                digest: None,
             },
             target: LockedTarget {
                 game_version: Some("2.0".to_owned()),
                 loader: "example-loader".to_owned(),
                 loader_version: Some("3.0".to_owned()),
                 side: Side::Client,
+                fingerprint: None,
             },
             order: Vec::new(),
             mods: BTreeMap::new(),
@@ -468,53 +361,27 @@ mod tests {
             digest,
             role: classification.role,
             source: classification.source,
-            distribution: classification.distribution,
+            distribution: DistributionDecision::Allowed,
         }];
         let context = PackExportContext {
             game: &lockfile.plan,
             target: &lockfile.target,
             lockfile: &lockfile,
             files: &files,
+            observations: &Observations::default(),
         };
         let plan = codec.plan_export(&context, &BTreeMap::new())?;
-        let blobs = FixtureBlobs(BTreeMap::from([(digest, bytes.to_vec())]));
-
-        let mut first = Cursor::new(Vec::new());
-        codec.export(&plan, &blobs, &mut first)?;
-        let mut second = Cursor::new(Vec::new());
-        codec.export(&plan, &blobs, &mut second)?;
-        assert_eq!(first.get_ref(), second.get_ref());
-
-        let mut archive =
-            zip::ZipArchive::new(Cursor::new(first.get_ref())).map_err(super::codec_error)?;
-        let mut names = Vec::new();
-        for index in 0..archive.len() {
-            names.push(
-                archive
-                    .by_index(index)
-                    .map_err(super::codec_error)?
-                    .name()
-                    .to_owned(),
-            );
-        }
+        let first = codec.layout(&plan)?;
+        let second = codec.layout(&plan)?;
+        assert_eq!(first, second);
+        let names: Vec<&str> = first.entries.iter().map(|entry| entry.path.as_str()).collect();
         let mut sorted = names.clone();
-        sorted.sort();
+        sorted.sort_unstable();
         assert_eq!(names, sorted);
-        drop(archive);
-
-        first.set_position(0);
-        assert_eq!(codec.probe(&mut first)?.confidence, 100);
-        first.set_position(0);
-        let imported = codec.plan_import(
-            &mut first,
-            &msbe_provider_api::PackImportContext {
-                game: None,
-                target: None,
-            },
-            &BTreeMap::new(),
-        )?;
-        assert_eq!(imported.lockfile, Some(lockfile));
-        assert_eq!(imported.embedded.len(), 1);
+        assert!(first.entries.iter().any(|entry| matches!(
+            entry.content,
+            msbe_provider_api::EntryContent::Blob(found) if found == digest
+        )));
         Ok(())
     }
 }

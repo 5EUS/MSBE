@@ -22,5 +22,6 @@ msbe-provider-modrinth = { version = "0.0.0", path = "../msbe-provider-modrinth"
 thiserror.workspace    = true
 
 [dev-dependencies]
+msbe-fsops       = { version = "0.0.0", path = "../msbe-fsops" }
 msbe-plan-schema = { version = "0.0.0", path = "../msbe-plan-schema" }
 serde_json.workspace = true

@@ -35,12 +35,13 @@ pub use adapter::{
     Adapter, AdapterError, Build, Registration, Releases, Search, Update, UpdateCheck, Updates,
 };
 pub use codec::{
-    BlobReader, BlobSource, BuildPackCodec, DistributionDecision, EmbeddedBlob, ImportedTarget,
-    PackChoice, PackCodec, PackCodecDescriptor, PackCodecError, PackCodecRegistration,
-    PackDirections, PackExportContext, PackExportPlan, PackExportResult, PackFile, PackFileRole,
-    PackImportContext, PackImportPlan, PackOptionConstraint, PackOptionField, PackOptionKind,
+    BlobSource, BuildPackCodec, ContainerKind, DistributionDecision, EmbeddedBlob, EntryContent,
+    EnvironmentRequirement, ImportedTarget, LayoutEntry, Observation, Observations, PackChoice,
+    PackCodec, PackCodecDescriptor, PackCodecError, PackCodecRegistration, PackDirections,
+    PackEntry, PackExportContext, PackExportPlan, PackFile, PackFileRole, PackImportContext,
+    PackImportPlan, PackLayout, PackOptionConstraint, PackOptionField, PackOptionKind,
     PackOptionSchema, PackOptionValue, PackOptions, PackPreset, PackProbe, PackRequirement,
-    PackWarning, PathMode, ReadSeek, SupportSet, WriteSeek,
+    PackWarning, PackInput, PackOrigin, PathMode, RequirementSource, SupportSet,
 };
 pub use endpoint::{EndpointError, JsonEndpoint};
 pub use hashing::hex;

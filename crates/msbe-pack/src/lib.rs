@@ -4,6 +4,7 @@
 //! never downloads content. Modrinth URLs remain metadata for reviewed acquisition, while
 //! CurseForge identifiers remain metadata until an official adapter is available.
 
+pub mod host;
 pub mod native;
 
 use std::{
