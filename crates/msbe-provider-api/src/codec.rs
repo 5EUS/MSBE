@@ -58,6 +58,10 @@ pub trait PackInput {
     /// Validated entries in lexical order.
     fn entries(&self) -> &[PackEntry];
     /// Reads one entry without exceeding either `limit` or the host limit.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PackCodecError`] when the entry is missing or exceeds its limit.
     fn read(&self, path: &RelPath, limit: u64) -> Result<Vec<u8>, PackCodecError>;
 }
 
@@ -714,6 +718,8 @@ pub struct PackExportContext<'a> {
     pub files: &'a [PackFile],
     /// Dated source and policy observations used for planning.
     pub observations: &'a Observations,
+    /// The host's blob-inclusion decision. A codec may embed only digests it permits.
+    pub inclusion: &'a PackInclusion,
 }
 
 impl fmt::Debug for PackExportContext<'_> {
@@ -725,6 +731,7 @@ impl fmt::Debug for PackExportContext<'_> {
             .field("lockfile", self.lockfile)
             .field("files", &self.files)
             .field("observations", &self.observations)
+            .field("inclusion", &self.inclusion)
             .finish()
     }
 }
@@ -733,16 +740,50 @@ impl fmt::Debug for PackExportContext<'_> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PackFile {
-    /// Portable deployment path.
+    /// Portable deployment path, or the artifact source path when `deployed` is false.
     pub path: RelPath,
     /// Exact content digest.
     pub digest: Digest,
     /// Semantic role recorded by core.
     pub role: PackFileRole,
+    /// The profile layer that introduced the file.
+    #[serde(default = "default_layer")]
+    pub layer: String,
+    /// Whether `path` is a deployment destination. Artifact files a plan consumes without
+    /// placing, such as injection inputs, are required blobs but not deployment paths.
+    #[serde(default = "default_deployed")]
+    pub deployed: bool,
     /// How the exact bytes can be reproduced.
     pub source: BlobSource,
     /// Current distribution decision derived from immutable facts and observations.
     pub distribution: DistributionDecision,
+}
+
+fn default_layer() -> String {
+    "changes".to_owned()
+}
+
+const fn default_deployed() -> bool {
+    true
+}
+
+/// The host's decision about which blobs an export embeds and how the rest are reproduced.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackInclusion {
+    /// Digests the host chose to embed.
+    #[serde(default)]
+    pub embed: BTreeSet<Digest>,
+    /// Digests policy allows embedding at all. A codec that cannot represent a requirement may
+    /// embed its digest instead only when it is here; the host rejects any other embedding.
+    #[serde(default)]
+    pub permitted: BTreeSet<Digest>,
+    /// Exact requirements emitted instead of embedded bytes.
+    #[serde(default)]
+    pub requirements: Vec<PackRequirement>,
+    /// Installation-owned inputs the recipient must already have.
+    #[serde(default)]
+    pub environment: Vec<EnvironmentRequirement>,
 }
 
 /// Time-varying facts consulted during export planning.
@@ -762,6 +803,9 @@ pub struct Observation {
     pub observed_at: String,
     /// Whether the exact content was available through its source.
     pub currently_acquirable: bool,
+    /// The provider's current redistribution decision, when one was observed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distribution: Option<DistributionDecision>,
 }
 
 /// A serializable export plan reviewed before writing.
@@ -776,6 +820,9 @@ pub struct PackExportPlan {
     pub embedded: Vec<PackFile>,
     /// Requirements emitted instead of embedded bytes.
     pub requirements: Vec<PackRequirement>,
+    /// Installation-owned inputs recorded by the export.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub environment: Vec<EnvironmentRequirement>,
     /// Non-fatal warnings.
     pub warnings: Vec<PackWarning>,
     /// Codec-private but serializable state used only to build the layout.
@@ -812,6 +859,9 @@ pub enum PackCodecError {
     /// A manifest or entry exceeds a shared limit.
     #[error("pack input exceeds limit: {0}")]
     Limit(String),
+    /// An entry path is absolute, escapes its root, or collides after normalization.
+    #[error("unsafe pack entry path: {0}")]
+    UnsafePath(String),
     /// A required blob is unavailable.
     #[error("required blob {0} is unavailable")]
     MissingBlob(Digest),

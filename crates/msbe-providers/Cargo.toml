@@ -18,6 +18,7 @@ workspace = true
 [dependencies]
 msbe-provider-api      = { version = "0.0.0", path = "../msbe-provider-api" }
 msbe-provider-direct   = { version = "0.0.0", path = "../msbe-provider-direct" }
+msbe-provider-local    = { version = "0.0.0", path = "../msbe-provider-local" }
 msbe-provider-modrinth = { version = "0.0.0", path = "../msbe-provider-modrinth" }
 serde_json.workspace      = true
 thiserror.workspace    = true

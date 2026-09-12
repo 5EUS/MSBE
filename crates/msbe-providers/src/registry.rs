@@ -4,8 +4,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use msbe_provider_api::{
     Adapter, AdapterError, Catalog, ExtensionCapability, ExtensionEnvelope, ExtensionProvide,
-    HostApiRange, HttpClient, ManifestError, Overlay, OverlayError, PackCodec,
-    PackCodecDescriptor, PackCodecError, PackInput, ProgramError, Provider, ProviderProgram,
+    HostApiRange, HttpClient, ManifestError, Overlay, OverlayError, PackCodec, PackCodecDescriptor,
+    PackCodecError, PackCodecRegistration, PackInput, ProgramError, Provider, ProviderProgram,
     ProviderProgramEnvelope, Registration, SigningKey, Target, VerifyingKey,
     model::{Request, SearchResult},
     resolve::{Adapters, ResolveError},
@@ -15,7 +15,10 @@ use thiserror::Error;
 use crate::runtime;
 
 /// The adapters MSBE ships. A new provider is a crate beside these and one line here.
-pub const BUILTIN: &[Registration] = &[msbe_provider_modrinth::REGISTRATION];
+pub const BUILTIN: &[Registration] = &[
+    msbe_provider_modrinth::REGISTRATION,
+    msbe_provider_local::REGISTRATION,
+];
 
 const DIRECT_PROGRAM: &str = r#"
 runtime = "direct-url-v1"
@@ -84,8 +87,11 @@ impl Providers {
     pub fn builtins() -> Result<Self, RegistryError> {
         let direct = builtin_direct_program()?;
         let trust = ProgramTrust {
-            trusted_keys: [("msbe-builtin".to_owned(), builtin_signing_key().verifying_key())]
-                .into(),
+            trusted_keys: [(
+                "msbe-builtin".to_owned(),
+                builtin_signing_key().verifying_key(),
+            )]
+            .into(),
             revoked_signers: BTreeSet::new(),
             revoked_digests: BTreeSet::new(),
         };
@@ -108,6 +114,11 @@ impl Providers {
     ///
     /// Programs are structurally validated, then checked against the caller-supplied signer
     /// allowlist and revocation set before their reviewed runtime is selected.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RegistryError`] for an invalid manifest, overlay, codec or program, an untrusted
+    /// or revoked program, or a provider served twice.
     pub fn new_with_programs(
         registrations: &[Registration],
         manifests: &[&str],
@@ -120,10 +131,14 @@ impl Providers {
             .collect::<Result<_, _>>()?;
         for envelope in &programs {
             if trust.revoked_signers.contains(&envelope.0.signer) {
-                return Err(RegistryError::RevokedProgramSigner(envelope.0.signer.clone()));
+                return Err(RegistryError::RevokedProgramSigner(
+                    envelope.0.signer.clone(),
+                ));
             }
             if trust.revoked_digests.contains(&envelope.0.package_digest) {
-                return Err(RegistryError::RevokedProgram(envelope.0.package_digest.clone()));
+                return Err(RegistryError::RevokedProgram(
+                    envelope.0.package_digest.clone(),
+                ));
             }
             envelope.verify(&trust.trusted_keys)?;
         }
@@ -143,9 +158,7 @@ impl Providers {
             .collect();
         let catalog = Catalog::from_toml(&documents)?;
         let mut adapters = BTreeMap::new();
-        let mut codecs = BTreeMap::new();
-        let mut extensions = BTreeMap::new();
-        let mut media_types = BTreeMap::new();
+        let mut codecs = CodecTable::default();
         let mut overlay = Vec::new();
         for registration in registrations {
             if registration.exception_reason.trim().is_empty() {
@@ -163,49 +176,13 @@ impl Providers {
             }
             adapters.insert(provider.id.clone(), adapter);
             for codec_registration in registration.pack_codecs {
-                let codec = (codec_registration.build)()?;
-                let descriptor = codec.descriptor();
-                descriptor.validate()?;
-                if descriptor.id != codec_registration.id {
-                    return Err(RegistryError::MismatchedCodec {
-                        registration: codec_registration.id.to_owned(),
-                        descriptor: descriptor.id.clone(),
-                    });
-                }
-                if descriptor
-                    .provider
-                    .as_deref()
-                    .is_some_and(|id| id != provider.id)
-                {
-                    return Err(RegistryError::MismatchedCodecProvider {
-                        codec: descriptor.id.clone(),
-                        registration: provider.id.clone(),
-                        descriptor: descriptor.provider.clone(),
-                    });
-                }
-                if codecs.contains_key(&descriptor.id) {
-                    return Err(RegistryError::DuplicateCodec(descriptor.id.clone()));
-                }
-                for extension in &descriptor.extensions {
-                    register_hint(&mut extensions, extension, &descriptor.id)?;
-                }
-                for media_type in &descriptor.media_types {
-                    register_hint(&mut media_types, media_type, &descriptor.id)?;
-                }
-                codecs.insert(
-                    descriptor.id.clone(),
-                    RegisteredCodec {
-                        provider: provider.id.clone(),
-                        codec,
-                    },
-                );
+                codecs.register(&provider.id, codec_registration)?;
             }
             overlay.extend_from_slice(registration.overlay);
         }
         for envelope in programs {
             let provider = catalog.provider(&envelope.0.payload.provider.id)?;
-            let adapter = runtime::build(envelope.0.payload)
-                .map_err(|error| RegistryError::ProgramRuntime(error.to_string()))?;
+            let adapter = runtime::build(envelope.0.payload);
             if adapter.id() != provider.id {
                 return Err(RegistryError::MismatchedAdapter {
                     manifest: provider.id.clone(),
@@ -219,7 +196,7 @@ impl Providers {
         Ok(Self {
             catalog,
             adapters,
-            codecs,
+            codecs: codecs.codecs,
             overlay: Overlay::from_toml(&overlay)?,
         })
     }
@@ -385,8 +362,8 @@ fn builtin_direct_program() -> Result<String, RegistryError> {
 
 fn builtin_signing_key() -> SigningKey {
     SigningKey::from_bytes(&[
-        90, 80, 20, 229, 17, 66, 33, 121, 94, 153, 27, 192, 63, 18, 74, 155, 222, 39, 50,
-        195, 70, 164, 31, 88, 6, 183, 11, 245, 128, 219, 44, 101,
+        90, 80, 20, 229, 17, 66, 33, 121, 94, 153, 27, 192, 63, 18, 74, 155, 222, 39, 50, 195, 70,
+        164, 31, 88, 6, 183, 11, 245, 128, 219, 44, 101,
     ])
 }
 
@@ -411,6 +388,62 @@ fn authorize(provider: &Provider) -> Result<(), RegistryError> {
         });
     }
     Ok(())
+}
+
+/// Reviewed codecs being registered, with the detection hints each has claimed.
+#[derive(Default)]
+struct CodecTable {
+    codecs: BTreeMap<String, RegisteredCodec>,
+    extensions: BTreeMap<String, String>,
+    media_types: BTreeMap<String, String>,
+}
+
+impl CodecTable {
+    /// Builds and validates one codec for `provider`, rejecting mismatched or duplicate IDs and
+    /// claimed hints.
+    fn register(
+        &mut self,
+        provider: &str,
+        registration: &PackCodecRegistration,
+    ) -> Result<(), RegistryError> {
+        let codec = (registration.build)()?;
+        let descriptor = codec.descriptor();
+        descriptor.validate()?;
+        if descriptor.id != registration.id {
+            return Err(RegistryError::MismatchedCodec {
+                registration: registration.id.to_owned(),
+                descriptor: descriptor.id.clone(),
+            });
+        }
+        if descriptor
+            .provider
+            .as_deref()
+            .is_some_and(|id| id != provider)
+        {
+            return Err(RegistryError::MismatchedCodecProvider {
+                codec: descriptor.id.clone(),
+                registration: provider.to_owned(),
+                descriptor: descriptor.provider.clone(),
+            });
+        }
+        if self.codecs.contains_key(&descriptor.id) {
+            return Err(RegistryError::DuplicateCodec(descriptor.id.clone()));
+        }
+        for extension in &descriptor.extensions {
+            register_hint(&mut self.extensions, extension, &descriptor.id)?;
+        }
+        for media_type in &descriptor.media_types {
+            register_hint(&mut self.media_types, media_type, &descriptor.id)?;
+        }
+        self.codecs.insert(
+            descriptor.id.clone(),
+            RegisteredCodec {
+                provider: provider.to_owned(),
+                codec,
+            },
+        );
+        Ok(())
+    }
 }
 
 fn register_hint(
@@ -537,12 +570,11 @@ mod tests {
 
     use msbe_plan_schema::Side;
     use msbe_provider_api::{
-        Adapter, AdapterError, ContainerKind, HttpClient, HttpError, PackCodec,
-        PackCodecDescriptor, PackCodecError, PackCodecRegistration, PackDirections, PackEntry,
-        PackExportContext, PackExportPlan, PackImportContext, PackImportPlan, PackInput,
-        PackLayout, PackOptionSchema, PackOptions, PackProbe, PackageId, ProgramError, Provider,
-        ProviderProgram,
-        ExtensionCapability, ExtensionEnvelope, ExtensionProvide, HostApiRange,
+        Adapter, AdapterError, ContainerKind, ExtensionCapability, ExtensionEnvelope,
+        ExtensionProvide, HostApiRange, HttpClient, HttpError, PackCodec, PackCodecDescriptor,
+        PackCodecError, PackCodecRegistration, PackDirections, PackEntry, PackExportContext,
+        PackExportPlan, PackImportContext, PackImportPlan, PackInput, PackLayout, PackOptionSchema,
+        PackOptions, PackProbe, PackageId, ProgramError, Provider, ProviderProgram,
         ProviderProgramEnvelope, Registration, SigningKey, SupportSet, Target, model::Request,
     };
     use serde_json::json;
@@ -760,7 +792,10 @@ mod tests {
             id: "test-provider".to_owned(),
             version: "1.0.0".to_owned(),
             provides: vec![ExtensionProvide::ProviderProgramV1],
-            host_api: HostApiRange { minimum: 1, maximum: 1 },
+            host_api: HostApiRange {
+                minimum: 1,
+                maximum: 1,
+            },
             capabilities: vec![ExtensionCapability::Network],
             signer: "test-root".to_owned(),
             signature: "00".repeat(64),
@@ -770,13 +805,15 @@ mod tests {
         toml::to_string(&ProviderProgramEnvelope(envelope)).unwrap()
     }
 
-    fn test_signing_key() -> SigningKey { SigningKey::from_bytes(&[7; 32]) }
+    fn test_signing_key() -> SigningKey {
+        SigningKey::from_bytes(&[7; 32])
+    }
 
     fn trust() -> ProgramTrust {
         ProgramTrust {
             trusted_keys: [("test-root".to_owned(), test_signing_key().verifying_key())].into(),
-            revoked_signers: Default::default(),
-            revoked_digests: Default::default(),
+            revoked_signers: std::collections::BTreeSet::default(),
+            revoked_digests: std::collections::BTreeSet::default(),
         }
     }
 
@@ -881,7 +918,8 @@ mod tests {
         ));
         let digest = ProviderProgramEnvelope::from_toml(&document)
             .unwrap()
-            .0.package_digest;
+            .0
+            .package_digest;
         let mut revoked = trust();
         revoked.revoked_digests.insert(digest);
         assert!(matches!(
@@ -972,7 +1010,7 @@ mod tests {
             side: Side::Client,
         };
         let hits = providers.search("catalog", &SearchHttp, "test", &target, 5)?;
-        assert_eq!(hits[0].title, "Sodium");
+        assert_eq!(hits.first().map(|hit| hit.title.as_str()), Some("Sodium"));
         Ok(())
     }
 

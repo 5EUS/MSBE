@@ -30,7 +30,7 @@ pub const USER_AGENT: &str = concat!(
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// The longest one request, including its body, may take. Large mods on slow links need room.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+const REQUEST_TIMEOUT: Duration = Duration::from_mins(15);
 
 /// An HTTPS client for providers.
 pub struct UreqClient {

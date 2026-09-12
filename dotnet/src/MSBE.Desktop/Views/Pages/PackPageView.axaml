@@ -1,13 +1,30 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:MSBE.Desktop.ViewModels"
+             xmlns:client="using:MSBE.Client"
+             xmlns:sys="using:System"
              x:Class="MSBE.Desktop.Views.Pages.PackPageView"
              x:DataType="vm:MainViewModel">
-    <Grid RowDefinitions="Auto,*,Auto" RowSpacing="16">
+    <UserControl.Resources>
+        <DataTemplate x:Key="PreviewItemTemplate" x:DataType="vm:PackPreviewItem">
+            <Grid ColumnDefinitions="170,*" ColumnSpacing="10">
+                <TextBlock Foreground="#AEB4C0" Text="{Binding Group}" />
+                <TextBlock Grid.Column="1" FontFamily="Cascadia Mono, Monospace" Text="{Binding Subject}" TextTrimming="CharacterEllipsis" />
+            </Grid>
+        </DataTemplate>
+        <DataTemplate x:Key="IssueTemplate" x:DataType="vm:PackIssueItem">
+            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8" Margin="0,2">
+                <TextBlock FontWeight="SemiBold" Text="{Binding Severity}" />
+                <TextBlock Grid.Column="1" TextWrapping="Wrap" Text="{Binding Message}" ToolTip.Tip="{Binding Code}" />
+            </Grid>
+        </DataTemplate>
+    </UserControl.Resources>
+
+    <Grid RowDefinitions="Auto,Auto,*" RowSpacing="14">
         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
             <StackPanel Spacing="3">
-                <TextBlock Classes="sectionHeading" Text="Pack configuration" />
-                <TextBlock Classes="caption" Text="Own exact config files, validate the resolved profile, and export a reproducible pack." />
+                <TextBlock Classes="sectionHeading" Text="Packs" />
+                <TextBlock Classes="caption" Text="Own config files, then export, import, update or capture through the formats the daemon discovers." />
             </StackPanel>
             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                 <TextBlock Classes="field-label" Text="PROFILE" VerticalAlignment="Center" />
@@ -15,94 +32,230 @@
             </StackPanel>
         </Grid>
 
-        <Grid Grid.Row="1" ColumnDefinitions="260,*" ColumnSpacing="16" IsEnabled="{Binding IsPackConfigurationSupported}">
-            <Grid RowDefinitions="Auto,*,Auto" RowSpacing="8">
-                <TextBlock Classes="field-label" Text="PACK-OWNED FILES" />
-                <ListBox Grid.Row="1"
-                         Classes="pack-config-list"
-                         ItemsSource="{Binding PackConfigs}"
-                         SelectedItem="{Binding SelectedPackConfig}">
-                    <ListBox.ItemTemplate>
-                        <DataTemplate x:DataType="vm:PackConfigItem">
-                            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
-                                <LucideIcon Kind="FileCog" Size="17" StrokeWidth="1.7" Foreground="#9FC9BA" />
-                                <StackPanel Grid.Column="1" Spacing="2">
-                                    <TextBlock Text="{Binding Path}" TextTrimming="CharacterEllipsis" />
-                                    <TextBlock Classes="caption" FontFamily="Cascadia Mono, Monospace" Text="{Binding Digest}" TextTrimming="CharacterEllipsis" />
-                                </StackPanel>
-                            </Grid>
-                        </DataTemplate>
-                    </ListBox.ItemTemplate>
-                </ListBox>
-                <Grid Grid.Row="2" ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                    <Button Classes="secondary-button" Command="{Binding NewPackConfigCommand}">
-                        <StackPanel Orientation="Horizontal" Spacing="7">
-                            <LucideIcon Kind="Plus" Size="16" />
-                            <TextBlock Text="New config" />
-                        </StackPanel>
-                    </Button>
-                    <Button Grid.Column="1"
-                            Classes="danger-button"
-                            Command="{Binding RemovePackConfigCommand}"
-                            IsEnabled="{Binding SelectedPackConfig, Converter={x:Static ObjectConverters.IsNotNull}}"
-                            ToolTip.Tip="Remove selected config">
-                        <LucideIcon Kind="Trash" Size="16" />
-                    </Button>
-                </Grid>
-            </Grid>
-
-            <Grid Grid.Column="1" RowDefinitions="Auto,*,Auto" RowSpacing="8">
-                <StackPanel Spacing="5">
-                    <TextBlock Classes="field-label" Text="GAME-RELATIVE PATH" />
-                    <TextBox Text="{Binding PackConfigPath}" PlaceholderText="config/example.toml" />
-                </StackPanel>
-                <TextBox Grid.Row="1"
-                         Classes="config-editor"
-                         AcceptsReturn="True"
-                         MinHeight="240"
-                         Text="{Binding PackConfigContent}"
-                         TextWrapping="NoWrap"
-                         PlaceholderText="Config contents" />
-                <Button Grid.Row="2"
-                        Classes="primary-button"
-                        HorizontalAlignment="Right"
-                        Command="{Binding SavePackConfigCommand}"
-                        IsEnabled="{Binding !IsPackBusy}">
-                    <StackPanel Orientation="Horizontal" Spacing="7">
-                        <LucideIcon Kind="Save" Size="16" />
-                        <TextBlock Text="Save config" />
-                    </StackPanel>
-                </Button>
-            </Grid>
-        </Grid>
-
-        <Grid Grid.Row="2" RowDefinitions="Auto,Auto" RowSpacing="10">
+        <StackPanel Grid.Row="1" Spacing="8">
             <Border Classes="error-banner" IsVisible="{Binding HasPackError}">
                 <TextBlock Text="{Binding PackError}" TextWrapping="Wrap" />
             </Border>
-            <Grid Grid.Row="1" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10" IsEnabled="{Binding IsPackConfigurationSupported}">
-                <Button Classes="secondary-button" Command="{Binding ValidatePackCommand}" IsEnabled="{Binding !IsPackBusy}">
-                    <StackPanel Orientation="Horizontal" Spacing="7">
-                        <LucideIcon Kind="BadgeCheck" Size="16" />
-                        <TextBlock Text="Validate &amp; lock" />
-                    </StackPanel>
-                </Button>
-                <StackPanel Grid.Column="1" Spacing="3">
-                    <TextBlock Classes="field-label" Text="EXPORT DESTINATION" />
-                    <TextBox Text="{Binding PackOutputPath}" PlaceholderText="/path/to/pack.mrpack" />
-                    <TextBlock Classes="caption" IsVisible="{Binding HasPackValidation}" Text="{Binding PackLockfilePath, StringFormat='Lockfile: {0}'}" TextTrimming="CharacterEllipsis" />
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10" IsVisible="{Binding IsPackJobRunning}">
+                <StackPanel Spacing="4">
+                    <TextBlock Classes="caption" Text="{Binding PackJobMessage}" />
+                    <ProgressBar Minimum="0" Maximum="1" Value="{Binding PackJobProgress}" />
                 </StackPanel>
-                <Button Grid.Column="2"
-                        Classes="primary-button"
-                        Command="{Binding ExportPackCommand}"
-                        IsEnabled="{Binding HasPackValidation}"
-                        VerticalAlignment="Bottom">
-                    <StackPanel Orientation="Horizontal" Spacing="7">
-                        <LucideIcon Kind="PackageCheck" Size="16" />
-                        <TextBlock Text="Export .mrpack" />
-                    </StackPanel>
-                </Button>
+                <Button Grid.Column="1" Classes="secondary-button" Content="Cancel" Command="{Binding CancelPackJobCommand}" />
             </Grid>
-        </Grid>
+        </StackPanel>
+
+        <TabControl Grid.Row="2">
+            <TabItem Header="Configs">
+                <Grid Margin="0,12,0,0" RowDefinitions="*,Auto" RowSpacing="12" IsEnabled="{Binding IsPackConfigurationSupported}">
+                    <Grid ColumnDefinitions="260,*" ColumnSpacing="16">
+                        <Grid RowDefinitions="Auto,*,Auto" RowSpacing="8">
+                            <TextBlock Classes="field-label" Text="PACK-OWNED FILES" />
+                            <ListBox Grid.Row="1"
+                                     Classes="pack-config-list"
+                                     ItemsSource="{Binding PackConfigs}"
+                                     SelectedItem="{Binding SelectedPackConfig}">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:PackConfigItem">
+                                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
+                                            <LucideIcon Kind="FileCog" Size="17" StrokeWidth="1.7" Foreground="#9FC9BA" />
+                                            <StackPanel Grid.Column="1" Spacing="2">
+                                                <TextBlock Text="{Binding Path}" TextTrimming="CharacterEllipsis" />
+                                                <TextBlock Classes="caption" FontFamily="Cascadia Mono, Monospace" Text="{Binding Digest}" TextTrimming="CharacterEllipsis" />
+                                            </StackPanel>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                            <Grid Grid.Row="2" ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                <Button Classes="secondary-button" Command="{Binding NewPackConfigCommand}">
+                                    <StackPanel Orientation="Horizontal" Spacing="7">
+                                        <LucideIcon Kind="Plus" Size="16" />
+                                        <TextBlock Text="New config" />
+                                    </StackPanel>
+                                </Button>
+                                <Button Grid.Column="1"
+                                        Classes="danger-button"
+                                        Command="{Binding RemovePackConfigCommand}"
+                                        IsEnabled="{Binding SelectedPackConfig, Converter={x:Static ObjectConverters.IsNotNull}}"
+                                        ToolTip.Tip="Remove selected config">
+                                    <LucideIcon Kind="Trash" Size="16" />
+                                </Button>
+                            </Grid>
+                        </Grid>
+
+                        <Grid Grid.Column="1" RowDefinitions="Auto,*,Auto" RowSpacing="8">
+                            <StackPanel Spacing="5">
+                                <TextBlock Classes="field-label" Text="GAME-RELATIVE PATH" />
+                                <TextBox Text="{Binding PackConfigPath}" PlaceholderText="config/example.toml" />
+                            </StackPanel>
+                            <TextBox Grid.Row="1"
+                                     Classes="config-editor"
+                                     AcceptsReturn="True"
+                                     MinHeight="240"
+                                     Text="{Binding PackConfigContent}"
+                                     TextWrapping="NoWrap"
+                                     PlaceholderText="Config contents" />
+                            <Button Grid.Row="2"
+                                    Classes="primary-button"
+                                    HorizontalAlignment="Right"
+                                    Command="{Binding SavePackConfigCommand}"
+                                    IsEnabled="{Binding !IsPackBusy}">
+                                <StackPanel Orientation="Horizontal" Spacing="7">
+                                    <LucideIcon Kind="Save" Size="16" />
+                                    <TextBlock Text="Save config" />
+                                </StackPanel>
+                            </Button>
+                        </Grid>
+                    </Grid>
+
+                    <Grid Grid.Row="1" ColumnDefinitions="Auto,*" ColumnSpacing="10">
+                        <Button Classes="secondary-button" Command="{Binding ValidatePackCommand}" IsEnabled="{Binding !IsPackBusy}">
+                            <StackPanel Orientation="Horizontal" Spacing="7">
+                                <LucideIcon Kind="BadgeCheck" Size="16" />
+                                <TextBlock Text="Validate &amp; lock" />
+                            </StackPanel>
+                        </Button>
+                        <TextBlock Grid.Column="1" Classes="caption" VerticalAlignment="Center" IsVisible="{Binding HasPackValidation}" Text="{Binding PackLockfilePath, StringFormat='Lockfile: {0}'}" TextTrimming="CharacterEllipsis" />
+                    </Grid>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="Export" IsEnabled="{Binding IsTypedPackSupported}">
+                <Grid Margin="0,12,0,0" ColumnDefinitions="340,*" ColumnSpacing="16">
+                    <ScrollViewer>
+                        <StackPanel Spacing="8" Margin="0,0,10,0">
+                            <TextBlock Classes="field-label" Text="FORMAT" />
+                            <ComboBox HorizontalAlignment="Stretch" ItemsSource="{Binding ExportCodecs}" SelectedItem="{Binding SelectedExportCodec}">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate x:DataType="client:PackCodecInfo">
+                                        <TextBlock Text="{Binding Name}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                            <TextBlock Classes="field-label" Text="PRESET" />
+                            <ComboBox HorizontalAlignment="Stretch" PlaceholderText="Defaults" ItemsSource="{Binding ExportPresets}" SelectedItem="{Binding SelectedExportPreset}">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate x:DataType="client:PackPreset">
+                                        <TextBlock Text="{Binding Name}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                            <ItemsControl ItemsSource="{Binding ExportOptions}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:PackOptionItem">
+                                        <StackPanel Spacing="3" Margin="0,4">
+                                            <TextBlock Classes="field-label" Text="{Binding Label}" />
+                                            <CheckBox IsVisible="{Binding IsBoolean}" IsChecked="{Binding BooleanValue}" Content="{Binding Description}" />
+                                            <ComboBox HorizontalAlignment="Stretch" IsVisible="{Binding IsChoice}" ItemsSource="{Binding Choices}" SelectedItem="{Binding SelectedChoice}">
+                                                <ComboBox.ItemTemplate>
+                                                    <DataTemplate x:DataType="client:PackOptionChoice">
+                                                        <TextBlock Text="{Binding Label}" />
+                                                    </DataTemplate>
+                                                </ComboBox.ItemTemplate>
+                                            </ComboBox>
+                                            <TextBox IsVisible="{Binding IsText}" Text="{Binding TextValue}" />
+                                            <TextBlock Classes="caption" IsVisible="{Binding !IsBoolean}" Text="{Binding Description}" TextWrapping="Wrap" />
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <TextBlock Classes="field-label" Text="DESTINATION" />
+                            <TextBox Text="{Binding PackOutputPath}" PlaceholderText="Absolute path of the pack to write" />
+                            <Button Classes="secondary-button" Command="{Binding PreviewExportCommand}" IsEnabled="{Binding !IsPackBusy}">
+                                <StackPanel Orientation="Horizontal" Spacing="7">
+                                    <LucideIcon Kind="BadgeCheck" Size="16" />
+                                    <TextBlock Text="Preview export" />
+                                </StackPanel>
+                            </Button>
+                        </StackPanel>
+                    </ScrollViewer>
+
+                    <Grid Grid.Column="1" RowDefinitions="Auto,Auto,*,Auto,Auto" RowSpacing="8">
+                        <TextBlock Classes="field-label" Text="PREVIEW" />
+                        <TextBlock Grid.Row="1" Classes="caption" Text="{Binding ExportSummary}" />
+                        <ListBox Grid.Row="2" Classes="preview-list" ItemsSource="{Binding ExportPreviewItems}" ItemTemplate="{StaticResource PreviewItemTemplate}" />
+                        <StackPanel Grid.Row="3" Spacing="4">
+                            <ItemsControl ItemsSource="{Binding ExportIssues}" ItemTemplate="{StaticResource IssueTemplate}" />
+                            <ItemsControl ItemsSource="{Binding ExportObservations}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="sys:String">
+                                        <TextBlock Classes="caption" Text="{Binding}" />
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                        <Button Grid.Row="4" HorizontalAlignment="Right" Classes="primary-button" Command="{Binding ExecuteExportCommand}" IsEnabled="{Binding CanExecuteExport}">
+                            <StackPanel Orientation="Horizontal" Spacing="7">
+                                <LucideIcon Kind="PackageCheck" Size="16" />
+                                <TextBlock Text="Export" />
+                            </StackPanel>
+                        </Button>
+                    </Grid>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="Import &amp; update" IsEnabled="{Binding IsTypedPackSupported}">
+                <Grid Margin="0,12,0,0" RowDefinitions="Auto,Auto,*,Auto,Auto" RowSpacing="8">
+                    <Grid ColumnDefinitions="*,180,Auto,Auto" ColumnSpacing="8">
+                        <StackPanel Spacing="3">
+                            <TextBlock Classes="field-label" Text="PACK FILE" />
+                            <TextBox Text="{Binding PackImportPath}" PlaceholderText="Absolute path of the pack" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Spacing="3">
+                            <TextBlock Classes="field-label" Text="NEW PROFILE" />
+                            <TextBox Text="{Binding PackImportProfile}" />
+                        </StackPanel>
+                        <Button Grid.Column="2" VerticalAlignment="Bottom" Classes="secondary-button" Content="Preview import" Command="{Binding PreviewImportCommand}" IsEnabled="{Binding !IsPackBusy}" />
+                        <Button Grid.Column="3" VerticalAlignment="Bottom" Classes="secondary-button" Content="Preview update of profile" Command="{Binding PreviewUpdateCommand}" IsEnabled="{Binding !IsPackBusy}" />
+                    </Grid>
+                    <TextBlock Grid.Row="1" Classes="caption" TextWrapping="Wrap" Text="An import creates a profile whose pack layer is the pack. An update replaces the selected profile's pack layer and reapplies your changes; a change that no longer applies waits for your resolution." />
+                    <ListBox Grid.Row="2" Classes="preview-list" ItemsSource="{Binding ImportPreviewItems}" ItemTemplate="{StaticResource PreviewItemTemplate}" />
+                    <ItemsControl Grid.Row="3" ItemsSource="{Binding ImportConflicts}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:PackConflictItem">
+                                <Grid ColumnDefinitions="*,140" ColumnSpacing="10" Margin="0,3">
+                                    <StackPanel Spacing="2">
+                                        <TextBlock FontWeight="SemiBold" Text="{Binding Id}" />
+                                        <TextBlock Classes="caption" TextWrapping="Wrap" Text="{Binding Reason}" />
+                                    </StackPanel>
+                                    <ComboBox Grid.Column="1" PlaceholderText="Resolve" ItemsSource="{Binding Choices}" SelectedItem="{Binding Resolution}" />
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <Grid Grid.Row="4" ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                        <ItemsControl ItemsSource="{Binding ImportIssues}" ItemTemplate="{StaticResource IssueTemplate}" />
+                        <Button Grid.Column="1" VerticalAlignment="Bottom" Classes="primary-button" Content="Run" Command="{Binding ExecuteImportCommand}" IsEnabled="{Binding CanExecuteImport}" />
+                    </Grid>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="Capture" IsEnabled="{Binding IsTypedPackSupported}">
+                <Grid Margin="0,12,0,0" RowDefinitions="Auto,*,Auto" RowSpacing="8">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                        <TextBlock Classes="caption" VerticalAlignment="Center" TextWrapping="Wrap" Text="Adopt files the game changed beneath the plan's mutable roots into the deployed profile as pack-owned files. Nothing outside those roots is ever captured." />
+                        <Button Grid.Column="1" Classes="secondary-button" Content="Preview capture" Command="{Binding PreviewCaptureCommand}" IsEnabled="{Binding !IsPackBusy}" />
+                    </Grid>
+                    <ListBox Grid.Row="1" Classes="preview-list" ItemsSource="{Binding CaptureItems}">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate x:DataType="vm:PackCaptureItem">
+                                <StackPanel Spacing="4">
+                                    <Grid ColumnDefinitions="90,*" ColumnSpacing="10">
+                                        <TextBlock Foreground="#AEB4C0" Text="{Binding Kind}" />
+                                        <TextBlock Grid.Column="1" FontFamily="Cascadia Mono, Monospace" Text="{Binding Path}" TextTrimming="CharacterEllipsis" />
+                                    </Grid>
+                                    <TextBlock FontFamily="Cascadia Mono, Monospace"
+                                               FontSize="12"
+                                               Text="{Binding Diff}"
+                                               IsVisible="{Binding Diff, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                    <Button Grid.Row="2" HorizontalAlignment="Right" Classes="primary-button" Content="Capture" Command="{Binding ExecuteCaptureCommand}" IsEnabled="{Binding CanExecuteCapture}" />
+                </Grid>
+            </TabItem>
+        </TabControl>
     </Grid>
 </UserControl>

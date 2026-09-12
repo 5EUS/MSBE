@@ -7,7 +7,8 @@ use msbe_provider_api::{
     Availability, ContainerKind, EntryContent, ImportedTarget, LayoutEntry, PackCodec,
     PackCodecDescriptor, PackCodecError, PackDirections, PackExportContext, PackExportPlan,
     PackFile, PackImportContext, PackImportPlan, PackInput, PackLayout, PackOptionSchema,
-    PackOptions, PackOrigin, PackProbe, PackRequirement, RequirementSource, SupportSet,
+    PackOptions, PackOrigin, PackProbe, PackRequirement, PackWarning, RequirementSource,
+    SupportSet,
 };
 use serde::{Deserialize, Serialize};
 
@@ -78,9 +79,8 @@ impl PackCodec for ModrinthCodec {
         &self,
         input: &dyn PackInput,
         context: &PackImportContext,
-        options: &PackOptions,
+        _: &PackOptions,
     ) -> Result<PackImportPlan, PackCodecError> {
-        self.descriptor.option_schema.normalize(options)?;
         if input.container() != ContainerKind::Zip {
             return Err(PackCodecError::FormatMismatch);
         }
@@ -106,7 +106,7 @@ impl PackCodec for ModrinthCodec {
                     hashes: file.hashes,
                     destination: Some(file.path),
                     side,
-                    answers: Default::default(),
+                    answers: BTreeMap::default(),
                     sources: vec![RequirementSource::Direct {
                         urls: file.downloads,
                     }],
@@ -136,13 +136,17 @@ impl PackCodec for ModrinthCodec {
         context: &PackExportContext<'_>,
         options: &PackOptions,
     ) -> Result<PackExportPlan, PackCodecError> {
-        let options = self.descriptor.option_schema.normalize(options)?;
         let game_version = context.target.game_version.clone().ok_or_else(|| {
             PackCodecError::UnsupportedTarget {
                 game: context.game.id.clone(),
                 loader: context.target.loader.clone(),
             }
         })?;
+        if !context.inclusion.environment.is_empty() {
+            return Err(PackCodecError::Unreproducible(
+                "Modrinth packs cannot declare installation-owned inputs".to_owned(),
+            ));
+        }
         let mut dependencies = BTreeMap::from([("minecraft".to_owned(), game_version)]);
         if let Some(loader_version) = &context.target.loader_version {
             dependencies.insert(
@@ -150,17 +154,52 @@ impl PackCodec for ModrinthCodec {
                 loader_version.clone(),
             );
         }
+        // An index can only reference direct downloads. A requirement without one is embedded as
+        // an override instead, which the host allows only for digests policy permits embedding.
+        let mut embed = context.inclusion.embed.clone();
+        let mut files = Vec::new();
+        let mut requirements = Vec::new();
+        let mut warnings = Vec::new();
+        for requirement in &context.inclusion.requirements {
+            match index_file(requirement) {
+                Ok(file) => {
+                    files.push(file);
+                    requirements.push(requirement.clone());
+                }
+                Err(error) => {
+                    let Some(digest) = requirement
+                        .digest
+                        .filter(|digest| context.inclusion.permitted.contains(digest))
+                        .filter(|_| requirement.destination.is_some())
+                    else {
+                        return Err(error);
+                    };
+                    embed.insert(digest);
+                    warnings.push(PackWarning {
+                        code: "embedded-reference".to_owned(),
+                        message: format!("{error}; it is embedded as an override instead"),
+                    });
+                }
+            }
+        }
         let state = serde_json::to_value(ExportState {
             name: None,
             dependencies,
+            files,
         })
         .map_err(codec_error)?;
         Ok(PackExportPlan {
             codec: CODEC_ID.to_owned(),
-            options,
-            embedded: context.files.to_vec(),
-            requirements: Vec::new(),
-            warnings: Vec::new(),
+            options: options.clone(),
+            embedded: context
+                .files
+                .iter()
+                .filter(|file| file.deployed && embed.contains(&file.digest))
+                .cloned()
+                .collect(),
+            requirements,
+            environment: Vec::new(),
+            warnings,
             codec_state: state,
         })
     }
@@ -178,6 +217,19 @@ impl PackCodec for ModrinthCodec {
             game: "minecraft",
             version_id: "1.0.0",
             name: state.name.as_deref(),
+            files: state
+                .files
+                .iter()
+                .map(|file| ExportIndexFile {
+                    path: &file.path,
+                    hashes: &file.hashes,
+                    env: ExportEnvironment {
+                        client: "required",
+                        server: "required",
+                    },
+                    downloads: &file.downloads,
+                })
+                .collect(),
             dependencies: state.dependencies,
         })
         .map_err(codec_error)?;
@@ -221,6 +273,34 @@ fn no_match() -> PackProbe {
         confidence: 0,
         reason: None,
     }
+}
+
+/// A referenced file as an index entry. Modrinth indexes can only name direct HTTPS downloads.
+fn index_file(requirement: &PackRequirement) -> Result<ExportFile, PackCodecError> {
+    let path = requirement.destination.clone().ok_or_else(|| {
+        PackCodecError::Unreproducible("a referenced file has no deployment path".to_owned())
+    })?;
+    let downloads: Vec<String> = requirement
+        .sources
+        .iter()
+        .filter_map(|source| match source {
+            RequirementSource::Direct { urls } => Some(urls),
+            RequirementSource::Provider { .. } | RequirementSource::UserAction { .. } => None,
+        })
+        .flatten()
+        .filter(|url| url.starts_with("https://"))
+        .cloned()
+        .collect();
+    if downloads.is_empty() {
+        return Err(PackCodecError::Unreproducible(format!(
+            "{path} has no direct HTTPS download a Modrinth index can reference; embed it with blob-mode complete"
+        )));
+    }
+    Ok(ExportFile {
+        path,
+        hashes: requirement.hashes.clone(),
+        downloads,
+    })
 }
 
 fn loader_dependency(loader: &str) -> String {
@@ -305,6 +385,15 @@ enum EnvironmentState {
 struct ExportState {
     name: Option<String>,
     dependencies: BTreeMap<String, String>,
+    #[serde(default)]
+    files: Vec<ExportFile>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ExportFile {
+    path: RelPath,
+    hashes: BTreeMap<String, String>,
+    downloads: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -315,7 +404,22 @@ struct ExportIndex<'a> {
     version_id: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<&'a str>,
+    files: Vec<ExportIndexFile<'a>>,
     dependencies: BTreeMap<String, String>,
+}
+
+#[derive(Serialize)]
+struct ExportIndexFile<'a> {
+    path: &'a RelPath,
+    hashes: &'a BTreeMap<String, String>,
+    env: ExportEnvironment,
+    downloads: &'a [String],
+}
+
+#[derive(Serialize)]
+struct ExportEnvironment {
+    client: &'static str,
+    server: &'static str,
 }
 
 #[cfg(test)]
@@ -363,9 +467,131 @@ mod tests {
             },
             &PackOptions::new(),
         )?;
-        assert_eq!(plan.requirements.len(), 1);
-        assert_eq!(plan.requirements[0].side, Availability::Required);
-        assert_eq!(plan.requirements[0].hashes["sha512"], "abc");
+        let [requirement] = plan.requirements.as_slice() else {
+            panic!("expected one requirement, got {:?}", plan.requirements);
+        };
+        assert_eq!(requirement.side, Availability::Required);
+        assert_eq!(
+            requirement.hashes.get("sha512").map(String::as_str),
+            Some("abc")
+        );
+        Ok(())
+    }
+
+    /// An empty lockfile for a Fabric client on 1.21.1.
+    fn fabric_lockfile() -> msbe_core::instance::Lockfile {
+        use msbe_core::instance::{LockedPlan, LockedTarget, Lockfile};
+
+        Lockfile {
+            schema: 2,
+            plan: LockedPlan {
+                id: "minecraft".to_owned(),
+                version: "0.2.0".to_owned(),
+                digest: None,
+            },
+            target: LockedTarget {
+                game_version: Some("1.21.1".to_owned()),
+                loader: "fabric".to_owned(),
+                loader_version: Some("0.16.10".to_owned()),
+                side: msbe_plan_schema::Side::Client,
+                fingerprint: None,
+            },
+            order: Vec::new(),
+            mods: BTreeMap::new(),
+            components: BTreeMap::new(),
+            deployment: BTreeMap::new(),
+            classifications: BTreeMap::new(),
+            layers: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn export_references_direct_downloads_and_embeds_only_permitted_files()
+    -> Result<(), PackCodecError> {
+        use std::collections::BTreeSet;
+
+        use msbe_fsops::Digest;
+        use msbe_provider_api::{
+            BlobSource, DistributionDecision, Observations, PackExportContext, PackFile,
+            PackFileRole, PackInclusion,
+        };
+
+        let path = |raw: &str| RelPath::new(raw).map_err(codec_error);
+        let config = Digest::of_bytes(b"config");
+        let local = Digest::of_bytes(b"local");
+        let referenced = Digest::of_bytes(b"referenced");
+        let lockfile = fabric_lockfile();
+        let file = |raw: &str, digest, role, source| -> Result<PackFile, PackCodecError> {
+            Ok(PackFile {
+                path: path(raw)?,
+                digest,
+                role,
+                layer: "changes".to_owned(),
+                deployed: true,
+                source,
+                distribution: DistributionDecision::Unknown,
+            })
+        };
+        let files = [
+            file(
+                "config/a.toml",
+                config,
+                PackFileRole::PackOwnedConfig,
+                BlobSource::PackOwned,
+            )?,
+            file(
+                "mods/local.jar",
+                local,
+                PackFileRole::LocalArtifact,
+                BlobSource::Local,
+            )?,
+        ];
+        let inclusion = PackInclusion {
+            embed: BTreeSet::from([config]),
+            permitted: BTreeSet::from([config, local]),
+            requirements: vec![PackRequirement {
+                digest: Some(referenced),
+                hashes: BTreeMap::from([("sha512".to_owned(), "abc".to_owned())]),
+                destination: Some(path("mods/referenced.jar")?),
+                side: Availability::Required,
+                answers: BTreeMap::default(),
+                sources: vec![RequirementSource::Direct {
+                    urls: vec!["https://cdn.example.test/referenced.jar".to_owned()],
+                }],
+            }],
+            environment: Vec::new(),
+        };
+        let codec = ModrinthCodec::new();
+        let plan = codec.plan_export(
+            &PackExportContext {
+                game: &lockfile.plan,
+                target: &lockfile.target,
+                lockfile: &lockfile,
+                files: &files,
+                observations: &Observations::default(),
+                inclusion: &inclusion,
+            },
+            &PackOptions::new(),
+        )?;
+        let layout = codec.layout(&plan)?;
+        let paths: Vec<&str> = layout
+            .entries
+            .iter()
+            .map(|entry| entry.path.as_str())
+            .collect();
+        assert_eq!(paths, ["modrinth.index.json", "overrides/config/a.toml"]);
+        let Some(EntryContent::Inline(index)) = layout.entries.first().map(|entry| &entry.content)
+        else {
+            panic!("the index is generated inline");
+        };
+        let index: serde_json::Value = serde_json::from_slice(index).map_err(codec_error)?;
+        let text = |pointer: &str| index.pointer(pointer).and_then(serde_json::Value::as_str);
+        assert_eq!(text("/files/0/path"), Some("mods/referenced.jar"));
+        assert_eq!(
+            text("/files/0/downloads/0"),
+            Some("https://cdn.example.test/referenced.jar")
+        );
+        assert_eq!(text("/dependencies/fabric-loader"), Some("0.16.10"));
         Ok(())
     }
 

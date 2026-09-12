@@ -16,10 +16,10 @@ use serde_json::Value;
 const JSON_LIMIT: u64 = 1_048_576;
 
 /// Builds an adapter from a structurally validated provider program.
-pub(super) fn build(program: ProviderProgram) -> Result<Box<dyn Adapter>, RuntimeError> {
+pub(super) fn build(program: ProviderProgram) -> Box<dyn Adapter> {
+    // Both runtimes share one adapter; `runtime` selects its behavior per operation.
     match program.runtime {
-        RuntimeKind::DirectUrlV1 => Ok(Box::new(ProgramAdapter { program })),
-        RuntimeKind::CatalogV1 => Ok(Box::new(ProgramAdapter { program })),
+        RuntimeKind::DirectUrlV1 | RuntimeKind::CatalogV1 => Box::new(ProgramAdapter { program }),
     }
 }
 
@@ -187,7 +187,7 @@ impl Catalog<'_> {
         serde_json::from_slice(&bytes)
             .map_err(|error| AdapterError::specific(RuntimeError::Json(error.to_string())))
     }
-    fn text(&self, value: &Value, pointer_value: Option<&str>) -> Result<String, AdapterError> {
+    fn text(value: &Value, pointer_value: Option<&str>) -> Result<String, AdapterError> {
         pointer(
             value,
             pointer_value.ok_or_else(|| AdapterError::specific(RuntimeError::MissingMapping))?,
@@ -201,14 +201,14 @@ impl Catalog<'_> {
         Ok(Project {
             id: PackageId {
                 provider: self.program.provider.id.clone(),
-                project: self.text(value, map.id.as_deref())?,
+                project: Self::text(value, map.id.as_deref())?,
             },
             slug: map
                 .slug
                 .as_deref()
-                .map(|path| self.text(value, Some(path)))
+                .map(|path| Self::text(value, Some(path)))
                 .transpose()?,
-            title: self.text(value, map.title.as_deref())?,
+            title: Self::text(value, map.title.as_deref())?,
             client: Availability::Optional,
             server: Availability::Optional,
         })
@@ -217,13 +217,13 @@ impl Catalog<'_> {
         let map = &self.program.mappings.project;
         Ok(SearchResult {
             provider: self.program.provider.id.clone(),
-            project: self.text(value, map.id.as_deref())?,
-            reference: self.text(value, map.slug.as_deref().or(map.id.as_deref()))?,
-            title: self.text(value, map.title.as_deref())?,
+            project: Self::text(value, map.id.as_deref())?,
+            reference: Self::text(value, map.slug.as_deref().or(map.id.as_deref()))?,
+            title: Self::text(value, map.title.as_deref())?,
             description: map
                 .description
                 .as_deref()
-                .map(|path| self.text(value, Some(path)))
+                .map(|path| Self::text(value, Some(path)))
                 .transpose()?
                 .unwrap_or_default(),
             icon_url: None,
@@ -237,8 +237,8 @@ impl Catalog<'_> {
     }
     fn release(&self, value: &Value, target: &Target) -> Result<Option<Release>, AdapterError> {
         let map = &self.program.mappings.release;
-        let game_versions = self.text_array(value, map.game_versions.as_deref())?;
-        let loaders = self.text_array(value, map.loaders.as_deref())?;
+        let game_versions = Self::text_array(value, map.game_versions.as_deref())?;
+        let loaders = Self::text_array(value, map.loaders.as_deref())?;
         if !game_versions
             .iter()
             .any(|game| game == &target.game_version)
@@ -274,24 +274,20 @@ impl Catalog<'_> {
         .map(|value| self.dependency(value, &map.dependency))
         .collect::<Result<_, _>>()?;
         Ok(Some(Release {
-            id: self.text(value, map.id.as_deref())?,
+            id: Self::text(value, map.id.as_deref())?,
             project: PackageId {
                 provider: self.program.provider.id.clone(),
-                project: self.text(value, self.program.mappings.project.id.as_deref())?,
+                project: Self::text(value, self.program.mappings.project.id.as_deref())?,
             },
-            number: self.text(value, map.number.as_deref())?,
+            number: Self::text(value, map.number.as_deref())?,
             channel: Channel::Unknown,
-            published: self.text(value, map.published.as_deref())?,
+            published: Self::text(value, map.published.as_deref())?,
             files,
             dependencies,
         }))
     }
 
-    fn text_array(
-        &self,
-        value: &Value,
-        mapping: Option<&str>,
-    ) -> Result<Vec<String>, AdapterError> {
+    fn text_array(value: &Value, mapping: Option<&str>) -> Result<Vec<String>, AdapterError> {
         pointer(
             value,
             mapping.ok_or_else(|| AdapterError::specific(RuntimeError::MissingMapping))?,
@@ -313,8 +309,8 @@ impl Catalog<'_> {
         value: &Value,
         mapping: &DependencyMapping,
     ) -> Result<Dependency, AdapterError> {
-        let project = self.text(value, mapping.project.as_deref())?;
-        let kind = match self.text(value, mapping.kind.as_deref())?.as_str() {
+        let project = Self::text(value, mapping.project.as_deref())?;
+        let kind = match Self::text(value, mapping.kind.as_deref())?.as_str() {
             "required" => DependencyKind::Required,
             "optional" => DependencyKind::Optional,
             "incompatible" => DependencyKind::Incompatible,
@@ -329,7 +325,7 @@ impl Catalog<'_> {
             release: mapping
                 .release
                 .as_deref()
-                .map(|path| self.text(value, Some(path)))
+                .map(|path| Self::text(value, Some(path)))
                 .transpose()?,
             kind,
         })

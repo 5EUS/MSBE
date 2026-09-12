@@ -204,9 +204,81 @@ pub struct ProfileLayer {
     /// Imported pack content identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub digest: Option<Digest>,
+    /// Mods a `pack` layer supplied, exactly as imported. The `changes` layer is the difference
+    /// between the profile's effective content and this base.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub mods: BTreeMap<Name, ModEntry>,
+    /// Pack-owned files a `pack` layer supplied, exactly as imported.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub configs: BTreeMap<RelPath, Digest>,
+    /// The order a `pack` layer declared.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub order: Vec<Name>,
+}
+
+impl ProfileLayer {
+    /// The stable ID of the layer imported packs occupy.
+    pub const PACK: &'static str = "pack";
+    /// The stable ID of the layer recording user changes.
+    pub const CHANGES: &'static str = "changes";
+
+    /// Whether this layer is an imported pack.
+    pub fn is_pack(&self) -> bool {
+        self.kind == Self::PACK
+    }
 }
 
 impl Profile {
+    /// The imported pack layer, if the profile has one.
+    pub fn pack_layer(&self) -> Option<&ProfileLayer> {
+        self.layers.iter().find(|layer| layer.is_pack())
+    }
+
+    /// The layer that introduced `module`: a pack layer whose base holds exactly this entry, or
+    /// else the changes layer.
+    pub fn module_layer(&self, name: &Name, module: &ModEntry) -> String {
+        self.layers
+            .iter()
+            .find(|layer| layer.is_pack() && layer.mods.get(name) == Some(module))
+            .map_or_else(
+                || ProfileLayer::CHANGES.to_owned(),
+                |layer| layer.id.clone(),
+            )
+    }
+
+    /// The layer that introduced the pack-owned file at `path` with `digest`.
+    pub fn config_layer(&self, path: &RelPath, digest: &Digest) -> String {
+        self.layers
+            .iter()
+            .find(|layer| layer.is_pack() && layer.configs.get(path) == Some(digest))
+            .map_or_else(
+                || ProfileLayer::CHANGES.to_owned(),
+                |layer| layer.id.clone(),
+            )
+    }
+
+    /// Every blob the profile's mods, components, pack-owned files and layer bases reference.
+    pub fn referenced_blobs(&self) -> BTreeSet<Digest> {
+        let mut blobs: BTreeSet<Digest> = self
+            .mods
+            .values()
+            .chain(self.layers.iter().flat_map(|layer| layer.mods.values()))
+            .flat_map(|module| module.files.iter().map(|file| file.blob))
+            .collect();
+        blobs.extend(
+            self.components
+                .values()
+                .flat_map(|component| component.files.iter().map(|file| file.blob)),
+        );
+        blobs.extend(self.configs.values().copied());
+        blobs.extend(
+            self.layers
+                .iter()
+                .flat_map(|layer| layer.configs.values().copied()),
+        );
+        blobs
+    }
+
     /// Every mod in the order it applies: the ones [`Profile::order`] lists first, then the rest
     /// by name. A listed name that is not a mod, or is listed again, is skipped.
     pub fn ordered(&self) -> Vec<(&Name, &ModEntry)> {
@@ -278,6 +350,60 @@ pub struct Lockfile {
     /// Semantic ownership and reproducibility facts for deployed files.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub classifications: BTreeMap<RelPath, LockedFileClassification>,
+    /// The profile lineage: imported pack layers with their bases, then the changes layer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub layers: Vec<ProfileLayer>,
+}
+
+impl Lockfile {
+    /// Every blob reconstructing this lockfile's profile needs in the store: module and component
+    /// files, pack-layer bases, and every deployed digest that deployment does not regenerate.
+    pub fn required_blobs(&self) -> BTreeSet<Digest> {
+        let mut blobs: BTreeSet<Digest> = self
+            .mods
+            .values()
+            .flat_map(|module| module.files.iter().map(|file| file.blob))
+            .chain(
+                self.layers
+                    .iter()
+                    .flat_map(|layer| layer.mods.values())
+                    .flat_map(|module| module.files.iter().map(|file| file.blob)),
+            )
+            .collect();
+        blobs.extend(
+            self.components
+                .values()
+                .flat_map(|component| component.files.iter().map(|file| file.blob)),
+        );
+        blobs.extend(
+            self.layers
+                .iter()
+                .flat_map(|layer| layer.configs.values().copied()),
+        );
+        blobs.extend(self.deployment.iter().filter_map(|(path, digest)| {
+            let generated = self
+                .classifications
+                .get(path)
+                .is_some_and(|classification| classification.role == PackFileRole::Generated);
+            (!generated).then_some(*digest)
+        }));
+        blobs
+    }
+
+    /// The pack-owned files recorded by this lockfile.
+    pub fn configs(&self) -> BTreeMap<RelPath, Digest> {
+        self.deployment
+            .iter()
+            .filter(|(path, _)| {
+                self.classifications
+                    .get(*path)
+                    .is_some_and(|classification| {
+                        classification.role == PackFileRole::PackOwnedConfig
+                    })
+            })
+            .map(|(path, digest)| (path.clone(), *digest))
+            .collect()
+    }
 }
 
 /// Semantic ownership and reproducibility facts for one deployed file.
@@ -665,6 +791,18 @@ pub struct DeployReport {
     pub excluded: Vec<ModExclusion>,
 }
 
+/// A file under a plan's mutable roots whose contents a capture could adopt into a profile.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureCandidate {
+    /// The instance-relative path.
+    pub path: RelPath,
+    /// What the deployment placed there, or none for a file no deployment placed.
+    pub previous: Option<Digest>,
+    /// What is on disk now.
+    pub current: Digest,
+}
+
 /// Whether deployed files still match what was deployed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct VerifyReport {
@@ -956,9 +1094,27 @@ impl Instance {
     ///
     /// Returns an error when the profile is missing or its resolved deployment is invalid.
     pub fn lockfile(&self, profile: &Name) -> Result<Lockfile, InstanceError> {
-        let selection = self.profile(profile)?;
-        let target = self.profile_target(profile)?;
-        let deployment_plan = self.plan_deploy(profile)?;
+        self.lockfile_for(profile, self.profile(profile)?)
+    }
+
+    /// Derives the canonical lockfile `selection` would have as profile `profile`, without
+    /// reading or writing that profile. Import uses this to validate a profile before committing it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the selection's target is invalid for the plan or its resolved
+    /// deployment conflicts.
+    pub fn lockfile_for(
+        &self,
+        profile: &Name,
+        selection: Profile,
+    ) -> Result<Lockfile, InstanceError> {
+        let target = selection
+            .target
+            .clone()
+            .unwrap_or_else(|| self.default_target());
+        self.validate_target(&target)?;
+        let deployment_plan = self.plan_selection(profile, selection.clone())?;
         Ok(Lockfile {
             schema: 2,
             plan: LockedPlan {
@@ -976,15 +1132,15 @@ impl Instance {
             order: selection.load_order(),
             mods: selection
                 .mods
-                .into_iter()
+                .iter()
                 .map(|(name, module)| {
                     (
-                        name,
+                        name.clone(),
                         LockedModule {
-                            origin: module.origin,
-                            provider: module.provider,
-                            files: module.files,
-                            layer: default_changes_layer(),
+                            origin: module.origin.clone(),
+                            provider: module.provider.clone(),
+                            files: module.files.clone(),
+                            layer: selection.module_layer(name, module),
                             answers: InstallAnswers::new(),
                         },
                     )
@@ -993,6 +1149,7 @@ impl Instance {
             components: selection.components,
             deployment: deployment_plan.target,
             classifications: deployment_plan.classifications,
+            layers: selection.layers,
         })
     }
 
@@ -1418,6 +1575,127 @@ impl Instance {
         Ok(digest)
     }
 
+    /// Adds or replaces several pack-owned files in one profile write, so a capture is recorded
+    /// completely or not at all.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the profile cannot be loaded, the bytes cannot be stored, or the
+    /// updated profile cannot be written.
+    pub fn set_profile_configs(
+        &self,
+        profile: &Name,
+        files: &[(RelPath, Vec<u8>)],
+    ) -> Result<Vec<Digest>, InstanceError> {
+        let mut selection = self.profile(profile)?;
+        let mut digests = Vec::with_capacity(files.len());
+        for (path, contents) in files {
+            let digest = self.applier.store().put_bytes(contents)?;
+            selection.configs.insert(path.clone(), digest);
+            digests.push(digest);
+        }
+        write_toml(&self.profile_path(profile), &selection)?;
+        Ok(digests)
+    }
+
+    /// The content store this instance deploys from.
+    pub fn store(&self) -> &Store {
+        self.applier.store()
+    }
+
+    /// Replaces or creates profile `name` with `profile`, after checking that every blob it
+    /// references is in the store and that its deployment resolves without conflicts. Nothing is
+    /// written unless both checks pass. Returns the lockfile the profile now has.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InstanceError::MissingBlob`] for an absent blob, or any target or resolution
+    /// error, before writing.
+    pub fn write_profile(&self, name: &Name, profile: &Profile) -> Result<Lockfile, InstanceError> {
+        if let Some(missing) = profile
+            .referenced_blobs()
+            .into_iter()
+            .find(|blob| !self.applier.store().contains(blob))
+        {
+            return Err(InstanceError::MissingBlob(missing));
+        }
+        let lockfile = self.lockfile_for(name, profile.clone())?;
+        write_toml(&self.profile_path(name), profile)?;
+        Ok(lockfile)
+    }
+
+    /// Files beneath the plan's mutable roots that differ from what `profile`'s deployment
+    /// placed, or that no deployment placed: the changes a capture can adopt.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InstanceError::NotDeployed`] unless `profile` is deployed, or an error reading
+    /// the game directory.
+    pub fn capture_candidates(
+        &self,
+        profile: &Name,
+    ) -> Result<Vec<CaptureCandidate>, InstanceError> {
+        if self.deployed_profile() != Some(profile) {
+            return Err(InstanceError::NotDeployed(profile.clone()));
+        }
+        let selection = self.profile(profile)?;
+        let target = selection
+            .target
+            .clone()
+            .unwrap_or_else(|| self.default_target());
+        let loader = self
+            .plan
+            .loaders
+            .iter()
+            .find(|loader| loader.id == target.loader)
+            .ok_or_else(|| ResolveError::UnknownLoader(target.loader.clone()))?;
+        let globs = crate::mutable_globs(&self.plan, loader);
+        let declared = |path: &RelPath| {
+            globs
+                .iter()
+                .any(|glob| crate::matches_glob(glob, path.as_str()))
+        };
+        let deployed = self.deployed_files();
+        let mutable = self.state.history.last().map(|record| &record.mutable);
+        let mut candidates = BTreeMap::new();
+        for (path, blob) in deployed {
+            let is_mutable = mutable.is_some_and(|paths| paths.contains(path));
+            if !(is_mutable || declared(path)) {
+                continue;
+            }
+            let file = path.to_path(&self.config.root);
+            if on_disk(&file, blob)? == OnDisk::Differs {
+                candidates.insert(
+                    path.clone(),
+                    CaptureCandidate {
+                        path: path.clone(),
+                        previous: Some(*blob),
+                        current: digest_file(&file)?,
+                    },
+                );
+            }
+        }
+        for glob in &globs {
+            for path in files_beneath(&self.config.root, &glob_prefix(glob))? {
+                if deployed.contains_key(&path) || !declared(&path) {
+                    continue;
+                }
+                let current = digest_file(&path.to_path(&self.config.root))?;
+                candidates.insert(
+                    path.clone(),
+                    CaptureCandidate {
+                        path,
+                        previous: None,
+                        current,
+                    },
+                );
+            }
+        }
+        candidates
+            .retain(|path, candidate| selection.configs.get(path) != Some(&candidate.current));
+        Ok(candidates.into_values().collect())
+    }
+
     /// Removes a pack-owned config file from a profile.
     ///
     /// # Errors
@@ -1515,7 +1793,14 @@ impl Instance {
     /// Returns [`InstanceError::Conflicts`] if mods claim one path with different contents, or
     /// any resolution error.
     pub fn plan_deploy(&self, profile: &Name) -> Result<DeployPlan, InstanceError> {
-        let selection = self.profile(profile)?;
+        self.plan_selection(profile, self.profile(profile)?)
+    }
+
+    fn plan_selection(
+        &self,
+        profile: &Name,
+        selection: Profile,
+    ) -> Result<DeployPlan, InstanceError> {
         let target = selection
             .target
             .clone()
@@ -2321,6 +2606,18 @@ pub enum InstanceError {
     /// No data directory could be found.
     #[error("cannot find a data directory; set MSBE_HOME")]
     HomeUnavailable,
+
+    /// A profile references a blob the store does not hold.
+    #[error("the store does not hold blob {0}")]
+    MissingBlob(Digest),
+
+    /// An operation needs the profile to be the deployed one.
+    #[error("profile {0} is not the deployed profile; deploy it first")]
+    NotDeployed(Name),
+
+    /// A mutable root holds more files than a capture will examine.
+    #[error("the plan's mutable roots hold more than {0} files")]
+    TooManyFiles(usize),
 }
 
 /// Parses and validates a plan manifest.
@@ -2454,6 +2751,75 @@ fn on_disk(path: &Path, blob: &Digest) -> Result<OnDisk, InstanceError> {
             source,
         }),
     }
+}
+
+fn digest_file(path: &Path) -> Result<Digest, InstanceError> {
+    let file = File::open(path).map_err(io_error("open", path))?;
+    Digest::of_reader(BufReader::new(file)).map_err(io_error("read", path))
+}
+
+/// The directory a glob can match beneath: its components before the first wildcard.
+fn glob_prefix(glob: &str) -> String {
+    glob.split('/')
+        .take_while(|component| !component.contains(['*', '?', '[']))
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Every regular file beneath `prefix` in `root`, skipping symbolic links, in path order.
+fn files_beneath(root: &Path, prefix: &str) -> Result<Vec<RelPath>, InstanceError> {
+    const LIMIT: usize = 100_000;
+    let mut found = Vec::new();
+    let mut pending = vec![prefix.to_owned()];
+    while let Some(dir) = pending.pop() {
+        let path = if dir.is_empty() {
+            root.to_path_buf()
+        } else {
+            root.join(&dir)
+        };
+        let entries = match fs::read_dir(&path) {
+            Ok(entries) => entries,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+                ) =>
+            {
+                continue;
+            }
+            Err(source) => {
+                return Err(InstanceError::Io {
+                    op: "list",
+                    path,
+                    source,
+                });
+            }
+        };
+        for entry in entries {
+            let entry = entry.map_err(io_error("list", &path))?;
+            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            let child = if dir.is_empty() {
+                name
+            } else {
+                format!("{dir}/{name}")
+            };
+            let kind = entry.file_type().map_err(io_error("inspect", &path))?;
+            if kind.is_dir() {
+                pending.push(child);
+            } else if kind.is_file()
+                && let Ok(relative) = RelPath::new(&child)
+            {
+                found.push(relative);
+                if found.len() > LIMIT {
+                    return Err(InstanceError::TooManyFiles(LIMIT));
+                }
+            }
+        }
+    }
+    found.sort();
+    Ok(found)
 }
 
 /// `.msbe/store` beside the game directory: on the same volume in the common case, and never

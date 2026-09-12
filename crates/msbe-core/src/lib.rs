@@ -364,7 +364,7 @@ fn split_pointer(pointer: &str) -> (&str, String) {
 
 /// The plan's mutable globs with `@loader.targets.<name>` expanded for `loader`. A glob naming
 /// a target this loader does not declare cannot match anything it places, so it is dropped.
-fn mutable_globs(plan: &Plan, loader: &Loader) -> Vec<String> {
+pub(crate) fn mutable_globs(plan: &Plan, loader: &Loader) -> Vec<String> {
     plan.deploy
         .mutable
         .iter()
@@ -473,7 +473,7 @@ fn is_hygiene_path(path: &str) -> bool {
             .any(|component| matches!(*component, "__MACOSX" | ".git" | ".hg" | ".svn"))
 }
 
-fn matches_glob(pattern: &str, path: &str) -> bool {
+pub(crate) fn matches_glob(pattern: &str, path: &str) -> bool {
     let pattern: Vec<&str> = pattern.split('/').collect();
     let path: Vec<&str> = path.split('/').collect();
     matches_glob_parts(&pattern, &path)

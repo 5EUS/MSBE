@@ -228,8 +228,14 @@ preview, rather than copied into the game's mod directory.
 | `pack config set INSTANCE PATH (--content TEXT\|--file FILE) [-p PROFILE]`                                                                       | **Implemented** | Add or replace a pack-owned config.                                         |
 | `pack config remove INSTANCE PATH [-p PROFILE]`                                                                                                  | **Implemented** | Remove a pack-owned config.                                                 |
 | `pack validate INSTANCE [-p PROFILE]`                                                                                                            | **Implemented** | Validate and write the canonical lockfile.                                  |
-| `pack export INSTANCE --output FILE [-p PROFILE]`                                                                                                | **Temporary**   | Current Modrinth-specific export pending codecs.                            |
-| `pack import INSTANCE FILE [-p PROFILE] [--with-deps]`                                                                                           | **Temporary**   | Current Modrinth-specific import pending codecs.                            |
+| `pack formats [--direction import\|export] [--game GAME]`                                                                                        | **Implemented** | List the formats reviewed codecs provide.                                   |
+| `pack options CODEC [--preset PRESET] [--direction import\|export]`                                                                              | **Implemented** | Show a codec's option schema and normalized values.                         |
+| `pack export INSTANCE OUTPUT --codec CODEC [--preset PRESET] [--options FILE] [-p PROFILE] [--dry-run]`                                          | **Implemented** | Preview and write a policy-gated pack.                                      |
+| `pack import INSTANCE INPUT [--codec CODEC] [--options FILE] [-p PROFILE] [--dry-run]`                                                           | **Implemented** | Import a pack into a new or empty profile as its pack layer.                |
+| `pack update INSTANCE INPUT [--codec CODEC] [-p PROFILE] [--resolve CONFLICT=keep\|drop]... [--dry-run]`                                         | **Implemented** | Replace the pack layer and reapply the profile's changes.                   |
+| `pack capture INSTANCE [-p PROFILE] [--path PATH]... [--dry-run]`                                                                                | **Implemented** | Adopt in-game changes beneath the plan's mutable roots.                     |
+| `snapshot create INSTANCE OUTPUT`                                                                                                                | **Implemented** | Back up instance state and every referenced blob; never distributable.      |
+| `snapshot restore INPUT [--dry-run]`                                                                                                             | **Implemented** | Restore a snapshot's MSBE state; deploy separately.                         |
 | `bisect start INSTANCE [-p PROFILE]`                                                                                                             | **Implemented** | Create a resumable module bisection session.                                |
 | `bisect run INSTANCE`                                                                                                                            | **Implemented** | Deploy the current trial subset for manual testing.                         |
 | `bisect result INSTANCE --bad\|--good`                                                                                                           | **Implemented** | Record the trial verdict and select the next half.                          |
@@ -239,17 +245,27 @@ preview, rather than copied into the game's mod directory.
 | `verify INSTANCE`                                                                                                                                | **Implemented** | Report deployment drift.                                                    |
 | `status INSTANCE`                                                                                                                                | **Implemented** | Show instance and deployment state.                                         |
 
-Modrinth pack import honors each manifest file's `path`. Minecraft plans route JARs to `mods/`
-and retain ZIP resource packs and shader packs for `resourcepacks/` and `shaderpacks/` respectively.
-The archive `overrides/` directory is not yet imported, so packs that depend on configuration,
-scripts, or other overrides remain incomplete.
+Pack commands are codec-driven: `pack formats` and `pack options` list what the reviewed registry
+provides, and the CLI names no format itself. Every pack command previews first. `--dry-run`
+prints the complete preview, including each file's group, requirements, environment inputs,
+blockers and warnings, and exits with its first blocker's code: 6 for a distribution refusal, 7 for
+an integrity or environment mismatch, 4 for a layer conflict. Without `--dry-run` that preview
+runs, and a preview with blockers writes nothing.
 
-This command shape is compatibility behavior, not the final architecture. The generic interface
-will discover codec IDs and option schemas (`pack formats`, `pack options`, and
-`--format`/`--options`) from the daemon. Modrinth archive records and Minecraft loader-key mapping
-will move to the Modrinth extension; generic CLI, core, daemon, and Desktop code will not name a
-provider, game, loader, or external format. Native `.msbepack` exports will package the canonical
-lockfile and a policy-selected set of CAS blobs. See
+```sh
+"$MSBE" pack export mc "$HOME/mc.msbepack" --codec msbe-native --preset portable --dry-run
+"$MSBE" pack import mc "$HOME/modpack.mrpack" --profile modpack
+"$MSBE" pack update mc "$HOME/modpack-2.mrpack" --profile modpack --resolve mod:sodium=keep
+"$MSBE" pack capture mc --profile modpack --dry-run
+"$MSBE" snapshot create mc "$HOME/mc.msbesnapshot"
+```
+
+Export presets are `thin`, `portable`, `complete` and `public-distribution`; `--options` reads a
+TOML table typed by the codec's schema. Import records the pack as the profile's pack layer, and
+later `add`, `remove` and config changes form the changes layer that `pack update` reapplies. A
+change the new version invalidates must be resolved before the update runs. Modrinth pack import
+honors each manifest file's `path`; the archive `overrides/` directory is not yet imported. A
+snapshot is a private backup, not a pack: `pack import` refuses one. See
 [17 - Pack formats and native bundles](17-pack-formats-and-native-bundles.md).
 
 ## 7. Planned command surface

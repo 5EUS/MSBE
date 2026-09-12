@@ -20,14 +20,17 @@ internal sealed partial class MainViewModel : ViewModelBase
 {
     private readonly IMsbeClient client;
     private readonly IFolderLauncher? folders;
+    private readonly TimeProvider time;
 
     /// <summary>Initializes a new instance of the <see cref="MainViewModel" /> class.</summary>
     /// <param name="client">The client used for daemon-owned operations.</param>
     /// <param name="folders">Shows folders in the file manager, or <see langword="null" /> where there is none.</param>
-    public MainViewModel(IMsbeClient client, IFolderLauncher? folders = null)
+    /// <param name="time">The clock ages are measured against, or <see langword="null" /> for the system clock.</param>
+    public MainViewModel(IMsbeClient client, IFolderLauncher? folders = null, TimeProvider? time = null)
     {
         this.client = client;
         this.folders = folders;
+        this.time = time ?? TimeProvider.System;
         this.BrowseResults.CollectionChanged += this.OnBrowseResultsChanged;
     }
 
@@ -53,6 +56,7 @@ internal sealed partial class MainViewModel : ViewModelBase
         {
             DaemonInfo daemon = await this.client.GetInfoAsync(CancellationToken.None).ConfigureAwait(true);
             this.IsPackConfigurationSupported = daemon.RpcVersion >= 3;
+            this.IsTypedPackSupported = daemon.RpcVersion >= 4;
             this.DataDirectory = daemon.DataDirectory;
             IReadOnlyList<GameInfo> games = await this.client.GetGamesAsync(CancellationToken.None).ConfigureAwait(true);
             this.Games.Clear();
@@ -65,6 +69,7 @@ internal sealed partial class MainViewModel : ViewModelBase
             this.OnPropertyChanged(nameof(this.IsGamesEmpty));
 
             await this.RefreshInstancesAsync().ConfigureAwait(true);
+            await this.LoadExportCodecsAsync().ConfigureAwait(true);
             this.StatusMessage = this.IsPackConfigurationSupported
                 ? $"Connected to daemon {daemon.Version} (RPC {daemon.RpcVersion})."
                 : $"Daemon RPC {daemon.RpcVersion} is outdated; restart MSBE to enable Pack configuration.";

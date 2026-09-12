@@ -18,7 +18,7 @@ fn main() -> ExitCode {
         }
     };
     #[cfg(unix)]
-    match msbe_daemon::serve(&options.socket, &options.plans) {
+    match msbe_daemon::serve(&options.socket, &options.plans, options.home) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("cannot serve {}: {error}", options.socket.display());
@@ -35,11 +35,13 @@ fn main() -> ExitCode {
 struct Options {
     socket: PathBuf,
     plans: PathBuf,
+    home: Option<PathBuf>,
 }
 
 fn arguments(args: &[std::ffi::OsString]) -> Result<Options, String> {
     let mut socket = default_socket();
     let mut plans = default_plans()?;
+    let mut home = None;
     let mut arguments = args.iter();
     while let Some(flag) = arguments.next() {
         let value = arguments
@@ -48,10 +50,19 @@ fn arguments(args: &[std::ffi::OsString]) -> Result<Options, String> {
         match flag.to_str() {
             Some("--socket") => socket = PathBuf::from(value),
             Some("--plans") => plans = PathBuf::from(value),
-            _ => return Err("usage: msbe-daemon [--socket PATH] [--plans DIR]".to_owned()),
+            Some("--home") => home = Some(PathBuf::from(value)),
+            _ => {
+                return Err(
+                    "usage: msbe-daemon [--socket PATH] [--plans DIR] [--home DIR]".to_owned(),
+                );
+            }
         }
     }
-    Ok(Options { socket, plans })
+    Ok(Options {
+        socket,
+        plans,
+        home,
+    })
 }
 
 fn default_socket() -> PathBuf {

@@ -11,8 +11,8 @@
 
 #[cfg(feature = "test")]
 pub mod cli_test_support;
-mod codec;
 mod client;
+mod codec;
 mod reference;
 #[cfg(test)]
 mod resolution_tests;
@@ -23,8 +23,8 @@ mod wire;
 
 use msbe_provider_api::{
     Adapter, AdapterError, HttpClient, ManifestError, PackCodec, PackCodecError,
-    PackCodecRegistration, PackageId, Provenance, Provider, Registration, Releases, Search,
-    Target, UpdateCheck, Updates,
+    PackCodecRegistration, PackageId, Provenance, Provider, Registration, Releases, Search, Target,
+    UpdateCheck, Updates,
     model::{Project, Release, Request, SearchResult},
 };
 use thiserror::Error;
@@ -53,6 +53,10 @@ pub const REGISTRATION: Registration = Registration {
     exception_reason: "Modrinth uses reviewed bulk update and release protocol semantics not expressible by catalog-v1.",
 };
 
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "codec builders implement the fallible registration function pointer"
+)]
 fn build_pack_codec() -> Result<Box<dyn PackCodec>, PackCodecError> {
     Ok(Box::new(codec::ModrinthCodec::new()))
 }

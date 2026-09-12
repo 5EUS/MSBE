@@ -9,7 +9,7 @@ using MSBE.Client;
 
 namespace MSBE.Desktop.ViewModels;
 
-/// <content>Pack-owned configuration, validation, and export.</content>
+/// <content>Pack-owned configuration and validation.</content>
 internal sealed partial class MainViewModel
 {
     /// <summary>Gets or sets whether the connected daemon supports pack configuration.</summary>
@@ -30,10 +30,6 @@ internal sealed partial class MainViewModel
     /// <summary>Gets or sets the text content of the config being edited.</summary>
     [ObservableProperty]
     public partial string PackConfigContent { get; set; } = string.Empty;
-
-    /// <summary>Gets or sets the destination for the distributable Modrinth pack.</summary>
-    [ObservableProperty]
-    public partial string PackOutputPath { get; set; } = string.Empty;
 
     /// <summary>Gets or sets the latest canonical lockfile path.</summary>
     [ObservableProperty]
@@ -147,20 +143,6 @@ internal sealed partial class MainViewModel
         }
     }
 
-    [RelayCommand]
-    private async Task ExportPackAsync()
-    {
-        if (!this.IsPackConfigurationSupported || this.SelectedInstance is null || this.SelectedProfile is null || string.IsNullOrWhiteSpace(this.PackOutputPath) || this.IsPackBusy)
-        {
-            return;
-        }
-
-        string output = this.PackOutputPath.Trim();
-        await this.RunPackOperationAsync(
-            ["--format", "json", "pack", "export", this.SelectedInstance, "--output", output, "--profile", this.SelectedProfile],
-            $"Exported distributable pack to {output}.").ConfigureAwait(true);
-    }
-
     private void ClearPackState()
     {
         this.PackConfigs.Clear();
@@ -169,11 +151,15 @@ internal sealed partial class MainViewModel
         this.PackConfigContent = string.Empty;
         this.PackLockfilePath = string.Empty;
         this.PackError = string.Empty;
+        this.ClearExportPreview();
+        this.ClearImportPreview();
+        this.ClearCapturePreview();
     }
 
     private void SetDefaultPackOutputPath(string instance, string profile)
     {
-        string fileName = $"{instance}-{profile}.mrpack";
+        string extension = this.SelectedExportCodec?.Extensions is [string first, ..] ? first : "pack";
+        string fileName = $"{instance}-{profile}.{extension}";
         this.PackOutputPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), fileName);
     }
 

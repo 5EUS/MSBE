@@ -28,5 +28,6 @@ thiserror.workspace  = true
 sha2 = { workspace = true, optional = true }
 
 [dev-dependencies]
+msbe-core      = { version = "0.0.0", path = "../msbe-core" }
 sha2.workspace = true
 tempfile.workspace = true

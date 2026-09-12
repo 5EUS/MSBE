@@ -36,10 +36,13 @@ msbe rollback [<txn>]           # undo the last transaction
 msbe order     list | set | sort | pin | unpin
 msbe conflicts list | resolve
 
-msbe pack      formats | options <format>
-msbe pack      import <instance> <input> [--format <format>] [--options <file>]
-msbe pack      export <instance> <output> --format <format> [--options <file>]
+msbe pack      formats | options <codec>
+msbe pack      import <instance> <input> [--codec <codec>] [--options <file>] [--dry-run]
+msbe pack      update <instance> <input> [--resolve <conflict>=keep|drop]... [--dry-run]
+msbe pack      export <instance> <output> --codec <codec> [--preset <preset>] [--options <file>] [--dry-run]
+msbe pack      capture <instance> [--path <path>]... [--dry-run]
 msbe pack      validate <instance>
+msbe snapshot  create <instance> <output> | restore <input> [--dry-run]
 
 msbe plan      list | show | new | validate | test | explain
 msbe registry  update | sources | trust
@@ -139,8 +142,9 @@ Primary surfaces:
 
 Pack formats and their options are daemon-discovered capabilities. Neither frontend contains a
 format-specific command model or ViewModel. The typed preview returned by the daemon is also the
-execution plan, so Desktop and CLI show identical inclusion and policy decisions. See
-[17](17-pack-formats-and-native-bundles.md).
+execution plan: the daemon holds it under a plan ID and digest and runs exactly that plan as a job,
+so Desktop and CLI show identical inclusion and policy decisions. The pack codec flag is `--codec`,
+because `--format` is the global output format. See [17](17-pack-formats-and-native-bundles.md).
 
 - **Browser tab** — the CEF component, visually distinct so it is obvious the user is
   on a third-party site.

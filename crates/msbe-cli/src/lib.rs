@@ -21,12 +21,15 @@ use msbe_core::{
     },
 };
 use msbe_fsops::{Backend, Digest, NoopObserver, Operation, RelPath, Store};
-use msbe_pack::host::{ZipPackInput, write_zip_layout};
+use msbe_pack::{
+    CaptureKind, CaptureRequest, DiffKind, Direction, ExportRequest, ImportAction, ImportItem,
+    ImportRequest, IssueCode, PackError, PackIssue, Resolution, Silent, UpdateRequest,
+    inclusion::PreviewGroup,
+};
 use msbe_plan_schema::Side;
 use msbe_provider_api::{
-    AdapterError, Availability, DistributionDecision, HttpClient, HttpError, ManifestError,
-    Observations, PackExportContext, PackFile, PackImportContext, PackOptions, PackageId,
-    RequirementSource, Target, Update, UpdateCheck,
+    AdapterError, HttpClient, HttpError, ManifestError, PackOptions, PackWarning, PackageId,
+    Target, Update, UpdateCheck,
     model::{Request, Selection},
     resolve::{
         InstallPlan, InstalledRelease, ProjectRequest, Requirement, ResolveError, Resolver,
@@ -51,8 +54,11 @@ pub mod exit {
     pub const FAILURE: u8 = 1;
     /// The command line could not be parsed.
     pub const USAGE: u8 = 2;
-    /// Mods in a profile claim the same path with different contents.
+    /// Mods in a profile claim the same path with different contents, or a pack change no longer
+    /// applies.
     pub const CONFLICT: u8 = 4;
+    /// Provider or distribution policy refused the operation.
+    pub const POLICY: u8 = 6;
     /// Deployed files no longer match what was deployed.
     pub const INTEGRITY: u8 = 7;
 }
@@ -100,9 +106,12 @@ enum Command {
     /// Create, list and inspect profiles.
     #[command(subcommand)]
     Profile(ProfileCommand),
-    /// Import and export portable modpack manifests.
+    /// Import, update, export and capture packs through reviewed codecs.
     #[command(subcommand)]
     Pack(PackCommand),
+    /// Back up and restore an instance's MSBE state. Snapshots are private backups, not packs.
+    #[command(subcommand)]
+    Snapshot(SnapshotCommand),
     /// Diagnose one broken module through deterministic trial deployments.
     #[command(subcommand)]
     Bisect(BisectCommand),
@@ -235,29 +244,133 @@ enum PackCommand {
         #[arg(long, short, default_value = DEFAULT_PROFILE)]
         profile: String,
     },
-    /// Import target-compatible pack files through reviewed acquisition.
+    /// List the pack formats reviewed codecs provide.
+    Formats {
+        /// Only formats that support this direction.
+        #[arg(long, value_enum)]
+        direction: Option<PackDirection>,
+        /// Only formats that support this game plan.
+        #[arg(long)]
+        game: Option<String>,
+    },
+    /// Show a codec's option schema and normalized values.
+    Options {
+        /// The codec ID, such as msbe-native.
+        codec: String,
+        /// Apply a preset's values.
+        #[arg(long)]
+        preset: Option<String>,
+        /// The direction whose schema to show.
+        #[arg(long, value_enum, default_value_t = PackDirection::Export)]
+        direction: PackDirection,
+    },
+    /// Import a pack into a new or empty profile, recording it as the profile's pack layer.
     Import {
         /// The instance.
         instance: String,
-        /// Source pack archive.
-        path: PathBuf,
-        /// The profile to add imported files to.
+        /// The pack file.
+        input: PathBuf,
+        /// The codec ID. Detected from the input when omitted.
+        #[arg(long)]
+        codec: Option<String>,
+        /// A TOML file of codec option values.
+        #[arg(long, value_name = "FILE")]
+        options: Option<PathBuf>,
+        /// The profile to create or fill.
         #[arg(long, short, default_value = DEFAULT_PROFILE)]
         profile: String,
-        /// Also resolve required dependencies of imported files when provider metadata supports it.
+        /// Show the preview without acquiring or writing anything.
         #[arg(long)]
-        with_deps: bool,
+        dry_run: bool,
     },
-    /// Export a profile's verified files through a supported pack codec.
+    /// Replace a profile's pack layer with another version and reapply its changes.
+    Update {
+        /// The instance.
+        instance: String,
+        /// The new pack version.
+        input: PathBuf,
+        /// The codec ID. Detected from the input when omitted.
+        #[arg(long)]
+        codec: Option<String>,
+        /// The profile to update.
+        #[arg(long, short, default_value = DEFAULT_PROFILE)]
+        profile: String,
+        /// Resolve a conflict, such as mod:sodium=keep or config:config/a.toml=drop.
+        #[arg(long = "resolve", value_name = "CONFLICT=keep|drop")]
+        resolutions: Vec<String>,
+        /// Show the preview without acquiring or writing anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Export a profile through a reviewed codec.
     Export {
         /// The instance.
         instance: String,
-        /// Destination pack archive.
-        #[arg(long, short)]
+        /// The pack file to write.
         output: PathBuf,
+        /// The codec ID, such as msbe-native.
+        #[arg(long)]
+        codec: String,
+        /// A preset to start from: thin, portable, complete or public-distribution.
+        #[arg(long)]
+        preset: Option<String>,
+        /// A TOML file of option values, applied over the preset.
+        #[arg(long, value_name = "FILE")]
+        options: Option<PathBuf>,
         /// The profile to export.
         #[arg(long, short, default_value = DEFAULT_PROFILE)]
         profile: String,
+        /// Show the preview without writing anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Adopt in-game changes beneath the plan's mutable roots into the deployed profile.
+    Capture {
+        /// The instance.
+        instance: String,
+        /// The deployed profile.
+        #[arg(long, short, default_value = DEFAULT_PROFILE)]
+        profile: String,
+        /// Capture only these paths.
+        #[arg(long = "path", value_name = "PATH")]
+        paths: Vec<String>,
+        /// Show each change and its diff without recording anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum PackDirection {
+    Import,
+    Export,
+}
+
+impl From<PackDirection> for Direction {
+    fn from(direction: PackDirection) -> Self {
+        match direction {
+            PackDirection::Import => Self::Import,
+            PackDirection::Export => Self::Export,
+        }
+    }
+}
+
+#[derive(Debug, Subcommand)]
+enum SnapshotCommand {
+    /// Write a snapshot of an instance, including content no export may embed.
+    Create {
+        /// The instance.
+        instance: String,
+        /// The snapshot file to write.
+        output: PathBuf,
+    },
+    /// Restore an instance from a snapshot. Deployment remains a separate step.
+    Restore {
+        /// The snapshot file.
+        input: PathBuf,
+        /// Show what would be restored without writing anything.
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -438,13 +551,27 @@ enum CliError {
     #[error(transparent)]
     Provider(#[from] RegistryError),
     #[error(transparent)]
-    Pack(#[from] msbe_provider_api::PackCodecError),
+    Pack(#[from] PackError),
     #[error(transparent)]
     Fs(#[from] msbe_fsops::Error),
-    #[error("pack file has no HTTPS download URL")]
-    PackDownloadMissing,
-    #[error("pack file has no SHA-256 or SHA-512 checksum")]
-    PackHashMissing,
+    #[error("cannot read options {}: {source}", .path.display())]
+    ReadOptions {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("options {} are not a TOML table: {reason}", .path.display())]
+    OptionsDocument { path: PathBuf, reason: String },
+    #[error("--options needs --codec, whose schema types the values")]
+    OptionsNeedCodec,
+    #[error("{0:?} is not a resolution; use CONFLICT=keep or CONFLICT=drop")]
+    Resolution(String),
+    #[error("cannot resolve {}: {source}", .path.display())]
+    Path {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
     #[error("pass exactly one of --bad or --good")]
     BisectVerdict,
     #[error(
@@ -538,12 +665,6 @@ struct UpdateReport {
 }
 
 #[derive(Serialize)]
-struct PackExportReport {
-    output: PathBuf,
-    files: usize,
-}
-
-#[derive(Serialize)]
 struct PackConfigSummary {
     path: RelPath,
     digest: Digest,
@@ -607,10 +728,10 @@ where
         Err(error) => {
             // Likewise: if stderr is gone, the exit code is all that can still be reported.
             drop(report(&error, console.err));
-            if matches!(error, CliError::Instance(InstanceError::Conflicts(_))) {
-                exit::CONFLICT
-            } else {
-                exit::FAILURE
+            match &error {
+                CliError::Instance(InstanceError::Conflicts(_)) => exit::CONFLICT,
+                CliError::Pack(error) => pack_exit(error.code()),
+                _ => exit::FAILURE,
             }
         }
     }
@@ -626,6 +747,7 @@ fn execute(cli: &Cli, console: &mut Console<'_>) -> Result<u8, CliError> {
         Command::Instance(command) => instance_command(&home, command, console),
         Command::Profile(command) => profile_command(&home, command, console),
         Command::Pack(command) => pack_command(&providers, &home, command, console),
+        Command::Snapshot(command) => snapshot_command(&home, command, console),
         Command::Bisect(command) => bisect_command(&home, command, console),
         Command::Add {
             instance,
@@ -633,7 +755,7 @@ fn execute(cli: &Cli, console: &mut Console<'_>) -> Result<u8, CliError> {
             profile,
             with_deps,
         } => add(
-            &providers, &home, instance, profile, sources, *with_deps, None, console,
+            &providers, &home, instance, profile, sources, *with_deps, console,
         ),
         Command::Search {
             instance,
@@ -723,19 +845,100 @@ fn pack_command(
         PackCommand::Validate { instance, profile } => {
             pack_validate(home, instance, profile, console)
         }
+        PackCommand::Formats { direction, game } => pack_formats(
+            providers,
+            direction.map(Direction::from),
+            game.as_deref(),
+            console,
+        ),
+        PackCommand::Options {
+            codec,
+            preset,
+            direction,
+        } => pack_options(
+            providers,
+            codec,
+            (*direction).into(),
+            preset.as_deref(),
+            console,
+        ),
         PackCommand::Import {
             instance,
-            path,
+            input,
+            codec,
+            options,
             profile,
-            with_deps,
-        } => pack_import(
-            providers, home, instance, path, profile, *with_deps, console,
-        ),
+            dry_run,
+        } => {
+            let options = match (codec, options) {
+                (Some(codec), options) => {
+                    options_file(providers, codec, Direction::Import, options.as_deref())?
+                }
+                (None, Some(_)) => return Err(CliError::OptionsNeedCodec),
+                (None, None) => PackOptions::new(),
+            };
+            let request = ImportRequest {
+                instance: Name::new(instance)?,
+                profile: Name::new(profile)?,
+                input: absolute(input)?,
+                codec: codec.clone(),
+                options,
+            };
+            pack_import(providers, home, request, *dry_run, console)
+        }
+        PackCommand::Update {
+            instance,
+            input,
+            codec,
+            profile,
+            resolutions,
+            dry_run,
+        } => {
+            let request = UpdateRequest {
+                instance: Name::new(instance)?,
+                profile: Name::new(profile)?,
+                input: absolute(input)?,
+                codec: codec.clone(),
+                resolutions: parse_resolutions(resolutions)?,
+            };
+            pack_update(providers, home, request, *dry_run, console)
+        }
         PackCommand::Export {
             instance,
             output,
+            codec,
+            preset,
+            options,
             profile,
-        } => pack_export(providers, home, instance, output, profile, console),
+            dry_run,
+        } => {
+            let request = ExportRequest {
+                instance: Name::new(instance)?,
+                profile: Name::new(profile)?,
+                codec: codec.clone(),
+                preset: preset.clone(),
+                options: options_file(providers, codec, Direction::Export, options.as_deref())?,
+                output: absolute(output)?,
+            };
+            pack_export(providers, home, request, *dry_run, console)
+        }
+        PackCommand::Capture {
+            instance,
+            profile,
+            paths,
+            dry_run,
+        } => {
+            let request = CaptureRequest {
+                instance: Name::new(instance)?,
+                profile: Name::new(profile)?,
+                paths: paths
+                    .iter()
+                    .map(String::as_str)
+                    .map(RelPath::new)
+                    .collect::<Result<_, _>>()?,
+            };
+            pack_capture(home, request, *dry_run, console)
+        }
     }
 }
 
@@ -857,161 +1060,429 @@ fn pack_validate(
     Ok(exit::OK)
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the command handler receives the established provider, instance, source, profile, and output context"
-)]
+fn pack_formats(
+    providers: &Providers,
+    direction: Option<Direction>,
+    game: Option<&str>,
+    console: &mut Console<'_>,
+) -> Result<u8, CliError> {
+    let descriptors = msbe_pack::codecs(providers, direction, game);
+    console.emit(&descriptors, |out, descriptors| {
+        for descriptor in descriptors {
+            let directions = match (descriptor.directions.import, descriptor.directions.export) {
+                (true, true) => "import, export",
+                (true, false) => "import",
+                _ => "export",
+            };
+            writeln!(
+                out,
+                "{:<18} {} (.{}) - {directions}",
+                descriptor.id,
+                descriptor.name,
+                descriptor.extensions.join(", .")
+            )?;
+        }
+        Ok(())
+    })?;
+    Ok(exit::OK)
+}
+
+fn pack_options(
+    providers: &Providers,
+    codec: &str,
+    direction: Direction,
+    preset: Option<&str>,
+    console: &mut Console<'_>,
+) -> Result<u8, CliError> {
+    let options = msbe_pack::codec_options(providers, codec, direction, preset)?;
+    console.emit(&options, |out, options| {
+        writeln!(out, "{} ({}) options:", options.codec, options.name)?;
+        for field in &options.schema.fields {
+            let value = options.values.get(&field.key).map(ToString::to_string);
+            writeln!(
+                out,
+                "  {} = {}  # {}",
+                field.key,
+                value.unwrap_or_default(),
+                field.description
+            )?;
+        }
+        let presets: Vec<&str> = options
+            .schema
+            .presets
+            .iter()
+            .map(|preset| preset.id.as_str())
+            .collect();
+        writeln!(out, "Presets: {}", presets.join(", "))
+    })?;
+    Ok(exit::OK)
+}
+
 fn pack_import(
     providers: &Providers,
     home: &Home,
-    instance: &str,
-    path: &Path,
-    profile: &str,
-    with_deps: bool,
+    request: ImportRequest,
+    dry_run: bool,
     console: &mut Console<'_>,
 ) -> Result<u8, CliError> {
-    let input = ZipPackInput::open(path, &msbe_archive::Limits::default())?;
-    let codec = providers
-        .detect_pack_codec(&input)?
-        .ok_or_else(|| msbe_provider_api::PackCodecError::FormatMismatch)?;
-    let opened = open(home, instance, console)?;
-    let profile_name = Name::new(profile)?;
-    let target = opened.lockfile(&profile_name)?.target;
-    let plan = codec.plan_import(
-        &input,
-        &PackImportContext {
-            game: None,
-            target: Some(target.clone()),
-        },
-        &PackOptions::new(),
-    )?;
-    let selected = plan
-        .requirements
-        .into_iter()
-        .filter(|requirement| {
-            matches!(
-                requirement.side,
-                Availability::Required | Availability::Optional
-            )
-        })
-        .map(pack_source)
-        .collect::<Result<Vec<_>, _>>()?;
-    let sources: Vec<String> = selected.iter().map(|source| source.url.clone()).collect();
-    let paths: BTreeMap<String, RelPath> = selected
-        .into_iter()
-        .map(|source| (source.url, source.path))
-        .collect();
-    add(
-        providers,
-        home,
-        instance,
-        profile,
-        &sources,
-        with_deps,
-        Some(&paths),
-        console,
-    )
+    let preview = msbe_pack::preview_import(providers, home, request)?;
+    if dry_run {
+        console.emit(&preview, |out, preview| {
+            let creates = if preview.creates_profile {
+                " (creates the profile)"
+            } else {
+                ""
+            };
+            writeln!(
+                out,
+                "Import of {} into {}/{} through {}{creates}:",
+                preview.request.input.display(),
+                preview.request.instance,
+                preview.request.profile,
+                preview.codec
+            )?;
+            print_import_items(out, &preview.items)?;
+            print_issues(out, &preview.blockers, &preview.warnings)
+        })?;
+        return Ok(blocked_exit(&preview.blockers));
+    }
+    let connect = console.connect;
+    let report = msbe_pack::execute_import(providers, home, &preview, connect, &Silent)?;
+    console.emit(&report, |out, report| {
+        writeln!(
+            out,
+            "Imported {} mod(s) and {} pack-owned file(s) into {}/{} through {}.",
+            report.added.len(),
+            report.configs,
+            report.instance,
+            report.profile,
+            report.codec
+        )
+    })?;
+    Ok(exit::OK)
 }
 
-struct PackSource {
-    url: String,
-    path: RelPath,
-}
-
-fn pack_source(requirement: msbe_provider_api::PackRequirement) -> Result<PackSource, CliError> {
-    let urls = requirement
-        .sources
-        .into_iter()
-        .find_map(|source| match source {
-            RequirementSource::Direct { urls } => Some(urls),
-            RequirementSource::Provider { .. } | RequirementSource::UserAction { .. } => None,
-        })
-        .ok_or(CliError::PackDownloadMissing)?;
-    let url = urls
-        .into_iter()
-        .find(|url| url.starts_with("https://"))
-        .ok_or(CliError::PackDownloadMissing)?;
-    let (algorithm, digest) = requirement
-        .hashes
-        .get("sha512")
-        .map(|digest| ("sha512", digest))
-        .or_else(|| {
-            requirement
-                .hashes
-                .get("sha256")
-                .map(|digest| ("sha256", digest))
-        })
-        .ok_or(CliError::PackHashMissing)?;
-    Ok(PackSource {
-        url: format!("{url}#{algorithm}={digest}"),
-        path: requirement
-            .destination
-            .ok_or(CliError::PackDownloadMissing)?,
-    })
+fn pack_update(
+    providers: &Providers,
+    home: &Home,
+    request: UpdateRequest,
+    dry_run: bool,
+    console: &mut Console<'_>,
+) -> Result<u8, CliError> {
+    let preview = msbe_pack::preview_update(providers, home, request)?;
+    if dry_run {
+        console.emit(&preview, |out, preview| {
+            writeln!(
+                out,
+                "Update of {}/{} from {} to {}:",
+                preview.request.instance,
+                preview.request.profile,
+                preview
+                    .previous_version
+                    .as_deref()
+                    .unwrap_or("an unversioned pack"),
+                preview
+                    .origin
+                    .version
+                    .as_deref()
+                    .unwrap_or("an unversioned pack")
+            )?;
+            print_import_items(out, &preview.items)?;
+            for change in &preview.changes {
+                writeln!(out, "  change      {}", change.id())?;
+            }
+            for conflict in &preview.conflicts {
+                let resolution = match conflict.resolution {
+                    Some(Resolution::Keep) => "keep",
+                    Some(Resolution::Drop) => "drop",
+                    None => "unresolved",
+                };
+                writeln!(
+                    out,
+                    "  conflict    {}: {} [{resolution}]",
+                    conflict.id, conflict.reason
+                )?;
+            }
+            print_issues(out, &preview.blockers, &preview.warnings)
+        })?;
+        return Ok(blocked_exit(&preview.blockers));
+    }
+    let connect = console.connect;
+    let report = msbe_pack::execute_update(providers, home, &preview, connect, &Silent)?;
+    console.emit(&report, |out, report| {
+        writeln!(
+            out,
+            "Updated {}/{} to {}: {} change(s) reapplied, {} dropped.",
+            report.instance,
+            report.profile,
+            report.version.as_deref().unwrap_or("the new version"),
+            report.applied.len(),
+            report.dropped.len()
+        )
+    })?;
+    Ok(exit::OK)
 }
 
 fn pack_export(
     providers: &Providers,
     home: &Home,
-    instance: &str,
-    output: &Path,
-    profile: &str,
+    request: ExportRequest,
+    dry_run: bool,
     console: &mut Console<'_>,
 ) -> Result<u8, CliError> {
-    let opened = open(home, instance, console)?;
-    let profile = Name::new(profile)?;
-    let lockfile = opened.lockfile(&profile)?;
-    let store = Store::open(opened.config().store.clone())?;
-    let files: Vec<PackFile> = lockfile
-        .deployment
-        .iter()
-        .map(|(path, digest)| {
-            let classification = lockfile.classifications.get(path);
-            PackFile {
-                path: path.clone(),
-                digest: *digest,
-                role: classification
-                    .map_or(msbe_provider_api::PackFileRole::Other, |file| file.role),
-                source: classification.map_or(msbe_provider_api::BlobSource::Local, |file| {
-                    file.source.clone()
-                }),
-                distribution: DistributionDecision::Allowed,
+    let preview = msbe_pack::preview_export(providers, home, request)?;
+    if dry_run {
+        console.emit(&preview, |out, preview| {
+            writeln!(
+                out,
+                "Export of {}/{} through {} ({}) to {}:",
+                preview.request.instance,
+                preview.request.profile,
+                preview.request.codec,
+                preview.codec_name,
+                preview.request.output.display()
+            )?;
+            for item in &preview.items {
+                writeln!(out, "  {:<18} {}", group_label(item.group), item.path)?;
             }
-        })
-        .collect();
-    let codec = providers
-        .pack_codecs()
-        .into_iter()
-        .find(|codec| codec.directions.export)
-        .and_then(|descriptor| providers.pack_codec(&descriptor.id).ok())
-        .ok_or(msbe_provider_api::PackCodecError::UnsupportedDirection(
-            "export",
-        ))?;
-    let context = PackExportContext {
-        game: &lockfile.plan,
-        target: &lockfile.target,
-        lockfile: &lockfile,
-        files: &files,
-        observations: &Observations::default(),
-    };
-    let plan = codec.plan_export(&context, &PackOptions::new())?;
-    let layout = codec.layout(&plan)?;
-    let output_path = output.to_path_buf();
-    let mut output_file = fs::File::create(output)?;
-    write_zip_layout(&layout, &store, &mut output_file)?;
-    let report = PackExportReport {
-        output: output_path,
-        files: files.len(),
-    };
+            writeln!(
+                out,
+                "{} requirement(s), {} environment input(s), {} embedded byte(s).",
+                preview.requirements.len(),
+                preview.environment.len(),
+                preview.embedded_bytes
+            )?;
+            for observation in &preview.observations {
+                writeln!(
+                    out,
+                    "Relied on {} as observed {}.",
+                    observation.subject, observation.observed_at
+                )?;
+            }
+            print_issues(out, &preview.blockers, &preview.warnings)
+        })?;
+        return Ok(blocked_exit(&preview.blockers));
+    }
+    let report = msbe_pack::execute_export(providers, home, &preview, &Silent)?;
     console.emit(&report, |out, report| {
         writeln!(
             out,
-            "Exported {} verified file(s) to {}.",
-            report.files,
+            "Exported {} entries ({} embedded blob(s), {} requirement(s)) to {}.",
+            report.entries,
+            report.embedded,
+            report.requirements,
             report.output.display()
         )
     })?;
     Ok(exit::OK)
+}
+
+fn pack_capture(
+    home: &Home,
+    request: CaptureRequest,
+    dry_run: bool,
+    console: &mut Console<'_>,
+) -> Result<u8, CliError> {
+    let preview = msbe_pack::preview_capture(home, request)?;
+    if dry_run {
+        console.emit(&preview, |out, preview| {
+            if preview.items.is_empty() {
+                return writeln!(out, "Nothing to capture.");
+            }
+            for item in &preview.items {
+                let kind = match item.kind {
+                    CaptureKind::Changed => "changed",
+                    CaptureKind::New => "new",
+                };
+                writeln!(out, "{kind} {} ({} bytes)", item.path, item.size)?;
+                for line in item.diff.iter().flatten() {
+                    let marker = match line.kind {
+                        DiffKind::Context => ' ',
+                        DiffKind::Added => '+',
+                        DiffKind::Removed => '-',
+                    };
+                    writeln!(out, "  {marker}{}", line.text)?;
+                }
+            }
+            Ok(())
+        })?;
+        return Ok(exit::OK);
+    }
+    let report = msbe_pack::execute_capture(home, &preview, &Silent)?;
+    console.emit(&report, |out, report| {
+        writeln!(
+            out,
+            "Captured {} file(s) into {}/{}.",
+            report.captured.len(),
+            report.instance,
+            report.profile
+        )
+    })?;
+    Ok(exit::OK)
+}
+
+fn snapshot_command(
+    home: &Home,
+    command: &SnapshotCommand,
+    console: &mut Console<'_>,
+) -> Result<u8, CliError> {
+    match command {
+        SnapshotCommand::Create { instance, output } => {
+            let report = msbe_pack::create_snapshot(
+                home,
+                &Name::new(instance)?,
+                &absolute(output)?,
+                &Silent,
+            )?;
+            console.emit(&report, |out, report| {
+                writeln!(
+                    out,
+                    "Wrote a snapshot of {} ({} profile(s), {} blob(s)) to {}. Snapshots are private backups, not packs.",
+                    report.instance,
+                    report.profiles.len(),
+                    report.blobs,
+                    report.path.display()
+                )
+            })?;
+            Ok(exit::OK)
+        }
+        SnapshotCommand::Restore { input, dry_run } => {
+            let preview = msbe_pack::preview_restore(home, &absolute(input)?)?;
+            if *dry_run {
+                console.emit(&preview, |out, preview| {
+                    writeln!(
+                        out,
+                        "Restoring would recreate {} for {} with {} profile(s) and {} blob(s).",
+                        preview.instance,
+                        preview.root.display(),
+                        preview.profiles.len(),
+                        preview.blobs
+                    )?;
+                    print_issues(out, &preview.blockers, &[])
+                })?;
+                return Ok(blocked_exit(&preview.blockers));
+            }
+            let report = msbe_pack::restore_snapshot(home, &preview, &Silent)?;
+            console.emit(&report, |out, report| {
+                writeln!(
+                    out,
+                    "Restored {} with {} profile(s); deploy a profile to apply it.",
+                    report.instance,
+                    report.profiles.len()
+                )
+            })?;
+            Ok(exit::OK)
+        }
+    }
+}
+
+/// Reads a TOML options file and types its values by `codec`'s schema.
+fn options_file(
+    providers: &Providers,
+    codec: &str,
+    direction: Direction,
+    path: Option<&Path>,
+) -> Result<PackOptions, CliError> {
+    let Some(path) = path else {
+        return Ok(PackOptions::new());
+    };
+    let text = fs::read_to_string(path).map_err(|source| CliError::ReadOptions {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let document: toml::Table =
+        toml::from_str(&text).map_err(|error| CliError::OptionsDocument {
+            path: path.to_path_buf(),
+            reason: error.to_string(),
+        })?;
+    Ok(msbe_pack::options_document(
+        providers,
+        codec,
+        direction,
+        &serde_json::to_value(document)?,
+    )?)
+}
+
+fn parse_resolutions(raw: &[String]) -> Result<BTreeMap<String, Resolution>, CliError> {
+    raw.iter()
+        .map(|entry| match entry.rsplit_once('=') {
+            Some((conflict, "keep")) => Ok((conflict.to_owned(), Resolution::Keep)),
+            Some((conflict, "drop")) => Ok((conflict.to_owned(), Resolution::Drop)),
+            _ => Err(CliError::Resolution(entry.clone())),
+        })
+        .collect()
+}
+
+fn absolute(path: &Path) -> Result<PathBuf, CliError> {
+    std::path::absolute(path).map_err(|source| CliError::Path {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
+/// The exit code for a pack failure, by its stable code.
+const fn pack_exit(code: IssueCode) -> u8 {
+    match code {
+        IssueCode::LayerConflict => exit::CONFLICT,
+        IssueCode::DistributionForbidden
+        | IssueCode::DistributionUnknown
+        | IssueCode::UntrustedExtension => exit::POLICY,
+        IssueCode::IntegrityMismatch
+        | IssueCode::EnvironmentMismatch
+        | IssueCode::DerivationMismatch => exit::INTEGRITY,
+        _ => exit::FAILURE,
+    }
+}
+
+/// The exit code a preview reports: success, or the code of its first blocker.
+fn blocked_exit(blockers: &[PackIssue]) -> u8 {
+    blockers
+        .first()
+        .map_or(exit::OK, |issue| pack_exit(issue.code))
+}
+
+fn print_issues(
+    out: &mut dyn Write,
+    blockers: &[PackIssue],
+    warnings: &[PackWarning],
+) -> io::Result<()> {
+    for issue in blockers {
+        writeln!(out, "blocked: {:?}: {}", issue.code, issue.message)?;
+    }
+    for warning in warnings {
+        writeln!(out, "warning: {}", warning.message)?;
+    }
+    Ok(())
+}
+
+fn print_import_items(out: &mut dyn Write, items: &[ImportItem]) -> io::Result<()> {
+    for item in items {
+        let action = match item.action {
+            ImportAction::InStore => "in store",
+            ImportAction::Embedded => "embedded",
+            ImportAction::Acquire => "acquire",
+            ImportAction::UserAction => "user action",
+            ImportAction::Reuse => "reuse",
+            ImportAction::Derive => "derive",
+            ImportAction::Missing => "missing",
+        };
+        writeln!(out, "  {action:<11} {}", item.subject)?;
+    }
+    Ok(())
+}
+
+const fn group_label(group: PreviewGroup) -> &'static str {
+    match group {
+        PreviewGroup::ProviderReference => "reference",
+        PreviewGroup::UserAction => "user action",
+        PreviewGroup::EnvironmentInput => "environment input",
+        PreviewGroup::EmbeddedConfig => "embedded config",
+        PreviewGroup::EmbeddedLocal => "embedded local",
+        PreviewGroup::EmbeddedOther => "embedded",
+        PreviewGroup::Derived => "derived",
+        PreviewGroup::PolicyBlocker => "blocked",
+        PreviewGroup::Omitted => "omitted",
+    }
 }
 
 fn open(home: &Home, name: &str, console: &mut Console<'_>) -> Result<Instance, CliError> {
@@ -1083,7 +1554,7 @@ fn instance_command(
                     loader_version
                         .as_deref()
                         .or(current_loader_version.as_deref()),
-                    side.map(Into::into).unwrap_or(current_side),
+                    side.map_or(current_side, Into::into),
                 )?;
             }
             console.emit(&instance.status()?, |out, status| {
@@ -1104,8 +1575,12 @@ fn instance_command(
             let mut instance = Instance::open(home, &name)?;
             instance.purge()?;
             let path = home.instance(&name);
-            fs::remove_dir_all(&path)
-                .map_err(|source| CliError::RemoveInstance { path, source })?;
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "the purged instance's state is MSBE-owned metadata outside the game root"
+            )]
+            let removed = fs::remove_dir_all(&path);
+            removed.map_err(|source| CliError::RemoveInstance { path, source })?;
             console.emit(&name, |out, name| writeln!(out, "Removed instance {name}."))?;
         }
     }
@@ -1252,7 +1727,6 @@ fn add(
     profile: &str,
     sources: &[String],
     with_deps: bool,
-    paths: Option<&BTreeMap<String, RelPath>>,
     console: &mut Console<'_>,
 ) -> Result<u8, CliError> {
     let opened = open(home, instance, console)?;
@@ -1273,10 +1747,7 @@ fn add(
             Ok(Routed {
                 request: Request::File(selection),
                 ..
-            }) => files.push((
-                *selection,
-                paths.and_then(|paths| paths.get(source).cloned()),
-            )),
+            }) => files.push(*selection),
             Err(RegistryError::Manifest(ManifestError::UnknownSource(_))) => {
                 artifacts.push(Artifact {
                     path: PathBuf::from(source),
@@ -1318,7 +1789,7 @@ fn add(
             .plan_install(&projects, with_deps, &installed_releases(&existing))?;
             fetch.plan(plan)?;
         }
-        fetch.pack_selections(&files)?;
+        fetch.selections(&files)?;
     }
     report.added = opened.add_artifacts(&profile, &artifacts)?;
 
@@ -1398,26 +1869,12 @@ impl Fetch<'_> {
 
     fn selections(&mut self, selections: &[Selection]) -> Result<(), CliError> {
         for selection in selections {
-            self.selection(selection, None)?;
+            self.selection(selection)?;
         }
         Ok(())
     }
 
-    fn pack_selections(
-        &mut self,
-        selections: &[(Selection, Option<RelPath>)],
-    ) -> Result<(), CliError> {
-        for (selection, source) in selections {
-            self.selection(selection, source.clone())?;
-        }
-        Ok(())
-    }
-
-    fn selection(
-        &mut self,
-        selection: &Selection,
-        source: Option<RelPath>,
-    ) -> Result<(), CliError> {
+    fn selection(&mut self, selection: &Selection) -> Result<(), CliError> {
         let project = &selection.project.id;
         if let Some(name) = installed_from(self.existing, &project.provider, &project.project) {
             self.report.skipped.push(name.clone());
@@ -1434,7 +1891,7 @@ impl Fetch<'_> {
                 .map(Name::sanitize)
                 .transpose()?,
             path: acquired.path,
-            source,
+            source: None,
         });
         Ok(())
     }
@@ -1822,13 +2279,21 @@ fn installed_from<'p>(profile: &'p Profile, provider: &str, project: &str) -> Op
 
 fn report(error: &CliError, err: &mut dyn Write) -> io::Result<()> {
     writeln!(err, "error: {error}")?;
-    if let CliError::Instance(InstanceError::Conflicts(conflicts)) = error {
-        for conflict in conflicts {
-            writeln!(err, "  {}", conflict.path)?;
-            for claim in &conflict.claims {
-                writeln!(err, "    claimed by {} ({})", claim.module, claim.blob)?;
+    match error {
+        CliError::Instance(InstanceError::Conflicts(conflicts)) => {
+            for conflict in conflicts {
+                writeln!(err, "  {}", conflict.path)?;
+                for claim in &conflict.claims {
+                    writeln!(err, "    claimed by {} ({})", claim.module, claim.blob)?;
+                }
             }
         }
+        CliError::Pack(error) => {
+            for issue in error.issues() {
+                writeln!(err, "  {:?}: {}", issue.code, issue.message)?;
+            }
+        }
+        _ => {}
     }
     Ok(())
 }

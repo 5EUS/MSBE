@@ -15,13 +15,16 @@ use std::path::PathBuf;
 /// The JSON-RPC version understood by this contract.
 pub const JSON_RPC_VERSION: &str = "2.0";
 
-/// The RPC contract with runtime game-support discovery.
-pub const CONTRACT_VERSION: u32 = 3;
+/// The RPC contract with typed pack methods, daemon-held plans and jobs.
+pub const CONTRACT_VERSION: u32 = 4;
 
 /// The method that reports daemon identity and contract compatibility.
 pub const INFO_METHOD: &str = "daemon.info";
 
 /// The method that executes an MSBE command under the daemon's serialized ownership.
+///
+/// A compatibility bridge for surfaces without typed methods yet. Pack workflows use the typed
+/// methods below.
 pub const COMMAND_METHOD: &str = "command.run";
 
 /// The method that lists games supported by the daemon's loaded plans.
@@ -32,6 +35,70 @@ pub const PLAN_LOAD_METHOD: &str = "plan.load";
 
 /// The developer method that unloads one plan from the runtime registry.
 pub const PLAN_UNLOAD_METHOD: &str = "plan.unload";
+
+/// Queues a job: `{ method, params }` returns `{ job_id }`.
+pub const JOB_START_METHOD: &str = "job.start";
+
+/// Reads a job's state and the events after a sequence: `{ job_id, after }`.
+pub const JOB_EVENTS_METHOD: &str = "job.events";
+
+/// Asks a job to stop: `{ job_id }` returns `{ cancelled }`.
+pub const JOB_CANCEL_METHOD: &str = "job.cancel";
+
+/// Lists permitted pack codec descriptors: `{ direction?, game? }`.
+pub const PACK_CODEC_LIST_METHOD: &str = "pack.codec.list";
+
+/// Returns a codec's option schema and normalized values: `{ codec, direction?, preset? }`.
+pub const PACK_CODEC_OPTIONS_METHOD: &str = "pack.codec.options";
+
+/// Previews an import and holds it: returns `{ plan_id, plan_digest, plan }`.
+pub const PACK_IMPORT_PREVIEW_METHOD: &str = "pack.import.preview";
+
+/// Previews a pack-layer update and holds it.
+pub const PACK_UPDATE_PREVIEW_METHOD: &str = "pack.update.preview";
+
+/// Previews an export and holds it.
+pub const PACK_EXPORT_PREVIEW_METHOD: &str = "pack.export.preview";
+
+/// Previews a capture and holds it.
+pub const PACK_CAPTURE_PREVIEW_METHOD: &str = "pack.capture.preview";
+
+/// Runs a held import plan: `{ plan_id, plan_digest }`. Job only.
+pub const PACK_IMPORT_EXECUTE_METHOD: &str = "pack.import.execute";
+
+/// Runs a held update plan. Job only.
+pub const PACK_UPDATE_EXECUTE_METHOD: &str = "pack.update.execute";
+
+/// Runs a held export plan. Job only.
+pub const PACK_EXPORT_EXECUTE_METHOD: &str = "pack.export.execute";
+
+/// Runs a held capture plan. Job only.
+pub const PACK_CAPTURE_EXECUTE_METHOD: &str = "pack.capture.execute";
+
+/// Writes an instance snapshot: `{ instance, output }`. Job only.
+pub const SNAPSHOT_CREATE_METHOD: &str = "snapshot.create";
+
+/// Restores an instance snapshot: `{ input }`. Job only.
+pub const SNAPSHOT_RESTORE_METHOD: &str = "snapshot.restore";
+
+/// Methods that run only through [`JOB_START_METHOD`].
+pub const JOB_METHODS: &[&str] = &[
+    PACK_IMPORT_EXECUTE_METHOD,
+    PACK_UPDATE_EXECUTE_METHOD,
+    PACK_EXPORT_EXECUTE_METHOD,
+    PACK_CAPTURE_EXECUTE_METHOD,
+    SNAPSHOT_CREATE_METHOD,
+    SNAPSHOT_RESTORE_METHOD,
+];
+
+/// Application error codes beyond the JSON-RPC reserved range.
+pub mod codes {
+    /// A job holds the instance state; retry once it finishes.
+    pub const BUSY: i32 = -32020;
+    /// A pack operation failed. `data.code` carries the stable pack failure code and
+    /// `data.issues` every issue.
+    pub const PACK: i32 = -32030;
+}
 
 /// Returns the local daemon endpoint for the current user.
 #[cfg(unix)]
@@ -59,6 +126,78 @@ pub struct DaemonInfo {
     /// Absent from daemons that predate it, which clients must tolerate.
     #[serde(default)]
     pub data_directory: Option<String>,
+}
+
+/// Where a job is in its life.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JobState {
+    /// Waiting for the worker.
+    Queued,
+    /// Running on the worker.
+    Running,
+    /// Finished with a result.
+    Succeeded,
+    /// Finished with a failure.
+    Failed,
+    /// Stopped before finishing, leaving no partial profile or output.
+    Cancelled,
+}
+
+/// Something a job reported.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum JobEvent {
+    /// Work completed so far. Consecutive progress events coalesce into the latest.
+    Progress {
+        /// Steps done.
+        completed: u64,
+        /// Steps in total.
+        total: u64,
+        /// What is happening.
+        message: String,
+    },
+    /// The job finished; `result` is the operation's report.
+    Done {
+        /// The operation's report.
+        result: Value,
+    },
+    /// The job failed.
+    Failed {
+        /// The stable failure code.
+        code: String,
+        /// Human-readable detail.
+        message: String,
+        /// Every issue the failure reported.
+        issues: Value,
+    },
+    /// The job was cancelled.
+    Cancelled,
+}
+
+/// One event and its sequence number within its job.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JobEventRecord {
+    /// Position in the job's event log, starting at one.
+    pub sequence: u64,
+    /// The event.
+    #[serde(flatten)]
+    pub event: JobEvent,
+}
+
+/// A job's state and the events a client has not seen.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JobStatus {
+    /// The job.
+    pub job_id: u64,
+    /// The job method it runs.
+    pub method: String,
+    /// Where it is.
+    pub state: JobState,
+    /// Events after the requested sequence.
+    pub events: Vec<JobEventRecord>,
+    /// The sequence to pass as `after` next time.
+    pub next: u64,
 }
 
 /// A JSON-RPC request framed as one JSON object.
@@ -129,31 +268,48 @@ impl Response {
 
     /// Creates an error response.
     pub fn error(id: Value, code: i32, message: impl Into<String>) -> Self {
+        Self::error_with_data(id, code, message, None)
+    }
+
+    /// Creates an error response carrying structured `data`.
+    pub fn error_with_data(
+        id: Value,
+        code: i32,
+        message: impl Into<String>,
+        data: Option<Value>,
+    ) -> Self {
         Self::Error {
             jsonrpc: JSON_RPC_VERSION,
             id,
             error: Error {
                 code,
                 message: message.into(),
+                data,
             },
         }
     }
 }
 
 /// A JSON-RPC error object.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Error {
     /// The stable JSON-RPC error code.
     pub code: i32,
     /// A human-readable error message.
     pub message: String,
+    /// Structured detail, such as a stable pack failure code.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<Value>,
 }
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use serde_json::{Value, json};
 
-    use super::{CONTRACT_VERSION, DaemonInfo, Request, Response};
+    use super::{
+        CONTRACT_VERSION, DaemonInfo, JobEvent, JobEventRecord, JobState, JobStatus, Request,
+        Response,
+    };
 
     #[test]
     fn info_round_trips_with_the_csharp_naming_policy() -> Result<(), serde_json::Error> {
@@ -165,7 +321,7 @@ mod tests {
         let encoded = serde_json::to_string(&info)?;
         assert_eq!(
             encoded,
-            r#"{"version":"0.0.0","rpc_version":3,"data_directory":"/msbe"}"#
+            r#"{"version":"0.0.0","rpc_version":4,"data_directory":"/msbe"}"#
         );
         assert_eq!(serde_json::from_str::<DaemonInfo>(&encoded)?, info);
         Ok(())
@@ -193,5 +349,32 @@ mod tests {
         Ok(())
     }
 
-    use serde_json::Value;
+    #[test]
+    fn job_events_flatten_their_sequence_beside_the_event_kind() -> Result<(), serde_json::Error> {
+        let status = JobStatus {
+            job_id: 3,
+            method: "pack.export.execute".to_owned(),
+            state: JobState::Running,
+            events: vec![JobEventRecord {
+                sequence: 1,
+                event: JobEvent::Progress {
+                    completed: 1,
+                    total: 4,
+                    message: "writing".to_owned(),
+                },
+            }],
+            next: 1,
+        };
+        assert_eq!(
+            serde_json::to_value(&status)?,
+            json!({
+                "job_id": 3,
+                "method": "pack.export.execute",
+                "state": "running",
+                "events": [{"sequence": 1, "kind": "progress", "completed": 1, "total": 4, "message": "writing"}],
+                "next": 1
+            })
+        );
+        Ok(())
+    }
 }

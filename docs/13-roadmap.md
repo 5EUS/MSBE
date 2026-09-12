@@ -242,15 +242,15 @@ shows profile-ordered mods. Profile-specific loader, loader version, and side ta
 visible and editable, and changing them invalidates stale provider results. Users can add local files, URLs, and provider references,
 remove selected mods, search compatible providers, include required dependencies, and
 install a result into the selected profile. Pack-owned text configs can be added, edited,
-removed, validated into a canonical lockfile, and exported with the resolved profile through the
-temporary Modrinth-specific path. Replacing that path with provider codec discovery, native
-`.msbepack` thin/portable/complete presets, blob-policy preview, and job-backed typed RPC, plus
-pack update over profile layers, capture of in-game config changes, and instance snapshots,
-remains in this milestone. Deployment has a native review of ordered
+removed, and validated into a canonical lockfile. The Pack page discovers export codecs from the
+daemon and renders their option schemas and presets, previews export inclusion with policy
+blockers and observation ages, previews imports and pack-layer updates with conflict resolution,
+captures in-game changes with diffs, and runs each daemon-held plan as a job with progress and
+cancellation. Deployment has a native review of ordered
 filesystem operations, unchanged and locally kept counts, the exclusion report, explicit
 confirmation before apply, and rollback of the latest transaction. Conflict resolution,
 the full journal timeline, wizards, download progress, browser-assisted acquisition,
-updates, pack import, complete accessibility, and i18n remain in this milestone.
+updates, snapshot restore from Desktop, complete accessibility, and i18n remain in this milestone.
 
 **Done when**: a user can compose a pack from provider search, review the resolved list, edit
 configuration files, select a discovered codec and its schema-driven options, and import the

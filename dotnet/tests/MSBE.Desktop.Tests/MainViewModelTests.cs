@@ -1,3 +1,6 @@
+using System.Buffers;
+using System.Text.Json;
+
 using MSBE.Client;
 using MSBE.Desktop.Services;
 using MSBE.Desktop.ViewModels;
@@ -422,10 +425,10 @@ public sealed class MainViewModelTests
         Assert.Equal("Rolled back the latest deployment.", vm.StatusMessage);
     }
 
-    /// <summary>Pack config editing, validation, and export use structured daemon commands.</summary>
+    /// <summary>Pack config editing and validation use structured daemon commands and keep the lockfile path.</summary>
     /// <returns>A task representing the test.</returns>
     [Fact]
-    public async Task PackWorkflowEditsValidatesAndExports()
+    public async Task PackWorkflowEditsAndValidates()
     {
         List<IReadOnlyList<string>> calls = [];
         var client = new TestClient(arguments => PackWorkflowResponse(arguments, calls));
@@ -436,8 +439,6 @@ public sealed class MainViewModelTests
 
         await vm.SavePackConfigCommand.ExecuteAsync(parameter: null);
         await vm.ValidatePackCommand.ExecuteAsync(parameter: null);
-        vm.PackOutputPath = "/home/test/alpha.mrpack";
-        await vm.ExportPackCommand.ExecuteAsync(parameter: null);
 
         Assert.Contains(calls, arguments => arguments.SequenceEqual(
             ["--format", "json", "pack", "config", "set", "alpha", "config/example.toml", "--content", "enabled = true\n", "--profile", "default"],
@@ -445,11 +446,8 @@ public sealed class MainViewModelTests
         Assert.Contains(calls, arguments => arguments.SequenceEqual(
             ["--format", "json", "pack", "validate", "alpha", "--profile", "default"],
             StringComparer.Ordinal));
-        Assert.Contains(calls, arguments => arguments.SequenceEqual(
-            ["--format", "json", "pack", "export", "alpha", "--output", "/home/test/alpha.mrpack", "--profile", "default"],
-            StringComparer.Ordinal));
         Assert.Equal("/home/test/locks/default.toml", vm.PackLockfilePath);
-        Assert.Contains("Exported distributable pack", vm.StatusMessage, StringComparison.Ordinal);
+        Assert.Contains("Pack is valid", vm.StatusMessage, StringComparison.Ordinal);
     }
 
     /// <summary>Settings opens the data folder the daemon reports, once it has reported one.</summary>
@@ -482,6 +480,104 @@ public sealed class MainViewModelTests
         Assert.StartsWith($"Could not open {DataDirectory}.", vm.StatusMessage, StringComparison.Ordinal);
     }
 
+    /// <summary>Export discovers codecs, renders their schema, previews policy, and runs only the held plan as a job.</summary>
+    /// <returns>A task representing the test.</returns>
+    [Fact]
+    public async Task PackExportPreviewsPolicyAndRunsTheHeldPlanAsAJob()
+    {
+        const string Codecs = """[{"id":"modrinth-mrpack","provider":"modrinth","name":"Modrinth modpack","extensions":["mrpack"],"directions":{"import":true,"export":true}},{"id":"msbe-native","provider":null,"name":"MSBE native bundle","extensions":["msbepack"],"directions":{"import":true,"export":true}}]""";
+        const string Options = """{"codec":"msbe-native","name":"MSBE native bundle","direction":"export","preset":null,"schema":{"schema":1,"presets":[{"id":"portable","name":"Portable","values":{}},{"id":"public-distribution","name":"Public distribution","values":{}}],"fields":[{"key":"purpose","label":"Purpose","description":"Redistribution policy.","required":true,"default":{"type":"choice","value":"private-transfer"},"kind":{"kind":"choice","values":[{"value":"distribute","label":"Distribute publicly"},{"value":"private-transfer","label":"Private transfer"}]}},{"key":"deterministic","label":"Deterministic","description":"Normalized metadata.","required":true,"default":{"type":"boolean","value":true},"kind":{"kind":"boolean"}}]},"values":{"deterministic":true,"purpose":"private-transfer"}}""";
+        const string Blocked = """{"plan_id":"plan-1","plan_digest":"sha256:aa","plan":{"items":[{"path":"config/a.toml","group":"embedded-config"},{"path":"mods/local.jar","group":"policy-blocker"}],"requirements":[],"environment":[],"blockers":[{"code":"DistributionUnknown","message":"mods/local.jar has no exact source"}],"warnings":[],"observations":[{"subject":"sha256:01","observed_at":"2026-09-10"}],"embedded_bytes":12}}""";
+        const string Clean = """{"plan_id":"plan-2","plan_digest":"sha256:bb","plan":{"items":[{"path":"config/a.toml","group":"embedded-config"}],"requirements":[],"environment":[],"blockers":[],"warnings":[],"observations":[],"embedded_bytes":12}}""";
+        var previews = new Queue<string>([Blocked, Clean]);
+        List<IReadOnlyList<string>> calls = [];
+        var client = new TestClient(
+            arguments => PackWorkflowResponse(arguments, calls),
+            method => method switch
+            {
+                "pack.codec.list" => Codecs,
+                "pack.codec.options" => Options,
+                "pack.export.preview" => previews.Dequeue(),
+                "job.start" => """{"job_id":7}""",
+                "job.events" => """{"job_id":7,"method":"pack.export.execute","state":"succeeded","events":[{"sequence":1,"kind":"done","result":{}}],"next":1}""",
+                _ => throw new InvalidOperationException(method),
+            });
+        MainViewModel vm = new(client, folders: null, new FixedTime(new DateTimeOffset(2026, 9, 12, 8, 0, 0, TimeSpan.Zero)))
+        {
+            SelectedInstance = "alpha",
+            IsTypedPackSupported = true,
+        };
+
+        await vm.LoadExportCodecsCommand.ExecuteAsync(parameter: null);
+
+        Assert.Equal("msbe-native", vm.SelectedExportCodec?.Id);
+        Assert.EndsWith("alpha-default.msbepack", vm.PackOutputPath, StringComparison.Ordinal);
+        Assert.Equal(["purpose", "deterministic"], vm.ExportOptions.Select(option => option.Key));
+        Assert.Equal("private-transfer", vm.ExportOptions[0].SelectedChoice?.Value);
+        Assert.True(vm.ExportOptions[1].BooleanValue);
+        Assert.Equal(["portable", "public-distribution"], vm.ExportPresets.Select(preset => preset.Id));
+
+        await vm.PreviewExportCommand.ExecuteAsync(parameter: null);
+
+        Assert.False(vm.CanExecuteExport);
+        Assert.Equal(["Embedded config", "Policy blocker"], vm.ExportPreviewItems.Select(item => item.Group));
+        Assert.Equal("DistributionUnknown", Assert.Single(vm.ExportIssues).Code);
+        Assert.Equal("sha256:01 observed 2 day(s) ago", Assert.Single(vm.ExportObservations));
+        JsonElement previewed = client.LastParameters("pack.export.preview");
+        Assert.Equal("private-transfer", previewed.GetProperty("options").GetProperty("purpose").GetString());
+        Assert.True(previewed.GetProperty("options").GetProperty("deterministic").GetBoolean());
+
+        await vm.PreviewExportCommand.ExecuteAsync(parameter: null);
+        Assert.True(vm.CanExecuteExport);
+        await vm.ExecuteExportCommand.ExecuteAsync(parameter: null);
+
+        JsonElement started = client.LastParameters("job.start");
+        Assert.Equal("pack.export.execute", started.GetProperty("method").GetString());
+        Assert.Equal("plan-2", started.GetProperty("params").GetProperty("plan_id").GetString());
+        Assert.Equal("sha256:bb", started.GetProperty("params").GetProperty("plan_digest").GetString());
+        Assert.StartsWith("Exported default to", vm.StatusMessage, StringComparison.Ordinal);
+        Assert.False(vm.HasExportPreview);
+        Assert.False(vm.IsPackJobRunning);
+    }
+
+    /// <summary>Update previews list layer conflicts, send the chosen resolutions, and run the resolved plan.</summary>
+    /// <returns>A task representing the test.</returns>
+    [Fact]
+    public async Task PackUpdateResolvesLayerConflictsBeforeRunning()
+    {
+        const string Conflicted = """{"plan_id":"plan-1","plan_digest":"sha256:aa","plan":{"items":[{"subject":"a","action":"reuse"}],"changes":[{"kind":"add-mod","subject":"c"}],"conflicts":[{"id":"mod:c","change":{"kind":"add-mod","subject":"c"},"reason":"the updated pack now ships a mod with this name"}],"blockers":[{"code":"LayerConflict","message":"mod:c: resolve it as keep or drop"}],"warnings":[]}}""";
+        const string Resolved = """{"plan_id":"plan-2","plan_digest":"sha256:bb","plan":{"items":[{"subject":"a","action":"reuse"}],"changes":[{"kind":"add-mod","subject":"c"}],"conflicts":[{"id":"mod:c","change":{"kind":"add-mod","subject":"c"},"reason":"the updated pack now ships a mod with this name","resolution":"keep"}],"blockers":[],"warnings":[]}}""";
+        var previews = new Queue<string>([Conflicted, Resolved]);
+        List<IReadOnlyList<string>> calls = [];
+        var client = new TestClient(
+            arguments => PackWorkflowResponse(arguments, calls),
+            method => method switch
+            {
+                "pack.update.preview" => previews.Dequeue(),
+                "job.start" => """{"job_id":3}""",
+                "job.events" => """{"job_id":3,"method":"pack.update.execute","state":"succeeded","events":[{"sequence":1,"kind":"done","result":{}}],"next":1}""",
+                _ => throw new InvalidOperationException(method),
+            });
+        MainViewModel vm = new(client) { SelectedInstance = "alpha", PackImportPath = "/packs/v2.mrpack" };
+
+        await vm.PreviewUpdateCommand.ExecuteAsync(parameter: null);
+
+        Assert.False(vm.CanExecuteImport);
+        PackConflictItem conflict = Assert.Single(vm.ImportConflicts);
+        Assert.Equal("mod:c", conflict.Id);
+        Assert.Contains(vm.ImportPreviewItems, item => string.Equals(item.Subject, "add-mod c", StringComparison.Ordinal));
+
+        conflict.Resolution = "keep";
+        await vm.PreviewUpdateCommand.ExecuteAsync(parameter: null);
+
+        Assert.Equal("keep", client.LastParameters("pack.update.preview").GetProperty("resolutions").GetProperty("mod:c").GetString());
+        Assert.True(vm.CanExecuteImport);
+        await vm.ExecuteImportCommand.ExecuteAsync(parameter: null);
+
+        Assert.Equal("pack.update.execute", client.LastParameters("job.start").GetProperty("method").GetString());
+        Assert.Equal("Updated the pack layer of default.", vm.StatusMessage);
+    }
+
     private static CommandResult PackWorkflowResponse(IReadOnlyList<string> arguments, List<IReadOnlyList<string>> calls)
     {
         calls.Add(arguments);
@@ -510,11 +606,6 @@ public sealed class MainViewModelTests
             return new CommandResult(0, """{"lockfile":"/home/test/locks/default.toml","files":1,"configs":1,"mods":0}""", string.Empty);
         }
 
-        if (arguments.Contains("export", StringComparer.Ordinal))
-        {
-            return new CommandResult(0, """{"output":"/home/test/alpha.mrpack","files":1}""", string.Empty);
-        }
-
         return arguments.Contains("set", StringComparer.Ordinal)
             ? new CommandResult(0, """{"path":"config/example.toml","digest":"sha256:01"}""", string.Empty)
             : new CommandResult(0, """{"target":{"loader":"fabric","loader_version":"0.16.10","side":"client"},"order":[],"components":{},"mods":{},"configs":{}}""", string.Empty);
@@ -538,8 +629,15 @@ public sealed class MainViewModelTests
     private sealed class TestClient : IMsbeClient
     {
         private readonly Func<IReadOnlyList<string>, CommandResult> runCommand;
+        private readonly Func<string, string>? invoke;
 
-        public TestClient(Func<IReadOnlyList<string>, CommandResult> runCommand) => this.runCommand = runCommand;
+        public TestClient(Func<IReadOnlyList<string>, CommandResult> runCommand, Func<string, string>? invoke = null)
+        {
+            this.runCommand = runCommand;
+            this.invoke = invoke;
+        }
+
+        public List<(string Method, JsonElement Parameters)> Invocations { get; } = [];
 
         public Task<DaemonInfo> GetInfoAsync(CancellationToken cancellationToken) => Task.FromResult(new DaemonInfo("test", 3, DataDirectory));
 
@@ -547,5 +645,41 @@ public sealed class MainViewModelTests
             [new GameInfo("minecraft", "Minecraft", "1", ["fabric", "neoforge"])]);
 
         public Task<CommandResult> RunCommandAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken) => Task.FromResult(this.runCommand(arguments));
+
+        public Task<JsonElement> InvokeAsync(string method, Action<Utf8JsonWriter>? writeParameters, CancellationToken cancellationToken)
+        {
+            var buffer = new ArrayBufferWriter<byte>();
+#pragma warning disable MA0042, MA0045 // Utf8JsonWriter writes to memory synchronously; there is nothing to await.
+            using (var writer = new Utf8JsonWriter(buffer))
+            {
+                if (writeParameters is null)
+                {
+                    writer.WriteNullValue();
+                }
+                else
+                {
+                    writeParameters(writer);
+                }
+            }
+#pragma warning restore MA0042, MA0045
+
+            using JsonDocument parameters = JsonDocument.Parse(buffer.WrittenMemory);
+            this.Invocations.Add((method, parameters.RootElement.Clone()));
+            string result = this.invoke?.Invoke(method) ?? throw new InvalidOperationException($"Unexpected RPC {method}.");
+            using JsonDocument document = JsonDocument.Parse(result);
+            return Task.FromResult(document.RootElement.Clone());
+        }
+
+        public JsonElement LastParameters(string method) =>
+            this.Invocations.Last(call => string.Equals(call.Method, method, StringComparison.Ordinal)).Parameters;
+    }
+
+    private sealed class FixedTime : TimeProvider
+    {
+        private readonly DateTimeOffset now;
+
+        public FixedTime(DateTimeOffset now) => this.now = now;
+
+        public override DateTimeOffset GetUtcNow() => this.now;
     }
 }

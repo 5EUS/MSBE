@@ -61,12 +61,20 @@ public sealed class UnixSocketMsbeClient : IMsbeClient
     public async Task<CommandResult> RunCommandAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(arguments);
-        using JsonDocument response = await this.SendAsync("command.run", arguments, cancellationToken).ConfigureAwait(false);
+        using JsonDocument response = await this.SendAsync("command.run", writer => WriteArguments(writer, arguments), cancellationToken).ConfigureAwait(false);
         JsonElement result = GetResult(response.RootElement);
         return new CommandResult(
             result.GetProperty("exit_code").GetInt32(),
             result.GetProperty("stdout").GetString() ?? string.Empty,
             result.GetProperty("stderr").GetString() ?? string.Empty);
+    }
+
+    /// <inheritdoc />
+    public async Task<JsonElement> InvokeAsync(string method, Action<Utf8JsonWriter>? writeParameters, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(method);
+        using JsonDocument response = await this.SendAsync(method, writeParameters, cancellationToken).ConfigureAwait(false);
+        return GetResult(response.RootElement).Clone();
     }
 
     private static string GetDefaultSocketPath()
@@ -107,13 +115,39 @@ public sealed class UnixSocketMsbeClient : IMsbeClient
             return result;
         }
 
-        string message = response.TryGetProperty("error", out JsonElement error) && error.TryGetProperty("message", out JsonElement errorMessage)
+        if (!response.TryGetProperty("error", out JsonElement error))
+        {
+            throw new MsbeRpcException("The daemon returned an invalid JSON-RPC response.");
+        }
+
+        string message = error.TryGetProperty("message", out JsonElement errorMessage)
             ? errorMessage.GetString() ?? "The daemon returned an unknown error."
-            : "The daemon returned an invalid JSON-RPC response.";
-        throw new InvalidOperationException(message);
+            : "The daemon returned an unknown error.";
+        int code = error.TryGetProperty("code", out JsonElement errorCode) && errorCode.ValueKind == JsonValueKind.Number
+            ? errorCode.GetInt32()
+            : 0;
+        string? failureCode = error.TryGetProperty("data", out JsonElement data)
+            && data.ValueKind == JsonValueKind.Object
+            && data.TryGetProperty("code", out JsonElement dataCode)
+            ? dataCode.GetString()
+            : null;
+        throw new MsbeRpcException(message, code, failureCode);
     }
 
-    private static byte[] CreateRequest(long requestId, string method, IReadOnlyList<string>? arguments)
+    private static void WriteArguments(Utf8JsonWriter writer, IReadOnlyList<string> arguments)
+    {
+        writer.WriteStartObject();
+        writer.WriteStartArray("args");
+        foreach (string argument in arguments)
+        {
+            writer.WriteStringValue(argument);
+        }
+
+        writer.WriteEndArray();
+        writer.WriteEndObject();
+    }
+
+    private static byte[] CreateRequest(long requestId, string method, Action<Utf8JsonWriter>? writeParameters)
     {
         var buffer = new ArrayBufferWriter<byte>();
 #pragma warning disable MA0045 // Utf8JsonWriter does not implement IAsyncDisposable.
@@ -124,21 +158,13 @@ public sealed class UnixSocketMsbeClient : IMsbeClient
             writer.WriteNumber("id", requestId);
             writer.WriteString("method", method);
             writer.WritePropertyName("params");
-            if (arguments is null)
+            if (writeParameters is null)
             {
                 writer.WriteNullValue();
             }
             else
             {
-                writer.WriteStartObject();
-                writer.WriteStartArray("args");
-                foreach (string argument in arguments)
-                {
-                    writer.WriteStringValue(argument);
-                }
-
-                writer.WriteEndArray();
-                writer.WriteEndObject();
+                writeParameters(writer);
             }
 
             writer.WriteEndObject();
@@ -151,14 +177,14 @@ public sealed class UnixSocketMsbeClient : IMsbeClient
         return request;
     }
 
-    private async Task<JsonDocument> SendAsync(string method, IReadOnlyList<string>? arguments, CancellationToken cancellationToken)
+    private async Task<JsonDocument> SendAsync(string method, Action<Utf8JsonWriter>? writeParameters, CancellationToken cancellationToken)
     {
         using Socket socket = await this.ConnectAsync(cancellationToken).ConfigureAwait(false);
         var stream = new NetworkStream(socket, ownsSocket: false);
         await using (stream.ConfigureAwait(false))
         {
             long requestId = Interlocked.Increment(ref this.nextRequestId);
-            byte[] request = CreateRequest(requestId, method, arguments);
+            byte[] request = CreateRequest(requestId, method, writeParameters);
             await stream.WriteAsync(request, cancellationToken).ConfigureAwait(false);
 
 #pragma warning disable MA0045 // StreamReader does not implement IAsyncDisposable.

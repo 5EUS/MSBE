@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace MSBE.Client;
 
 /// <summary>A connection to the MSBE daemon.</summary>
@@ -21,5 +23,14 @@ public interface IMsbeClient
     /// <param name="arguments">The command arguments, excluding the executable name.</param>
     /// <param name="cancellationToken">Cancels the pending request.</param>
     /// <returns>The command result produced by the daemon.</returns>
+    /// <remarks>A compatibility bridge for surfaces that have no typed RPC method yet.</remarks>
     Task<CommandResult> RunCommandAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken);
+
+    /// <summary>Invokes one typed RPC method.</summary>
+    /// <param name="method">The JSON-RPC method name.</param>
+    /// <param name="writeParameters">Writes the parameters value, or <see langword="null" /> for none.</param>
+    /// <param name="cancellationToken">Cancels the pending request.</param>
+    /// <returns>The method result, detached from the response so it outlives it.</returns>
+    /// <exception cref="MsbeRpcException">The daemon answered with an error.</exception>
+    Task<JsonElement> InvokeAsync(string method, Action<Utf8JsonWriter>? writeParameters, CancellationToken cancellationToken);
 }

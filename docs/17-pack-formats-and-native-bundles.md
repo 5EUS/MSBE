@@ -79,12 +79,11 @@ A dedicated `msbe-pack-native` crate may be split from `msbe-provider-local` if 
 becomes large. It still registers through `PackCodecRegistration`; moving code does not create a
 new architectural privilege.
 
-`msbe-provider-local` does not exist yet. Phase D creates it; until then the native codec lives
-unregistered in `msbe-pack`.
+`msbe-provider-local` registers the native codec; `msbe-pack` holds no codec of its own.
 
-The current `msbe-pack` implementation violates this boundary because it contains Modrinth and
-CurseForge wire types, and the current CLI violates it by constructing Minecraft and loader
-fields. Those are migration debt, not precedent.
+Phase B moved external wire types out of `msbe-pack`, and Phase D replaced the CLI's
+format-specific pack paths with codec orchestration. Any literal that remains in a generic crate is
+migration debt tracked in §17.16, not precedent.
 
 ## 17.3 Adapter and codec registration
 
@@ -310,17 +309,33 @@ pub struct PackExportContext<'a> {
     pub lockfile: &'a Lockfile,
     pub files: &'a [PackFile],
     pub observations: &'a Observations,
+    pub inclusion: &'a PackInclusion,
 }
 
 pub struct PackFile {
     pub path: RelPath,
     pub digest: Digest,
     pub role: PackFileRole,
-    pub layer: LayerId,
+    pub layer: String,
+    /// False for artifact files a plan consumes without placing, such as injection inputs.
+    pub deployed: bool,
     pub source: BlobSource,
     pub distribution: DistributionDecision,
 }
+
+/// The host's §17.10 decision, made before the codec runs.
+pub struct PackInclusion {
+    pub embed: BTreeSet<Digest>,
+    pub permitted: BTreeSet<Digest>,
+    pub requirements: Vec<PackRequirement>,
+    pub environment: Vec<EnvironmentRequirement>,
+}
 ```
+
+`inclusion` is decided by `msbe-pack`, not by the codec. A codec that cannot represent a reference
+may embed that digest instead, which is how a format restricts `blob-mode`, but only when
+`permitted` contains it. The host rejects a plan or layout that embeds any other digest before a
+byte is written.
 
 `PackFileRole` distinguishes provider artifact, pack-owned config, local artifact, generated
 output, loader component, and other resolved content. This classification is produced while the
@@ -594,20 +609,25 @@ Desktop selection.
 
 External codecs append format-specific choices. A Modrinth codec may expose pack version,
 client/server environment defaults, and override inclusion. It may not expose a switch that
-weakens provider policy.
+weakens provider policy. A codec field that redeclares a common key is a schema error.
+
+`purpose` defaults to `private-transfer`: embedding content whose redistribution rights are unknown
+is allowed there with a warning, and public distribution is an explicit choice. `compression` offers
+`deflate` and `store`. Schema-1 hosts write only deterministic archives, so `deterministic = false`
+is rejected as `InvalidOptions` rather than silently ignored.
 
 ### Presets
 
-Schemas may define presets as named complete option maps:
+`msbe-pack` also prepends four common presets, available with every codec:
 
-- **Small download**: prefer provider references; include only content that cannot be reproduced
-  otherwise.
-- **Portable**: include pack-owned configs and legally embeddable unsourceable content; reference
-  exact provider files.
-- **Offline**: include every legally embeddable required blob. A complete personal backup is an
-  instance snapshot (§17.10), not a preset.
-- **Public distribution**: fail on unknown or prohibited redistribution and minimize embedded
-  third-party content.
+- **`thin`**: embed nothing and reference everything; strict, so content without an exact source
+  blocks the export.
+- **`portable`**: embed pack-owned configs and content without an exact source; reference exact
+  provider files.
+- **`complete`**: embed every blob policy permits for a private transfer. A personal backup of
+  everything is an instance snapshot (§17.10), not a preset.
+- **`public-distribution`**: `portable` selection with `purpose = distribute`, so unknown or
+  prohibited redistribution fails the export.
 
 Presets are convenience only. The normalized field map is authoritative.
 
@@ -691,23 +711,25 @@ schema = 1
 
 [[requirement]]
 digest = "sha256:..."
+destination = "mods/example.jar"
+side = "required"
 hashes = { sha512 = "..." }
 
-  [[requirement.source]]
+  [[requirement.sources]]
   kind = "provider"
-  provider = "modrinth"
-  package = "..."
+  package = { provider = "modrinth", project = "..." }
   version = "..."
 
-  [[requirement.source]]
+  [[requirement.sources]]
   kind = "direct"
   urls = ["https://..."]
 
 [[requirement]]
 digest = "sha256:..."
+side = "required"
 
-  [[requirement.source]]
-  kind = "user-action"
+  [[requirement.sources]]
+  kind = "user_action"
   provider = "nexus"
   reference = "..."
   reason = "Free-account download requires browser confirmation"
@@ -719,7 +741,9 @@ digest = "sha256:..."
 ```
 
 Sources are alternatives for the same bytes, in preference order (§17.4). Environment entries are
-never satisfied by a download.
+never satisfied by a download. The root `game` names the instance's game directory. A provider
+source is acquired through that provider's release metadata when it publishes one, or by routing its
+project reference when the reference is itself a source, as a pinned direct URL is.
 
 A thin bundle may contain no blobs. A portable bundle normally embeds configs, local files, and
 other exact content with no stable source. A complete bundle attempts to embed all required
@@ -848,22 +872,26 @@ The generic CLI surface is:
 
 ```text
 msbe pack formats [--direction import|export] [--game GAME]
-msbe pack options FORMAT [--preset PRESET]
-msbe pack import INSTANCE INPUT [--format FORMAT] [--options FILE] [-p PROFILE] [--dry-run]
-msbe pack update INSTANCE INPUT [--format FORMAT] [-p PROFILE] [--dry-run]
-msbe pack export INSTANCE OUTPUT --format FORMAT [--options FILE] [-p PROFILE] [--dry-run]
-msbe pack capture INSTANCE [-p PROFILE] [--dry-run]
+msbe pack options CODEC [--preset PRESET] [--direction import|export]
+msbe pack import INSTANCE INPUT [--codec CODEC] [--options FILE] [-p PROFILE] [--dry-run]
+msbe pack update INSTANCE INPUT [--codec CODEC] [-p PROFILE] [--resolve CONFLICT=keep|drop]... [--dry-run]
+msbe pack export INSTANCE OUTPUT --codec CODEC [--preset PRESET] [--options FILE] [-p PROFILE] [--dry-run]
+msbe pack capture INSTANCE [-p PROFILE] [--path PATH]... [--dry-run]
 msbe pack validate INSTANCE [-p PROFILE]
 msbe snapshot create INSTANCE OUTPUT
 msbe snapshot restore INPUT [--dry-run]
 ```
 
 `pack update` replaces a profile's pack layer with another version of the same pack and reapplies
-its `changes` layer (§17.5).
+its `changes` layer (§17.5). A conflict ID is `mod:NAME`, `config:PATH` or `order`; an update with an
+unresolved conflict exits with the conflict code and changes nothing.
 
-`FORMAT` is a codec ID such as `modrinth-mrpack` or `msbe-native`; aliases and extensions are
-resolved by descriptors. The CLI does not gain `--minecraft-version`, `--fabric-loader`, or
-other wire-specific flags. Format-specific values live in the options document.
+`CODEC` is a codec ID such as `modrinth-mrpack` or `msbe-native`, and import detects it from the
+input when omitted. The flag is `--codec` because `--format` is already the global `human|json`
+output flag. The CLI does not gain `--minecraft-version`, `--fabric-loader`, or other wire-specific
+flags. Format-specific values live in the TOML options document, typed by the codec's schema.
+`--dry-run` prints the preview and exits with the code of its first blocker: 6 for a distribution
+refusal, 7 for an integrity or environment mismatch, 4 for a layer conflict.
 
 RPC adds descriptor, schema, preview, and execute methods rather than tunneling opaque CLI text:
 
@@ -882,10 +910,14 @@ snapshot.create         { instance, output }                # job
 snapshot.restore        { input }                           # job
 ```
 
-Execute and snapshot methods run only through `job.start` ([03](03-architecture.md)). They report
-progress, surface installer questions, and cancel without leaving a partial profile or output. The
-daemon currently serves one request at a time, so a synchronous import would block every client
-for its full length.
+Execute and snapshot methods run only through `job.start` ([03](03-architecture.md)); calling one
+directly is refused. Jobs run one at a time on a worker thread, report progress through
+`job.events { job_id, after }`, a cursor poll whose consecutive progress events coalesce, and cancel
+cooperatively without leaving a partial profile or output. While a job runs it holds the instance
+state, so previews and `command.run` answer busy (`-32020`) instead of observing a half-applied
+operation. A pack failure answers `-32030` with `data.code`, the stable §17.14 code, and
+`data.issues`. Installer questions have no producer in pack workflows yet, so `job.answer` is not
+part of contract 4.
 
 Desktop renders `PackOptionSchema` with native controls, provides presets, and shows an export
 preview grouped into provider references, user actions, environment inputs, embedded configs,
@@ -921,7 +953,9 @@ Pack failures are typed and stable:
 - `CodecFailure`
 
 Errors name the codec and affected package/path/digest. Raw parser or provider error text is
-retained as diagnostic detail but is not the public contract.
+retained as diagnostic detail but is not the public contract. Two host codes accompany the list:
+`Cancelled` for a job the caller stopped, and `HostFailure` for instance-state or filesystem
+failures that are not pack failures.
 
 ## 17.15 Security limits
 
@@ -977,11 +1011,11 @@ release-channel behavior. The remaining production violations are:
 | Location                                    | Violation                                                                                                                                                                      | Required owner                                                                                                                     |
 | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
 | `msbe-pack`                                 | Resolved in Phase B: the crate owns only provider-neutral host container utilities and the unregistered native codec. Modrinth wire records, `.mrpack` detection, and export layout live in `msbe-provider-modrinth`; CurseForge records were removed. | Phase B complete. |
-| `msbe-cli::pack_import`                     | Branches on `Pack::Modrinth` and `Pack::CurseForge`, interprets Modrinth environment flags, selects download URLs and hashes, and emits format-specific errors.                | Replace with neutral `PackImportPlan` execution through codec lookup and the provider policy gate.                                 |
-| `msbe-cli::pack_export`                     | Builds Modrinth dependencies and calls `export_modrinth` directly.                                                                                                             | Replace with codec selection, normalized options, and `PackExportPlan` execution.                                                  |
-| `msbe-cli::loader_dependency`               | Maps `fabric` and `quilt` to Modrinth dependency keys.                                                                                                                         | Move the mapping into reviewed data private to the Modrinth codec.                                                                 |
+| `msbe-cli::pack_import`                     | Resolved in Phase D: import previews and executes `msbe_pack` plans; codecs are detected through the registry, and requirements are acquired through the provider policy gate. | Phase D complete. |
+| `msbe-cli::pack_export`                     | Resolved in Phase D: export selects a codec by ID, normalizes its schema, and writes only the policy-gated `PackExportPlan`.                                                   | Phase D complete. |
+| `msbe-cli::loader_dependency`               | Resolved in Phase B: the mapping is private to the Modrinth codec.                                                                                                             | Phase B complete. |
 | `msbe-cli::UpdateReport::not_from_modrinth` | Exposes a provider-specific JSON field even though the implementation means that no registered provider has update capability.                                                 | Rename to a provider-neutral field in a versioned CLI/RPC contract change and retain an explicit compatibility path if required.   |
-| CLI help and pack errors                    | Name Modrinth, CurseForge and `.mrpack` as built-in command behavior.                                                                                                          | Generate format descriptions from codec descriptors and use neutral orchestration errors.                                          |
+| CLI help and pack errors                    | Pack help and errors are resolved in Phase D: formats come from descriptors and failures carry §17.14 codes. `add` and `search` help still name Modrinth as an example source.   | Generate source examples from registered providers. |
 
 The following matches were reviewed and are **not** boundary violations:
 
@@ -1006,21 +1040,21 @@ been removed.
 
 ### Contract audit (2026-09-12)
 
-The Phase A contracts were reviewed against §17.4 through §17.6 before the A2 revision. The
-first, second, fourth, fifth, sixth, and seventh entries below are now implemented by A2; the
-remaining daemon and capture work belongs to Phase D.
+The Phase A contracts were reviewed against §17.4 through §17.6 before the A2 revision. A2
+resolved the contract entries below, and Phase D resolved the plan-binding, daemon and capture
+entries.
 
 | Location                                           | Gap                                                                                                                                                                                                  | Resolved by                                             |
 | -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
 | `msbe-provider-api::codec::PackCodec`              | Resolved: codecs now receive bounded `PackInput` views and produce `PackLayout`; `msbe-pack` owns ZIP validation and deterministic writing.                                                        | `PackInput` and `PackLayout` (§17.4).                   |
 | `msbe-provider-api::codec::PackRequirement`        | Resolved: requirements carry an optional exact digest, ordered source alternatives, and installer answers.                                                                                           | Per-digest requirements with ordered sources (§17.4).   |
-| `msbe-provider-api::codec::PackExportPlan`         | Serializable with an editable `embedded` list and opaque `codec_state`, and nothing binds a preview to its execution.                                                                                 | Daemon-held plan IDs and digests (§17.11).              |
+| `msbe-provider-api::codec::PackExportPlan`         | Resolved: clients never submit a plan. The daemon holds each preview under a plan ID and digest, runs it once, and re-plans before executing so any drift fails as `StalePlan`.                     | Daemon-held plan IDs and digests (§17.11).              |
 | `msbe-core::instance::LockedFileClassification`    | Resolved: the lockfile retains only role and source facts; dated live state is represented by export observations.                                                                                   | Facts and observations (§17.5).                         |
 | `msbe-core::instance::BlobSource`                  | Resolved: installation-owned inputs use `Environment`; derived outputs name `TransformId` when relocked.                                                                                            | `Environment` and `TransformId` (§17.5).                |
 | `msbe-core::instance::LockedPlan`, `LockedTarget`  | Resolved: plan digest and optional installation fingerprint are lockfile facts.                                                                                                                      | Plan digest and fingerprint (§17.5).                    |
 | `msbe-core::instance::LockedModule`, `Profile`     | Resolved: modules record their introducing layer and installer answers; profiles retain layer records.                                                                                               | Profile lineage and installer answers (§17.5).          |
-| `msbe-daemon::handle`                              | Serves one request at a time with no job model.                                                                                                                                                      | Jobs ([03](03-architecture.md)), Phase D.               |
-| `[deploy] mutable` paths                           | `verify` reports runtime changes, but nothing can adopt them into the profile.                                                                                                                       | Capture (§17.5).                                        |
+| `msbe-daemon::handle`                              | Resolved: long operations are jobs on a worker thread; the listener keeps answering progress and cancellation.                                                                                        | Jobs ([03](03-architecture.md)), Phase D.               |
+| `[deploy] mutable` paths                           | Resolved: `pack capture` adopts changed and new files beneath the plan's mutable roots into the changes layer.                                                                                        | Capture (§17.5).                                        |
 
 ### Phase A - neutral contracts
 
@@ -1089,13 +1123,40 @@ the next extension-identity migration.
 
 ### Phase D - native bundles and clients
 
-1. Create `msbe-provider-local` and register `msbe-native` through it.
-2. Add thin, portable, complete, and public-distribution presets.
-3. Add the daemon job model and typed pack RPC with daemon-held plan IDs and digests.
-4. Add pack update over profile layers, with `LayerConflict` reporting.
-5. Add capture and instance snapshots.
-6. Render codec schemas, export previews, observation ages, and layer conflicts in Desktop.
-7. Keep the current command-run bridge only as a compatibility path until typed RPC ships.
+Phase D is implemented. The native bundle joins through a reviewed registration, every pack
+operation is previewed before it runs, the daemon holds the previewed plan and runs it only as a
+job, and Desktop renders codec schemas instead of naming formats.
+
+1. [x] Create `msbe-provider-local` and register `msbe-native` through it. The codec left
+   `msbe-pack`. It honours the host's inclusion decision, records environment inputs and the
+   observations an export relied on, and declares embedded blobs by entry path so the host ingests
+   and verifies their bytes.
+2. [x] Add thin, portable, complete, and public-distribution presets. They are common presets over
+   the §17.8 policy fields, applied by the §17.10 inclusion planner in `msbe-pack`.
+3. [x] Add the daemon job model and typed pack RPC with daemon-held plan IDs and digests
+   (contract 4, §17.13).
+4. [x] Add pack update over profile layers, with `LayerConflict` reporting. An imported pack layer
+   records its base, the changes layer is the difference between that base and the profile, and a
+   change the new version invalidates must be resolved as `keep` or `drop` before the update runs.
+   Unchanged modules are reused rather than downloaded again.
+5. [x] Add capture and instance snapshots. Capture adopts only files beneath the plan's mutable
+   roots, shows a line diff for small text files, and re-verifies each digest before recording.
+   Snapshot restore verifies every blob and stages instance state beside its destination before one
+   rename commits it.
+6. [x] Render codec schemas, export previews, observation ages, and layer conflicts in Desktop.
+7. [x] Keep the current command-run bridge only as a compatibility path until typed RPC ships. Pack
+   workflows use typed RPC; `command.run` remains for surfaces without typed methods.
+
+Carried forward:
+
+- Export planning reads the dated observation cache beside the store but does not refresh it. No
+  adapter exposes an availability or redistribution probe yet, so provider content without an
+  observation has unknown distribution rights.
+- The lockfile writer does not yet populate installation fingerprints, environment inputs, or
+  `TransformId`s, so derived outputs remain unsourceable. Import verifies whichever of these a
+  lockfile carries, before acquiring anything.
+- Installer questions have no producer in pack workflows, so `job.answer` is not in contract 4.
+- The daemon serves Unix domain sockets only.
 
 ### Phase E - compatibility and removal
 

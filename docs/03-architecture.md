@@ -66,9 +66,9 @@ crates/
   msbe-archive/       hardened extraction (zip/7z/rar/tar), path safety
   msbe-fsops/         CAS shards, capability probe, journaled applier (the only writer)
   msbe-provider-api/  neutral adapter and pack-codec contracts; HttpClient, acquisition, resolution; no TLS
-  msbe-provider-*/    one crate per provider/format extension (modrinth, direct); no TLS
+  msbe-provider-*/    one crate per provider/format extension (modrinth, direct, local); no TLS
   msbe-providers/     reviewed adapter and codec registrations, behind the policy gate
-  msbe-pack/          provider-neutral pack orchestration, options and native bundle planning
+  msbe-pack/          provider-neutral pack orchestration: options, blob policy, previews, snapshots
   msbe-http/          the one crate that links TLS: ureq + rustls/ring, OS trust store
   msbe-daemon/        JSON-RPC server, job queue, session auth
   msbe-cli/           clap; --format json; stable exit codes
@@ -159,12 +159,22 @@ Long operations are **jobs**, not blocking calls:
 
 ```
 job.start   { method, params }          -> { job_id }
-job.events  { job_id }                  -> stream of Progress | Log | Question | Done
-job.answer  { job_id, question_id, .. } -> ack        # FOMOD wizards, conflict prompts
-job.cancel  { job_id }
+job.events  { job_id, after }           -> { state, events after `after`, next }
+job.cancel  { job_id }                  -> { cancelled }
+job.answer  { job_id, question_id, .. } -> ack        # reserved: FOMOD wizards, conflict prompts
 ```
 
-The `Question` event is how an interactive install wizard works identically in the GUI
+Contract 4 implements `job.start`, `job.events` and `job.cancel`. The daemon runs jobs one at a
+time on a worker thread that holds the instance-state lock, so the listener keeps answering
+progress and cancellation while requests that read or write instance state answer busy
+(`-32020`). `job.events` is a cursor poll: a client passes the last sequence it saw and receives the
+newer `progress`, `done`, `failed` or `cancelled` events, with consecutive progress coalesced into
+the latest. Cancellation is cooperative: operations check it between steps and before they commit,
+so a cancelled job leaves no partial profile or output. Pack execute methods and snapshots run only
+as jobs ([17](17-pack-formats-and-native-bundles.md) §17.13).
+
+The `Question` event and `job.answer` arrive with the first installer-question producer. The
+`Question` event is how an interactive install wizard works identically in the GUI
 (a dialog), the CLI (a prompt), and CI (`--non-interactive` → fail with the unanswered
 question, or `--answers answers.toml` to pre-supply them). One mechanism, three faces.
 

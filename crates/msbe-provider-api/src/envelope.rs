@@ -37,6 +37,10 @@ pub struct ExtensionEnvelope<T> {
 
 impl<T: Serialize> ExtensionEnvelope<T> {
     /// Computes the normalized SHA-256 package digest for `payload`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EnvelopeError::Canonical`] when the payload cannot be serialized.
     pub fn package_digest_for(payload: &T) -> Result<String, EnvelopeError> {
         let canonical = serde_json::to_vec(payload)
             .map_err(|error| EnvelopeError::Canonical(error.to_string()))?;
@@ -44,6 +48,10 @@ impl<T: Serialize> ExtensionEnvelope<T> {
     }
 
     /// Signs this envelope with `key` after checking its declared package digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EnvelopeError`] when the envelope is structurally invalid.
     pub fn sign(&mut self, key: &SigningKey) -> Result<(), EnvelopeError> {
         self.validate()?;
         self.signature = hex(&key.sign(&self.canonical_signed_payload()?).to_bytes());
@@ -51,7 +59,15 @@ impl<T: Serialize> ExtensionEnvelope<T> {
     }
 
     /// Verifies this envelope against a signer-to-verifying-key trust store.
-    pub fn verify(&self, trusted_keys: &BTreeMap<String, VerifyingKey>) -> Result<(), EnvelopeError> {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EnvelopeError`] when the envelope is invalid, its signer is untrusted, or its
+    /// signature does not verify.
+    pub fn verify(
+        &self,
+        trusted_keys: &BTreeMap<String, VerifyingKey>,
+    ) -> Result<(), EnvelopeError> {
         self.validate()?;
         let key = trusted_keys
             .get(&self.signer)
@@ -63,19 +79,32 @@ impl<T: Serialize> ExtensionEnvelope<T> {
     }
 
     /// Checks structural safety and the declared normalized payload digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EnvelopeError`] naming the first structural rule or digest check that fails.
     pub fn validate(&self) -> Result<(), EnvelopeError> {
         if self.schema != 1 {
             return Err(EnvelopeError::UnsupportedSchema(self.schema));
         }
         validate_text("extension id", &self.id)?;
         validate_text("extension version", &self.version)?;
-        if self.provides.is_empty() || self.provides.windows(2).any(|pair| pair[0] == pair[1]) {
+        if self.provides.is_empty()
+            || self
+                .provides
+                .windows(2)
+                .any(|pair| matches!(pair, [left, right] if left == right))
+        {
             return Err(EnvelopeError::InvalidProvides);
         }
         if self.host_api.minimum > self.host_api.maximum {
             return Err(EnvelopeError::InvalidHostApiRange);
         }
-        if self.capabilities.windows(2).any(|pair| pair[0] == pair[1]) {
+        if self
+            .capabilities
+            .windows(2)
+            .any(|pair| matches!(pair, [left, right] if left == right))
+        {
             return Err(EnvelopeError::DuplicateCapability);
         }
         validate_text("signer", &self.signer)?;
@@ -159,10 +188,14 @@ fn decode_hex(value: &str, expected_bytes: usize) -> Result<Vec<u8>, EnvelopeErr
     if value.len() != expected_bytes * 2 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(EnvelopeError::InvalidSignature);
     }
-    (0..expected_bytes)
-        .map(|index| {
-            u8::from_str_radix(&value[index * 2..index * 2 + 2], 16)
-                .map_err(|_| EnvelopeError::InvalidSignature)
+    value
+        .as_bytes()
+        .chunks(2)
+        .map(|pair| {
+            std::str::from_utf8(pair)
+                .ok()
+                .and_then(|pair| u8::from_str_radix(pair, 16).ok())
+                .ok_or(EnvelopeError::InvalidSignature)
         })
         .collect()
 }

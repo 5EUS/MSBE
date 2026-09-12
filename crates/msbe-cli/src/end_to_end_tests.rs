@@ -368,8 +368,15 @@ fn pack_export_writes_verified_profile_files_as_overrides() {
     let output = world.inputs.join("profile.mrpack");
     let output_text = output.display().to_string();
 
-    let report = world.json(&["pack", "export", "mc", "--output", output_text.as_str()]);
-    assert_eq!(at(&report, "/files"), 1);
+    let report = world.json(&[
+        "pack",
+        "export",
+        "mc",
+        output_text.as_str(),
+        "--codec",
+        "modrinth-mrpack",
+    ]);
+    assert_eq!(at(&report, "/embedded"), 1);
     assert_eq!(at(&report, "/output"), &json!(output));
 
     let mut archive = zip::ZipArchive::new(fs::File::open(output).unwrap()).unwrap();
@@ -424,7 +431,14 @@ fn pack_configs_can_be_edited_validated_and_exported() {
     assert!(Path::new(at(&validated, "/lockfile").as_str().unwrap()).is_file());
 
     let output = world.inputs.join("configured.mrpack");
-    world.json(&["pack", "export", "mc", "--output", output.to_str().unwrap()]);
+    world.json(&[
+        "pack",
+        "export",
+        "mc",
+        output.to_str().unwrap(),
+        "--codec",
+        "modrinth-mrpack",
+    ]);
     let mut archive = zip::ZipArchive::new(fs::File::open(output).unwrap()).unwrap();
     let mut exported = String::new();
     archive
@@ -1189,4 +1203,394 @@ fn direct_urls_install_with_pinned_checksums_and_refuse_plain_http() {
         fs::read(world.game.join("mods/extra-1.0.jar")).unwrap(),
         bytes
     );
+}
+
+/// The deployment digest map `lock` reports for a profile.
+fn deployment(world: &World, instance: &str, profile: &str) -> Value {
+    at(
+        &world.json(&["lock", instance, "--profile", profile]),
+        "/deployment",
+    )
+    .clone()
+}
+
+/// A Modrinth pack whose files the fake CDN serves under `version`.
+fn mrpack(world: &World, version: &str, files: &[(&str, &[u8])]) -> String {
+    let mut index_files = Vec::new();
+    for (file, bytes) in files {
+        let url = format!("https://cdn.modrinth.test/{version}/{file}");
+        world
+            .modrinth
+            .files
+            .borrow_mut()
+            .insert(url.clone(), bytes.to_vec());
+        index_files.push(json!({
+            "path": format!("mods/{file}"),
+            "downloads": [url],
+            "hashes": { "sha512": sha512_hex(bytes) },
+            "env": { "client": "required", "server": "required" }
+        }));
+    }
+    let index = json!({ "formatVersion": 1, "versionId": version, "files": index_files });
+    world.zip(
+        &format!("{version}.mrpack"),
+        &[(
+            "modrinth.index.json",
+            serde_json::to_string(&index).unwrap().as_bytes(),
+        )],
+    )
+}
+
+fn items<'a>(preview: &'a Value, field: &str) -> Vec<&'a str> {
+    at(preview, "/items")
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item.get(field).and_then(Value::as_str).unwrap())
+        .collect()
+}
+
+#[test]
+fn native_bundles_are_deterministic_and_import_every_blob_to_the_same_deployment() {
+    let world = World::new();
+    world.add_instance(Some("1.21.1"));
+    let local = world.file("sodium.jar", b"local sodium");
+    world.json(&["add", "mc", local.as_str()]);
+    world.json(&[
+        "pack",
+        "config",
+        "set",
+        "mc",
+        "config/example.toml",
+        "--content",
+        "enabled = true\n",
+    ]);
+
+    let first = world.inputs.join("first.msbepack");
+    let second = world.inputs.join("second.msbepack");
+    for output in [&first, &second] {
+        let report = world.json(&[
+            "pack",
+            "export",
+            "mc",
+            output.to_str().unwrap(),
+            "--codec",
+            "msbe-native",
+            "--preset",
+            "portable",
+        ]);
+        assert_eq!(at(&report, "/embedded"), 2);
+    }
+    assert_eq!(
+        fs::read(&first).unwrap(),
+        fs::read(&second).unwrap(),
+        "repeated exports are byte-identical"
+    );
+
+    let game = world.game.display().to_string();
+    let plan = world.plan.display().to_string();
+    let store = world.inputs.join("copy-store").display().to_string();
+    let added = world.msbe(&[
+        "instance",
+        "add",
+        "copy",
+        "--root",
+        game.as_str(),
+        "--plan",
+        plan.as_str(),
+        "--loader",
+        "fabric",
+        "--game-version",
+        "1.21.1",
+        "--store",
+        store.as_str(),
+    ]);
+    assert_eq!(added.code, exit::OK, "{}", added.err);
+
+    let bundle = first.to_str().unwrap();
+    let preview = world.json(&[
+        "pack",
+        "import",
+        "copy",
+        bundle,
+        "--profile",
+        "fresh",
+        "--dry-run",
+    ]);
+    assert_eq!(at(&preview, "/codec"), "msbe-native");
+    assert_eq!(items(&preview, "action"), ["embedded", "embedded"]);
+    let imported = world.json(&["pack", "import", "copy", bundle, "--profile", "fresh"]);
+    assert_eq!(at(&imported, "/added"), &json!(["sodium"]));
+    assert_eq!(
+        deployment(&world, "copy", "fresh"),
+        deployment(&world, "mc", "default"),
+        "native import reaches the original deployment digest map"
+    );
+    let layers = at(
+        &world.json(&["profile", "show", "copy", "fresh"]),
+        "/layers",
+    )
+    .clone();
+    assert_eq!(at(&layers, "/0/codec"), "msbe-native");
+}
+
+#[test]
+fn export_policy_blocks_unknown_rights_publicly_and_unsourceable_content_when_thin() {
+    let world = World::new();
+    world.add_instance(Some("1.21.1"));
+    let local = world.file("sodium.jar", b"local sodium");
+    world.json(&["add", "mc", local.as_str()]);
+    let output = world.inputs.join("public.msbepack").display().to_string();
+    let export = |preset: &str, dry_run: bool| {
+        let mut args = vec![
+            "--format",
+            "json",
+            "pack",
+            "export",
+            "mc",
+            output.as_str(),
+            "--codec",
+            "msbe-native",
+            "--preset",
+            preset,
+        ];
+        if dry_run {
+            args.push("--dry-run");
+        }
+        world.msbe(&args)
+    };
+
+    let public = export("public-distribution", true);
+    assert_eq!(public.code, exit::POLICY, "{}", public.err);
+    let public: Value = serde_json::from_str(&public.out).unwrap();
+    assert_eq!(at(&public, "/blockers/0/code"), "DistributionUnknown");
+    assert_eq!(at(&public, "/blockers/0/path"), "mods/sodium.jar");
+
+    let refused = export("public-distribution", false);
+    assert_eq!(refused.code, exit::POLICY);
+    assert!(
+        refused.err.contains("DistributionUnknown"),
+        "{}",
+        refused.err
+    );
+    assert!(
+        !Path::new(&output).exists(),
+        "a blocked export writes nothing"
+    );
+
+    let thin = export("thin", true);
+    assert_eq!(thin.code, exit::FAILURE, "{}", thin.err);
+    let thin: Value = serde_json::from_str(&thin.out).unwrap();
+    assert_eq!(at(&thin, "/blockers/0/code"), "UnreproducibleContent");
+
+    let formats = world.json(&["pack", "formats", "--direction", "export"]);
+    let ids: Vec<&str> = formats
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|codec| at(codec, "/id").as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["modrinth-mrpack", "msbe-native"]);
+    let options = world.json(&["pack", "options", "msbe-native", "--preset", "complete"]);
+    assert_eq!(at(&options, "/values/blob-mode"), "complete");
+}
+
+#[test]
+fn snapshots_restore_every_blob_and_are_refused_as_packs() {
+    let world = World::new();
+    world.add_instance(Some("1.21.1"));
+    let local = world.file("sodium.jar", b"local sodium");
+    world.json(&["add", "mc", local.as_str()]);
+    let snapshot = world.inputs.join("mc.msbesnapshot").display().to_string();
+    let created = world.json(&["snapshot", "create", "mc", snapshot.as_str()]);
+    assert_eq!(at(&created, "/blobs"), 1);
+
+    let refused = world.msbe(&[
+        "pack",
+        "import",
+        "mc",
+        snapshot.as_str(),
+        "--profile",
+        "other",
+    ]);
+    assert_eq!(refused.code, exit::FAILURE);
+    assert!(refused.err.contains("snapshot"), "{}", refused.err);
+    let occupied = world.msbe(&["snapshot", "restore", snapshot.as_str(), "--dry-run"]);
+    assert_eq!(
+        occupied.code,
+        exit::FAILURE,
+        "an existing instance blocks a restore"
+    );
+
+    world.json(&["instance", "remove", "mc"]);
+    world.json(&["snapshot", "restore", snapshot.as_str()]);
+    let mods = at(&world.json(&["profile", "show", "mc"]), "/mods").clone();
+    assert!(mods.get("sodium").is_some(), "{mods}");
+    assert_eq!(world.msbe(&["deploy", "mc"]).code, exit::OK);
+    assert_eq!(
+        fs::read(world.game.join("mods/sodium.jar")).unwrap(),
+        b"local sodium"
+    );
+}
+
+#[test]
+fn pack_updates_reapply_profile_changes_and_report_conflicts_for_resolution() {
+    let world = World::new();
+    world.add_instance(Some("1.21.1"));
+    let v1 = mrpack(&world, "v1", &[("a.jar", b"a one"), ("b.jar", b"b one")]);
+    world.json(&["pack", "import", "mc", v1.as_str()]);
+    world.json(&["remove", "mc", "b"]);
+    let local = world.file("c.jar", b"local c");
+    world.json(&["add", "mc", local.as_str()]);
+
+    let v2 = mrpack(&world, "v2", &[("a.jar", b"a two"), ("b.jar", b"b one")]);
+    let preview = world.json(&["pack", "update", "mc", v2.as_str(), "--dry-run"]);
+    assert_eq!(
+        at(&preview, "/changes"),
+        &json!([{"kind": "add-mod", "subject": "c"}, {"kind": "remove-mod", "subject": "b"}])
+    );
+    assert_eq!(at(&preview, "/conflicts"), &json!([]));
+    assert_eq!(items(&preview, "action"), ["acquire", "reuse"]);
+    let updated = world.json(&["pack", "update", "mc", v2.as_str()]);
+    assert_eq!(at(&updated, "/mods"), &json!(["a", "c"]));
+    world.json(&["deploy", "mc"]);
+    assert_eq!(fs::read(world.game.join("mods/a.jar")).unwrap(), b"a two");
+    assert!(!world.game.join("mods/b.jar").exists());
+
+    let v3 = mrpack(&world, "v3", &[("a.jar", b"a two"), ("c.jar", b"pack c")]);
+    let conflicted = world.msbe(&[
+        "--format",
+        "json",
+        "pack",
+        "update",
+        "mc",
+        v3.as_str(),
+        "--dry-run",
+    ]);
+    assert_eq!(conflicted.code, exit::CONFLICT, "{}", conflicted.err);
+    let conflicted: Value = serde_json::from_str(&conflicted.out).unwrap();
+    let ids: Vec<&str> = at(&conflicted, "/conflicts")
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|conflict| at(conflict, "/id").as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["mod:c", "mod:b"]);
+    assert_eq!(
+        world.msbe(&["pack", "update", "mc", v3.as_str()]).code,
+        exit::CONFLICT,
+        "unresolved conflicts are never silently kept or dropped"
+    );
+
+    let resolved = world.json(&[
+        "pack",
+        "update",
+        "mc",
+        v3.as_str(),
+        "--resolve",
+        "mod:c=keep",
+        "--resolve",
+        "mod:b=drop",
+    ]);
+    assert_eq!(at(&resolved, "/dropped"), &json!(["mod:b"]));
+    world.json(&["deploy", "mc"]);
+    assert_eq!(
+        fs::read(world.game.join("mods/c.jar")).unwrap(),
+        b"local c",
+        "the kept change wins over the pack's file"
+    );
+}
+
+#[test]
+fn capture_adopts_changed_and_new_files_beneath_mutable_roots_only() {
+    let world = World::new();
+    world.add_instance_with_loader("forge", Some("1.7.10"));
+    let archive = world.zip("tweaks.zip", &[("config/tweaks.cfg", b"speed=1\n")]);
+    world.json(&["add", "mc", archive.as_str()]);
+    world.json(&["deploy", "mc"]);
+    fs::write(world.game.join("config/tweaks.cfg"), b"speed=2\n").unwrap();
+    fs::write(world.game.join("config/extra.cfg"), b"extra=true\n").unwrap();
+    fs::write(world.game.join("options.txt"), b"fov:90\n").unwrap();
+
+    let preview = world.json(&["pack", "capture", "mc", "--dry-run"]);
+    assert_eq!(
+        items(&preview, "path"),
+        ["config/extra.cfg", "config/tweaks.cfg"]
+    );
+    assert_eq!(items(&preview, "kind"), ["new", "changed"]);
+    assert_eq!(
+        at(&preview, "/items/1/diff"),
+        &json!([{"kind": "removed", "text": "speed=1"}, {"kind": "added", "text": "speed=2"}])
+    );
+    let captured = world.json(&["pack", "capture", "mc"]);
+    assert_eq!(
+        at(&captured, "/captured"),
+        &json!(["config/extra.cfg", "config/tweaks.cfg"])
+    );
+    assert_eq!(
+        world
+            .json(&["pack", "config", "list", "mc"])
+            .as_array()
+            .map(Vec::len),
+        Some(2)
+    );
+    assert_eq!(
+        at(
+            &world.json(&["pack", "capture", "mc", "--dry-run"]),
+            "/items"
+        ),
+        &json!([])
+    );
+}
+
+#[test]
+fn native_import_on_another_installation_fails_before_acquisition() {
+    let world = World::new();
+    world.add_instance(Some("1.21.1"));
+    let local = world.file("sodium.jar", b"local sodium");
+    world.json(&["add", "mc", local.as_str()]);
+    let bundle = world.inputs.join("bundle.msbepack");
+    world.json(&[
+        "pack",
+        "export",
+        "mc",
+        bundle.to_str().unwrap(),
+        "--codec",
+        "msbe-native",
+    ]);
+    let original = zip_entries(&bundle);
+    let pinned = |digest: &str, name: &str| {
+        let mut entries = original.clone();
+        let lock = String::from_utf8(entries.remove("lock.toml").unwrap()).unwrap();
+        let lock = format!(
+            "{lock}\n[target.fingerprint]\nedition = \"retail\"\n\n[target.fingerprint.identifying]\n\"options.txt\" = \"sha256:{digest}\"\n"
+        );
+        entries.insert("lock.toml".to_owned(), lock.into_bytes());
+        let borrowed: Vec<(&str, &[u8])> = entries
+            .iter()
+            .map(|(entry, bytes)| (entry.as_str(), bytes.as_slice()))
+            .collect();
+        world.zip(name, &borrowed)
+    };
+
+    let elsewhere = pinned(&"0".repeat(64), "elsewhere.msbepack");
+    let refused = world.msbe(&[
+        "--format",
+        "json",
+        "pack",
+        "import",
+        "mc",
+        elsewhere.as_str(),
+        "--profile",
+        "fresh",
+        "--dry-run",
+    ]);
+    assert_eq!(refused.code, exit::INTEGRITY, "{}", refused.err);
+    let refused: Value = serde_json::from_str(&refused.out).unwrap();
+    assert_eq!(at(&refused, "/blockers/0/code"), "EnvironmentMismatch");
+    assert_eq!(at(&refused, "/blockers/0/path"), "options.txt");
+
+    let here = pinned(&sha256_hex(b"fov:70\n"), "here.msbepack");
+    let imported = world.json(&["pack", "import", "mc", here.as_str(), "--profile", "fresh"]);
+    assert_eq!(at(&imported, "/added"), &json!(["sodium"]));
 }

@@ -16,14 +16,19 @@ publish.workspace      = true
 workspace = true
 
 [dependencies]
-msbe-cli        = { version = "0.0.0", path = "../msbe-cli" }
-msbe-core       = { version = "0.0.0", path = "../msbe-core" }
-msbe-plan-schema = { version = "0.0.0", path = "../msbe-plan-schema" }
-msbe-rpc-schema = { version = "0.0.0", path = "../msbe-rpc-schema" }
-serde.workspace = true
+msbe-cli          = { version = "0.0.0", path = "../msbe-cli" }
+msbe-core         = { version = "0.0.0", path = "../msbe-core" }
+msbe-fsops        = { version = "0.0.0", path = "../msbe-fsops" }
+msbe-http         = { version = "0.0.0", path = "../msbe-http" }
+msbe-pack         = { version = "0.0.0", path = "../msbe-pack" }
+msbe-plan-schema  = { version = "0.0.0", path = "../msbe-plan-schema" }
+msbe-provider-api = { version = "0.0.0", path = "../msbe-provider-api" }
+msbe-providers    = { version = "0.0.0", path = "../msbe-providers" }
+msbe-rpc-schema   = { version = "0.0.0", path = "../msbe-rpc-schema" }
+serde.workspace      = true
 serde_json.workspace = true
-thiserror.workspace = true
-toml.workspace = true
+thiserror.workspace  = true
+toml.workspace       = true
 
 [dev-dependencies]
 tempfile.workspace = true
