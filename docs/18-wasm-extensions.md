@@ -246,9 +246,48 @@ from the sandbox. Its exports are `msbe_abi_version`, `msbe_alloc`, `msbe_descri
 `msbe_input.entries`, `msbe_input.read` and `msbe_input.take`, which serve the host-owned
 `PackInput`. A codec never sees the network, the store, or a container it did not receive.
 
-A codec is loaded through `Providers::register_wasm_codec` from a signed extension envelope that
-provides exactly `pack-codec-v1`, requests no capabilities, and supports host API 1. Its descriptor
-must name no provider.
+A codec is a signed extension envelope that provides exactly `pack-codec-v1`, requests no
+capabilities, and supports host API 1. The CLI and daemon load every codec installed in MSBE's data
+directory:
+
+```text
+<home>/extensions/
+  trust.toml
+  codecs/pack-list.toml
+  codecs/pack-list.wasm
+```
+
+`trust.toml` is local policy: the signers allowed to publish extensions, each with its hexadecimal
+Ed25519 public key and the providers it may bind codecs to.
+
+```toml
+[[signer]]
+id        = "example-publisher"
+key       = "3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29"
+providers = ["modrinth"]
+```
+
+An envelope document carries the envelope's fields and names its module, a `.wasm` file beside it,
+whose bytes are the signed payload:
+
+```toml
+schema         = 1
+id             = "pack-list"
+version        = "1.0.0"
+module         = "pack-list.wasm"
+package_digest = "…"
+provides       = ["pack-codec-v1"]
+host_api       = { minimum = 1, maximum = 1 }
+signer         = "example-publisher"
+signature      = "…"
+```
+
+A codec whose descriptor names no provider needs only a trusted signer. A codec that names a
+provider is served under that provider's identity and policy gate, like a native codec, so it also
+needs the provider to be registered and its signer to be granted that provider. A codec that fails
+any check refuses them all, with an error naming its envelope: nothing runs with trust the user did
+not intend. Installed codecs are not native build pins, so installing one never changes which native
+bundles a build accepts.
 
 Implement `msbe_codec_guest::Codec` and export it with `export_codec!`. `extensions/codecs/pack-list`
 is the reference: a ZIP manifest format with pinned downloads and bundled files, imported and

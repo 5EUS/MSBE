@@ -28,5 +28,7 @@ thiserror.workspace    = true
 toml.workspace         = true
 
 [dev-dependencies]
-msbe-fsops       = { version = "0.0.0", path = "../msbe-fsops" }
-msbe-plan-schema = { version = "0.0.0", path = "../msbe-plan-schema" }
+msbe-fsops         = { version = "0.0.0", path = "../msbe-fsops" }
+msbe-plan-schema   = { version = "0.0.0", path = "../msbe-plan-schema" }
+tempfile.workspace = true
+wat                = "1.0.97"

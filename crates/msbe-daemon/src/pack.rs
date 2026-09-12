@@ -161,9 +161,9 @@ struct CodecList {
 }
 
 /// `pack.codec.list`.
-pub(crate) fn codec_list(params: &Value) -> Result<Value, Failure> {
+pub(crate) fn codec_list(params: &Value, home: &Home) -> Result<Value, Failure> {
     let list: CodecList = optional(params)?;
-    let providers = Providers::builtins().map_err(PackError::from)?;
+    let providers = Providers::installed(home).map_err(PackError::from)?;
     Ok(value(&msbe_pack::codecs(
         &providers,
         list.direction,
@@ -182,9 +182,9 @@ struct CodecOptions {
 }
 
 /// `pack.codec.options`.
-pub(crate) fn codec_options(params: &Value) -> Result<Value, Failure> {
+pub(crate) fn codec_options(params: &Value, home: &Home) -> Result<Value, Failure> {
     let request: CodecOptions = required(params)?;
-    let providers = Providers::builtins().map_err(PackError::from)?;
+    let providers = Providers::installed(home).map_err(PackError::from)?;
     Ok(value(&msbe_pack::codec_options(
         &providers,
         &request.codec,
@@ -245,7 +245,7 @@ struct CaptureParams {
 
 /// Plans the operation a preview method names.
 pub(crate) fn preview(method: &str, params: &Value, home: &Home) -> Result<Plan, Failure> {
-    let providers = Providers::builtins().map_err(PackError::from)?;
+    let providers = Providers::installed(home).map_err(PackError::from)?;
     match method {
         PACK_EXPORT_PREVIEW_METHOD => {
             let request: ExportParams = required(params)?;
@@ -430,7 +430,7 @@ pub(crate) fn execute(
         Some(home) => Home::at(home),
         None => Home::discover()?,
     };
-    let providers = Providers::builtins()?;
+    let providers = Providers::installed(&home)?;
     let connect: &dyn Fn() -> Result<Box<dyn HttpClient>, HttpError> = &*environment.connect;
     match work {
         Work::Plan(plan) => match *plan {

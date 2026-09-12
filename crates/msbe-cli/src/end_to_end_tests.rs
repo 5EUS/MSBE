@@ -1312,6 +1312,59 @@ extension = "installer"
     );
 }
 
+#[test]
+fn installed_wasm_codecs_join_the_codec_catalog_under_the_local_trust_root() {
+    use msbe_provider_api::{ExtensionEnvelope, ExtensionProvide, HostApiRange, SigningKey, hex};
+
+    const PACK_LIST: &[u8] = include_bytes!("../../msbe-wasm-codec/tests/fixtures/pack-list.wasm");
+    let world = World::new();
+    let key = SigningKey::from_bytes(&[9; 32]);
+    let mut envelope = ExtensionEnvelope {
+        schema: 1,
+        package_digest: ExtensionEnvelope::package_digest_for(&PACK_LIST.to_vec()).unwrap(),
+        id: "pack-list".to_owned(),
+        version: "1.0.0".to_owned(),
+        provides: vec![ExtensionProvide::PackCodecV1],
+        host_api: HostApiRange {
+            minimum: 1,
+            maximum: 1,
+        },
+        capabilities: Vec::new(),
+        signer: "publisher".to_owned(),
+        signature: "00".repeat(64),
+        payload: PACK_LIST.to_vec(),
+    };
+    envelope.sign(&key).unwrap();
+
+    let extensions = world.home.join("extensions");
+    fs::create_dir_all(extensions.join("codecs")).unwrap();
+    fs::write(extensions.join("codecs/pack-list.wasm"), PACK_LIST).unwrap();
+    fs::write(
+        extensions.join("codecs/pack-list.toml"),
+        format!(
+            "schema = 1\nid = \"pack-list\"\nversion = \"1.0.0\"\nmodule = \"pack-list.wasm\"\npackage_digest = \"{}\"\nprovides = [\"pack-codec-v1\"]\nhost_api = {{ minimum = 1, maximum = 1 }}\nsigner = \"publisher\"\nsignature = \"{}\"\n",
+            envelope.package_digest, envelope.signature
+        ),
+    )
+    .unwrap();
+    fs::write(
+        extensions.join("trust.toml"),
+        format!(
+            "[[signer]]\nid = \"publisher\"\nkey = \"{}\"\n",
+            hex(key.verifying_key().as_bytes())
+        ),
+    )
+    .unwrap();
+
+    let formats = world.json(&["pack", "formats"]).to_string();
+    assert!(formats.contains(r#""pack-list""#), "{formats}");
+
+    fs::write(extensions.join("trust.toml"), "").unwrap();
+    let refused = world.msbe(&["pack", "formats"]);
+    assert_eq!(refused.code, exit::FAILURE);
+    assert!(refused.err.contains("pack-list.toml"), "{}", refused.err);
+}
+
 fn mrpack(world: &World, version: &str, files: &[(&str, &[u8])]) -> String {
     let mut index_files = Vec::new();
     for (file, bytes) in files {

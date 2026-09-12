@@ -151,7 +151,8 @@ same fail-closed registry. It rejects:
 - a provider program whose signature, schema, runtime, or vocabulary is unsupported;
 - a native manifest without a matching reviewed registration;
 - an uncompiled manifest that claims codec behavior;
-- a WASM codec whose extension envelope, signature, or capability request is invalid.
+- a WASM codec whose extension envelope, signature, or capability request is invalid, or that binds
+  to a provider its signer is not granted ([18 §18.3](18-wasm-extensions.md)).
 
 Extensions and media types may overlap. CurseForge modpacks and Thunderstore packages are both
 `.zip` archives with a root `manifest.json`, so a registry that refused shared extensions would
@@ -1183,9 +1184,14 @@ lockfiles or removed APIs.
 
 ### Phase F - sandboxed codecs
 
-1. Host `PackCodec` in the WASM runtime with `PackInput` as its only import and no network,
+Item 1 is implemented. Item 2 is partly implemented: the CLI and daemon load signed codecs installed
+under `<home>/extensions` against a local trust root, including codecs bound to a provider its signer
+is granted ([18 §18.3](18-wasm-extensions.md)); running the native conformance suite against WASM
+codecs remains.
+
+1. [x] Host `PackCodec` in the WASM runtime with `PackInput` as its only import and no network,
    filesystem, clock, or randomness.
-2. Load WASM codecs through the extension envelope and run the conformance suite native codecs
+2. [~] Load WASM codecs through the extension envelope and run the conformance suite native codecs
    run.
 3. Deliver new third-party formats as WASM codecs. A new native codec requires a documented
    exception, as a native provider does.

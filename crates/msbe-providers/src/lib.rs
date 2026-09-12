@@ -7,7 +7,9 @@
 //!
 //! See `docs/06-providers-and-policy.md`.
 
+mod installed;
 mod registry;
 mod runtime;
 
+pub use installed::ExtensionTrust;
 pub use registry::{BUILTIN, ProgramTrust, Providers, RegistryError, Routed};

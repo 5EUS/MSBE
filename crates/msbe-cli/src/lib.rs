@@ -754,11 +754,11 @@ where
 }
 
 fn execute(cli: &Cli, console: &mut Console<'_>) -> Result<u8, CliError> {
-    let providers = Providers::builtins()?;
     let home = match &cli.home {
         Some(dir) => Home::at(dir),
         None => Home::discover()?,
     };
+    let providers = Providers::installed(&home)?;
     match &cli.command {
         Command::Instance(command) => instance_command(&home, command, console),
         Command::Profile(command) => profile_command(&home, command, console),

@@ -99,8 +99,16 @@ impl Daemon {
             GAME_LIST_METHOD => game_list(id, &request.params, &self.registry),
             PLAN_LOAD_METHOD => plan_load(id, request.params.clone(), &mut self.registry),
             PLAN_UNLOAD_METHOD => plan_unload(id, request.params.clone(), &mut self.registry),
-            PACK_CODEC_LIST_METHOD => pack::respond(id, pack::codec_list(&request.params)),
-            PACK_CODEC_OPTIONS_METHOD => pack::respond(id, pack::codec_options(&request.params)),
+            PACK_CODEC_LIST_METHOD => pack::respond(
+                id,
+                self.pack_home()
+                    .and_then(|home| pack::codec_list(&request.params, &home)),
+            ),
+            PACK_CODEC_OPTIONS_METHOD => pack::respond(
+                id,
+                self.pack_home()
+                    .and_then(|home| pack::codec_options(&request.params, &home)),
+            ),
             method @ (PACK_IMPORT_PREVIEW_METHOD
             | PACK_UPDATE_PREVIEW_METHOD
             | PACK_EXPORT_PREVIEW_METHOD
@@ -121,6 +129,12 @@ impl Daemon {
         self.home
             .as_ref()
             .map_or_else(Home::discover, |home| Ok(Home::at(home)))
+    }
+
+    /// The data directory, as a pack failure when it cannot be found.
+    fn pack_home(&self) -> Result<Home, pack::Failure> {
+        self.home()
+            .map_err(|error| pack::Failure::from(msbe_pack::PackError::from(error)))
     }
 
     fn info(&self, id: Value, params: &Value) -> Response {
@@ -180,8 +194,7 @@ impl Daemon {
             return pack::respond(id, Err(pack::Failure::Busy));
         };
         let result = self
-            .home()
-            .map_err(|error| pack::Failure::from(msbe_pack::PackError::from(error)))
+            .pack_home()
             .and_then(|home| pack::preview(method, params, &home))
             .and_then(|plan| self.plans.hold(plan));
         pack::respond(id, result)

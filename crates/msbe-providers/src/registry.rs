@@ -1,8 +1,11 @@
 //! The fail-closed mapping from provider manifests to reviewed adapters.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+};
 
-use msbe_core::instance::ExtensionPin;
+use msbe_core::{config::Home, instance::ExtensionPin};
 use msbe_fsops::Digest;
 use msbe_provider_api::{
     Adapter, AdapterError, Catalog, ExtensionCapability, ExtensionEnvelope, ExtensionProvide,
@@ -15,7 +18,7 @@ use msbe_provider_api::{
 use msbe_wasm_codec::WasmPackCodec;
 use thiserror::Error;
 
-use crate::runtime;
+use crate::{ExtensionTrust, installed, runtime};
 
 const NATIVE_HOST_API_VERSION: u32 = 1;
 
@@ -72,7 +75,7 @@ pub struct ProgramTrust {
 pub struct Providers {
     catalog: Catalog,
     adapters: BTreeMap<String, Box<dyn Adapter>>,
-    codecs: BTreeMap<String, RegisteredCodec>,
+    codecs: CodecTable,
     extensions: Vec<ExtensionPin>,
     overlay: Overlay,
 }
@@ -84,64 +87,66 @@ struct RegisteredCodec {
 }
 
 impl Providers {
-    /// Adds a trusted, provider-neutral WASM pack codec to this registry.
+    /// Adds a trusted WebAssembly pack codec to this registry.
+    ///
+    /// A codec whose descriptor names a provider is served under that provider's policy, and is
+    /// admitted only when the provider is registered and `trust` lets the envelope's signer publish
+    /// codecs for it. Installed codecs are not native build pins, so they never change which
+    /// native bundles this build accepts.
     ///
     /// # Errors
     ///
-    /// Returns [`RegistryError`] when the envelope is untrusted, incompatible, invalid, or its
-    /// codec descriptor conflicts with an existing registration.
+    /// Returns [`RegistryError`] when the envelope is untrusted, incompatible or invalid, its
+    /// provider is unknown or not granted to its signer, or its ID or a detection hint is taken.
     pub fn register_wasm_codec(
         &mut self,
         envelope: &ExtensionEnvelope<Vec<u8>>,
-        trusted_keys: &BTreeMap<String, VerifyingKey>,
+        trust: &ExtensionTrust,
     ) -> Result<(), RegistryError> {
-        let codec = WasmPackCodec::load_signed(envelope, trusted_keys)?;
+        let codec = WasmPackCodec::load_signed(envelope, &trust.keys())?;
         let descriptor = codec.descriptor();
-        if descriptor.provider.is_some() {
-            return Err(RegistryError::WasmCodecHasProvider(descriptor.id.clone()));
-        }
-        if self.codecs.contains_key(&descriptor.id) {
-            return Err(RegistryError::DuplicateCodec(descriptor.id.clone()));
-        }
-        for existing in self.codecs.values() {
-            let existing = existing.codec.descriptor();
-            for hint in &descriptor.extensions {
-                if existing
-                    .extensions
-                    .iter()
-                    .any(|other| other.eq_ignore_ascii_case(hint))
-                {
-                    return Err(RegistryError::DuplicateCodecHint {
-                        hint: hint.to_ascii_lowercase(),
-                        first: existing.id.clone(),
-                        second: descriptor.id.clone(),
-                    });
-                }
-            }
-            for hint in &descriptor.media_types {
-                if existing
-                    .media_types
-                    .iter()
-                    .any(|other| other.eq_ignore_ascii_case(hint))
-                {
-                    return Err(RegistryError::DuplicateCodecHint {
-                        hint: hint.to_ascii_lowercase(),
-                        first: existing.id.clone(),
-                        second: descriptor.id.clone(),
-                    });
-                }
+        if let Some(provider) = &descriptor.provider {
+            self.catalog.provider(provider)?;
+            if !trust.may_publish_for(&envelope.signer, provider) {
+                return Err(RegistryError::WasmCodecProviderNotGranted {
+                    codec: descriptor.id.clone(),
+                    provider: provider.clone(),
+                    signer: envelope.signer.clone(),
+                });
             }
         }
-        let pin = envelope_pin(envelope)?;
-        self.codecs.insert(
-            descriptor.id.clone(),
+        self.codecs.claim(descriptor)?;
+        let (id, provider) = (descriptor.id.clone(), descriptor.provider.clone());
+        self.codecs.codecs.insert(
+            id,
             RegisteredCodec {
-                provider: None,
+                provider,
                 codec: Box::new(codec),
             },
         );
-        self.extensions.push(pin);
         Ok(())
+    }
+
+    /// The providers MSBE ships, plus the WebAssembly pack codecs installed in `home` that its
+    /// `extensions/trust.toml` trusts (`docs/18-wasm-extensions.md` §18.3).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RegistryError::InstalledExtension`] for an unreadable or malformed trust root or
+    /// envelope, and [`RegistryError::InstalledCodec`] naming the envelope of a refused codec. One
+    /// refused codec refuses them all, so nothing runs with trust the user did not intend.
+    pub fn installed(home: &Home) -> Result<Self, RegistryError> {
+        let mut providers = Self::builtins()?;
+        let found = installed::read(&home.root().join(installed::DIRECTORY))?;
+        for codec in found.codecs {
+            providers
+                .register_wasm_codec(&codec.envelope, &found.trust)
+                .map_err(|source| RegistryError::InstalledCodec {
+                    path: codec.path,
+                    source: Box::new(source),
+                })?;
+        }
+        Ok(providers)
     }
 
     /// The providers MSBE ships.
@@ -272,7 +277,7 @@ impl Providers {
         Ok(Self {
             catalog,
             adapters,
-            codecs: codecs.codecs,
+            codecs,
             extensions,
             overlay: Overlay::from_toml(&overlay)?,
         })
@@ -311,6 +316,7 @@ impl Providers {
     /// Descriptors for policy-permitted pack codecs, ordered by codec ID.
     pub fn pack_codecs(&self) -> Vec<&PackCodecDescriptor> {
         self.codecs
+            .codecs
             .values()
             .filter(|registered| {
                 registered.provider.as_ref().is_none_or(|provider_id| {
@@ -349,6 +355,7 @@ impl Providers {
     /// Returns [`RegistryError`] when the codec is unknown or its provider is prohibited.
     pub fn pack_codec(&self, id: &str) -> Result<&dyn PackCodec, RegistryError> {
         let registered = self
+            .codecs
             .codecs
             .get(id)
             .ok_or_else(|| RegistryError::UnknownCodec(id.to_owned()))?;
@@ -490,8 +497,8 @@ fn authorize(provider: &Provider) -> Result<(), RegistryError> {
     Ok(())
 }
 
-/// Reviewed codecs being registered, with the detection hints each has claimed.
-#[derive(Default)]
+/// Registered codecs, with the detection hints each has claimed.
+#[derive(Debug, Default)]
 struct CodecTable {
     codecs: BTreeMap<String, RegisteredCodec>,
     extensions: BTreeMap<String, String>,
@@ -532,16 +539,8 @@ impl CodecTable {
                 descriptor: descriptor.provider.clone(),
             });
         }
-        if self.codecs.contains_key(&descriptor.id) {
-            return Err(RegistryError::DuplicateCodec(descriptor.id.clone()));
-        }
-        for extension in &descriptor.extensions {
-            register_hint(&mut self.extensions, extension, &descriptor.id)?;
-        }
-        for media_type in &descriptor.media_types {
-            register_hint(&mut self.media_types, media_type, &descriptor.id)?;
-        }
         let extension = native_pin(&registration.identity, descriptor)?;
+        self.claim(descriptor)?;
         self.codecs.insert(
             descriptor.id.clone(),
             RegisteredCodec {
@@ -550,6 +549,43 @@ impl CodecTable {
             },
         );
         Ok(extension)
+    }
+
+    /// Claims `descriptor`'s ID and detection hints, refusing any that another codec holds or
+    /// that the descriptor repeats. Nothing is claimed unless all of it is free.
+    fn claim(&mut self, descriptor: &PackCodecDescriptor) -> Result<(), RegistryError> {
+        if self.codecs.contains_key(&descriptor.id) {
+            return Err(RegistryError::DuplicateCodec(descriptor.id.clone()));
+        }
+        for (claimed, hints) in [
+            (&self.extensions, &descriptor.extensions),
+            (&self.media_types, &descriptor.media_types),
+        ] {
+            let mut own = BTreeSet::new();
+            for hint in hints {
+                let normalized = hint.to_ascii_lowercase();
+                let holder = claimed
+                    .get(&normalized)
+                    .cloned()
+                    .or_else(|| (!own.insert(normalized.clone())).then(|| descriptor.id.clone()));
+                if let Some(first) = holder {
+                    return Err(RegistryError::DuplicateCodecHint {
+                        hint: normalized,
+                        first,
+                        second: descriptor.id.clone(),
+                    });
+                }
+            }
+        }
+        for hint in &descriptor.extensions {
+            self.extensions
+                .insert(hint.to_ascii_lowercase(), descriptor.id.clone());
+        }
+        for hint in &descriptor.media_types {
+            self.media_types
+                .insert(hint.to_ascii_lowercase(), descriptor.id.clone());
+        }
+        Ok(())
     }
 }
 
@@ -596,43 +632,39 @@ fn native_pin(
     })
 }
 
-fn envelope_pin(envelope: &ExtensionEnvelope<Vec<u8>>) -> Result<ExtensionPin, RegistryError> {
-    let digest = format!("sha256:{}", envelope.package_digest)
-        .parse()
-        .map_err(|error: msbe_fsops::Error| RegistryError::NativeCanonical(error.to_string()))?;
-    Ok(ExtensionPin {
-        id: envelope.id.clone(),
-        version: envelope.version.clone(),
-        digest,
-        host_api_minimum: envelope.host_api.minimum,
-        host_api_maximum: envelope.host_api.maximum,
-        signer: envelope.signer.clone(),
-    })
-}
-
-fn register_hint(
-    hints: &mut BTreeMap<String, String>,
-    hint: &str,
-    codec: &str,
-) -> Result<(), RegistryError> {
-    let normalized = hint.to_ascii_lowercase();
-    if let Some(existing) = hints.insert(normalized.clone(), codec.to_owned()) {
-        return Err(RegistryError::DuplicateCodecHint {
-            hint: normalized,
-            first: existing,
-            second: codec.to_owned(),
-        });
-    }
-    Ok(())
-}
-
 /// Why a provider could not be used through the reviewed adapter registry.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum RegistryError {
-    /// A WASM codec claims provider ownership, which only reviewed native registrations may use.
-    #[error("WASM codec {0:?} must be provider-neutral")]
-    WasmCodecHasProvider(String),
+    /// A WASM codec binds to a provider its signer is not trusted to publish codecs for.
+    #[error(
+        "WASM codec {codec:?} binds to provider {provider:?}, which signer {signer:?} is not trusted to publish codecs for"
+    )]
+    WasmCodecProviderNotGranted {
+        /// Codec ID.
+        codec: String,
+        /// The provider its descriptor names.
+        provider: String,
+        /// The envelope's signer.
+        signer: String,
+    },
+    /// An installed extension file could not be read or is malformed.
+    #[error("installed extension {}: {reason}", .path.display())]
+    InstalledExtension {
+        /// The file or directory.
+        path: PathBuf,
+        /// What is wrong.
+        reason: String,
+    },
+    /// An installed codec was refused.
+    #[error("installed codec {}: {source}", .path.display())]
+    InstalledCodec {
+        /// Its envelope document.
+        path: PathBuf,
+        /// Why it was refused.
+        #[source]
+        source: Box<RegistryError>,
+    },
     /// Native registration identity differs from the provider or codec it serves.
     #[error("native extension identity {identity:?} does not match registration {registration:?}")]
     MismatchedNativeIdentity {
@@ -762,9 +794,9 @@ pub enum RegistryError {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
+    use std::{io::Write, path::Path};
 
-    use msbe_core::instance::NativeExtensionIdentity;
+    use msbe_core::{config::Home, instance::NativeExtensionIdentity};
     use msbe_plan_schema::Side;
     use msbe_provider_api::{
         Adapter, AdapterError, ContainerKind, ExtensionCapability, ExtensionEnvelope,
@@ -776,7 +808,7 @@ mod tests {
     };
     use serde_json::json;
 
-    use super::{ProgramTrust, Providers, RegistryError, Routed};
+    use super::{ExtensionTrust, ProgramTrust, Providers, RegistryError, Routed};
 
     struct SearchHttp;
 
@@ -1047,6 +1079,158 @@ mod tests {
             revoked_signers: std::collections::BTreeSet::default(),
             revoked_digests: std::collections::BTreeSet::default(),
         }
+    }
+
+    const PACK_LIST: &[u8] = include_bytes!("../../msbe-wasm-codec/tests/fixtures/pack-list.wasm");
+
+    /// A WASM codec module whose descriptor names `provider`.
+    fn wasm_codec(id: &str, provider: Option<&str>) -> Vec<u8> {
+        let descriptor = json!({ "ok": {
+            "id": id, "provider": provider, "name": id, "extensions": [id], "media_types": [],
+            "directions": { "import": true, "export": false },
+            "supported_games": { "kind": "universal" }, "option_schema": { "schema": 1 }
+        }})
+        .to_string();
+        let escaped = descriptor.replace('\\', "\\\\").replace('"', "\\\"");
+        wat::parse_str(format!(
+            r#"(module (memory (export "memory") 1) (data (i32.const 0) "{escaped}")
+                (func (export "msbe_abi_version") (result i32) i32.const 1)
+                (func (export "msbe_descriptor") (result i64) i64.const {}))"#,
+            descriptor.len()
+        ))
+        .unwrap()
+    }
+
+    fn signed_codec(id: &str, module: Vec<u8>) -> ExtensionEnvelope<Vec<u8>> {
+        let mut envelope = ExtensionEnvelope {
+            schema: 1,
+            package_digest: ExtensionEnvelope::package_digest_for(&module).unwrap(),
+            id: id.to_owned(),
+            version: "1.0.0".to_owned(),
+            provides: vec![ExtensionProvide::PackCodecV1],
+            host_api: HostApiRange {
+                minimum: 1,
+                maximum: 1,
+            },
+            capabilities: Vec::new(),
+            signer: "test-root".to_owned(),
+            signature: "00".repeat(64),
+            payload: module,
+        };
+        envelope.sign(&test_signing_key()).unwrap();
+        envelope
+    }
+
+    /// Installs `envelope` in the data directory `home`, as an envelope document beside its module.
+    fn install(home: &Path, name: &str, envelope: &ExtensionEnvelope<Vec<u8>>) {
+        let codecs = home.join("extensions/codecs");
+        std::fs::create_dir_all(&codecs).unwrap();
+        std::fs::write(codecs.join(format!("{name}.wasm")), &envelope.payload).unwrap();
+        std::fs::write(
+            codecs.join(format!("{name}.toml")),
+            format!(
+                "schema = 1\nid = \"{}\"\nversion = \"{}\"\nmodule = \"{name}.wasm\"\npackage_digest = \"{}\"\nprovides = [\"pack-codec-v1\"]\nhost_api = {{ minimum = 1, maximum = 1 }}\nsigner = \"{}\"\nsignature = \"{}\"\n",
+                envelope.id,
+                envelope.version,
+                envelope.package_digest,
+                envelope.signer,
+                envelope.signature
+            ),
+        )
+        .unwrap();
+    }
+
+    fn trust_root(home: &Path, providers: &str) {
+        let key = msbe_provider_api::hex(test_signing_key().verifying_key().as_bytes());
+        std::fs::create_dir_all(home.join("extensions")).unwrap();
+        std::fs::write(
+            home.join("extensions/trust.toml"),
+            format!("[[signer]]\nid = \"test-root\"\nkey = \"{key}\"\nproviders = [{providers}]\n"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn installed_codecs_load_from_the_data_directory_under_its_trust_root()
+    -> Result<(), RegistryError> {
+        let dir = tempfile::tempdir().unwrap();
+        let home = Home::at(dir.path());
+        assert!(
+            Providers::installed(&home)?
+                .pack_codec("pack-list")
+                .is_err()
+        );
+
+        install(
+            dir.path(),
+            "pack-list",
+            &signed_codec("pack-list", PACK_LIST.to_vec()),
+        );
+        assert!(
+            matches!(
+                Providers::installed(&home),
+                Err(RegistryError::InstalledCodec { .. })
+            ),
+            "a codec from an untrusted signer is refused"
+        );
+
+        trust_root(dir.path(), "");
+        let providers = Providers::installed(&home)?;
+        assert!(
+            providers
+                .pack_codecs()
+                .iter()
+                .any(|descriptor| descriptor.id == "pack-list")
+        );
+        assert_eq!(
+            providers.extension_pins(),
+            Providers::builtins()?.extension_pins(),
+            "installed codecs are not native build pins"
+        );
+
+        std::fs::write(
+            dir.path().join("extensions/codecs/escape.toml"),
+            "schema = 1\nid = \"escape\"\nversion = \"1\"\nmodule = \"../escape.wasm\"\npackage_digest = \"\"\nprovides = []\nhost_api = { minimum = 1, maximum = 1 }\nsigner = \"test-root\"\nsignature = \"\"\n",
+        )
+        .unwrap();
+        assert!(matches!(
+            Providers::installed(&home),
+            Err(RegistryError::InstalledExtension { .. })
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn provider_bound_wasm_codecs_need_a_signer_granted_that_provider() -> Result<(), RegistryError>
+    {
+        let key = test_signing_key().verifying_key();
+        let bound = signed_codec("bound", wasm_codec("bound", Some("example")));
+        let mut providers = Providers::new(&[registration(&[])], &[])?;
+
+        let neutral_only = ExtensionTrust::default().with_signer("test-root", key, Vec::new());
+        assert!(matches!(
+            providers.register_wasm_codec(&bound, &neutral_only),
+            Err(RegistryError::WasmCodecProviderNotGranted { provider, .. }) if provider == "example"
+        ));
+
+        let granted = ExtensionTrust::default().with_signer(
+            "test-root",
+            key,
+            ["example".to_owned(), "nobody".to_owned()],
+        );
+        let orphan = signed_codec("orphan", wasm_codec("orphan", Some("nobody")));
+        assert!(matches!(
+            providers.register_wasm_codec(&orphan, &granted),
+            Err(RegistryError::Manifest(_))
+        ));
+
+        providers.register_wasm_codec(&bound, &granted)?;
+        assert!(providers.pack_codec("bound").is_ok());
+        assert!(matches!(
+            providers.register_wasm_codec(&bound, &granted),
+            Err(RegistryError::DuplicateCodec(id)) if id == "bound"
+        ));
+        Ok(())
     }
 
     #[test]
