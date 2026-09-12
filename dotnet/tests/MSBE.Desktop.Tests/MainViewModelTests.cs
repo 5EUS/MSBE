@@ -90,6 +90,39 @@ public sealed class MainViewModelTests
         Assert.False(vm.HasAddInstanceError);
     }
 
+    /// <summary>The selected instance loads its deployed profile and ordered mods.</summary>
+    [Fact]
+    public void SelectedInstanceLoadsOrderedMods()
+    {
+        const string StatusJson = """{"name":"alpha","root":"/games/alpha","plan_id":"minecraft","plan_version":"1","loader":"fabric","game_version":"1.21.1","deployed_profile":"default","deployed_files":2}""";
+        const string ProfilesJson = """{"profiles":["testing","default"],"deployed":"default"}""";
+        const string ModsJson = """{"order":["iris"],"components":{},"mods":{"iris":{"origin":"iris.jar","provider":{"provider":"modrinth","project":"iris","version":"v1","version_number":"1.8.0","hashes":{}},"files":[{"source":"iris.jar","blob":"sha256:01"}]},"sodium":{"origin":"sodium.jar","files":[{"source":"sodium.jar","blob":"sha256:02"}]}}}""";
+        var client = new TestClient(arguments =>
+        {
+            if (arguments.Contains("status", StringComparer.Ordinal))
+            {
+                return new CommandResult(0, StatusJson, string.Empty);
+            }
+
+            if (arguments.Contains("list", StringComparer.Ordinal))
+            {
+                return new CommandResult(0, ProfilesJson, string.Empty);
+            }
+
+            return new CommandResult(0, ModsJson, string.Empty);
+        });
+        MainViewModel vm = new(client);
+
+        vm.SelectedInstance = "alpha";
+
+        Assert.Equal("default", vm.SelectedProfile);
+        Assert.Equal(["iris", "sodium"], vm.Mods.Select(mod => mod.Name));
+        Assert.Equal("modrinth", vm.Mods[0].Source);
+        Assert.Equal("1.8.0", vm.Mods[0].Version);
+        Assert.Equal("Local file", vm.Mods[1].Source);
+        Assert.False(vm.IsModsEmpty);
+    }
+
     private sealed class TestClient : IMsbeClient
     {
         private readonly Func<IReadOnlyList<string>, CommandResult> runCommand;

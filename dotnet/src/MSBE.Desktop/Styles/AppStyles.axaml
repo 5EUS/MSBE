@@ -165,6 +165,36 @@
     <Setter Property="FontWeight" Value="SemiBold" />
   </Style>
 
+  <Style Selector="Border.mods-error">
+    <Setter Property="Background" Value="#27191C" />
+    <Setter Property="BorderBrush" Value="#713E48" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="5" />
+    <Setter Property="Padding" Value="9" />
+  </Style>
+
+  <Style Selector="ListBox.mods-list">
+    <Setter Property="Background" Value="#14171C" />
+    <Setter Property="BorderBrush" Value="#2C313C" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="6" />
+  </Style>
+
+  <Style Selector="ListBox.mods-list ListBoxItem">
+    <Setter Property="Padding" Value="11,9" />
+    <Setter Property="Margin" Value="3,3,3,0" />
+    <Setter Property="CornerRadius" Value="5" />
+  </Style>
+
+  <Style Selector="ListBox.mods-list ListBoxItem:pointerover">
+    <Setter Property="Background" Value="#20242C" />
+  </Style>
+
+  <Style Selector="Border.mod-monogram">
+    <Setter Property="Background" Value="#263640" />
+    <Setter Property="CornerRadius" Value="5" />
+  </Style>
+
   <Style Selector="Border.status-bar">
     <Setter Property="Background" Value="#0E1014" />
     <Setter Property="BorderBrush" Value="#242832" />

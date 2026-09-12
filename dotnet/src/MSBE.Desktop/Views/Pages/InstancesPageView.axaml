@@ -37,12 +37,12 @@
             <Button Margin="0,8,0,0" HorizontalAlignment="Center" Classes="primary-button" Content="Add instance" Command="{Binding AddInstanceCommand}" />
           </StackPanel>
 
-          <StackPanel Spacing="20" IsVisible="{Binding HasSelectedInstance}">
+          <Grid RowDefinitions="Auto,Auto,*" RowSpacing="20" IsVisible="{Binding HasSelectedInstance}">
             <StackPanel Spacing="4">
               <TextBlock Classes="instance-name" Text="{Binding SelectedInstance}" />
               <TextBlock Classes="caption" Text="{Binding SelectedInstanceRoot}" TextWrapping="Wrap" />
             </StackPanel>
-            <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="24" RowSpacing="12">
+            <Grid Grid.Row="1" ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="24" RowSpacing="10">
               <TextBlock Classes="detail-label" Text="PLAN" />
               <TextBlock Grid.Column="1" Text="{Binding SelectedInstancePlan}" />
               <TextBlock Grid.Row="1" Classes="detail-label" Text="TARGET" />
@@ -50,7 +50,62 @@
               <TextBlock Grid.Row="2" Classes="detail-label" Text="DEPLOYMENT" />
               <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding SelectedInstanceDeployment}" />
             </Grid>
-          </StackPanel>
+
+            <Grid Grid.Row="2" RowDefinitions="Auto,Auto,*" RowSpacing="10">
+              <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="10">
+                <StackPanel Spacing="2">
+                  <TextBlock FontSize="15" FontWeight="SemiBold" Text="Mods" />
+                  <TextBlock Classes="caption" Text="{Binding Mods.Count, StringFormat={}{0} in this profile}" />
+                </StackPanel>
+                <TextBlock Grid.Column="1" Classes="detail-label" VerticalAlignment="Center" Text="PROFILE" />
+                <ComboBox Grid.Column="2"
+                          MinWidth="140"
+                          ItemsSource="{Binding Profiles}"
+                          SelectedItem="{Binding SelectedProfile}" />
+              </Grid>
+
+              <Grid Grid.Row="1">
+                <ProgressBar Height="2" IsIndeterminate="True" IsVisible="{Binding IsModsLoading}" />
+                <Border Classes="mods-error" IsVisible="{Binding HasModsError}">
+                  <TextBlock Classes="caption" Text="{Binding ModsError}" TextWrapping="Wrap" />
+                </Border>
+              </Grid>
+
+              <Grid Grid.Row="2">
+                <ListBox Classes="mods-list" ItemsSource="{Binding Mods}">
+                  <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:ModListItem">
+                      <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
+                        <Border Classes="mod-monogram" Width="34" Height="34">
+                          <TextBlock HorizontalAlignment="Center"
+                                     VerticalAlignment="Center"
+                                     FontWeight="SemiBold"
+                                     Text="{Binding Monogram}" />
+                        </Border>
+                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+                          <TextBlock FontWeight="SemiBold" Text="{Binding Name}" />
+                          <TextBlock Classes="caption" Text="{Binding Origin}" TextTrimming="CharacterEllipsis" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right" Spacing="2">
+                          <TextBlock HorizontalAlignment="Right" Text="{Binding Version}" />
+                          <TextBlock Classes="caption" HorizontalAlignment="Right" Text="{Binding Source}" />
+                          <TextBlock Classes="caption" HorizontalAlignment="Right" Text="{Binding FileSummary}" />
+                        </StackPanel>
+                      </Grid>
+                    </DataTemplate>
+                  </ListBox.ItemTemplate>
+                </ListBox>
+
+                <StackPanel HorizontalAlignment="Center"
+                            VerticalAlignment="Center"
+                            Spacing="5"
+                            IsVisible="{Binding IsModsEmpty}">
+                  <TextBlock HorizontalAlignment="Center" FontWeight="SemiBold" Text="No mods in this profile" />
+                  <TextBlock Classes="caption" Text="Added mods will appear here in deployment order." />
+                </StackPanel>
+              </Grid>
+            </Grid>
+          </Grid>
         </Grid>
       </Grid>
     </Border>

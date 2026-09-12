@@ -67,10 +67,12 @@ internal sealed partial class MainViewModel
         if (value is null)
         {
             this.ClearInstanceDetails();
+            this.ClearProfilesAndMods();
             return;
         }
 
         _ = this.LoadSelectedInstanceAsync(value);
+        _ = this.LoadProfilesAsync(value);
     }
 
     /// <summary>Reloads registered instances from the daemon.</summary>
