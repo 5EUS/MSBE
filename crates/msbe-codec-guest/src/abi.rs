@@ -164,16 +164,18 @@ mod tests {
 
     #[test]
     fn responses_tag_results_and_typed_errors() {
+        // JSON object key order is not part of the ABI, so compare documents rather than bytes.
+        let decode = |bytes: Vec<u8>| serde_json::from_slice::<serde_json::Value>(&bytes).ok();
         assert_eq!(
-            encode(Ok(json!({"confidence": 0}))),
-            br#"{"ok":{"confidence":0}}"#
+            decode(encode(Ok(json!({"confidence": 0})))),
+            Some(json!({"ok": {"confidence": 0}}))
         );
         assert_eq!(
-            encode(Err(Error::UnsupportedTarget {
+            decode(encode(Err(Error::UnsupportedTarget {
                 game: "g".to_owned(),
                 loader: "l".to_owned()
-            })),
-            br#"{"error":{"kind":"unsupported_target","game":"g","loader":"l"}}"#
+            }))),
+            Some(json!({"error": {"kind": "unsupported_target", "game": "g", "loader": "l"}}))
         );
         assert_eq!(code_error(-1), Error::FormatMismatch);
     }

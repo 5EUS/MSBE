@@ -18,7 +18,7 @@
         </Grid>
 
         <Grid Grid.Row="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
-            <TextBox Text="{Binding BrowseQuery}" PlaceholderText="Search Modrinth and configured providers">
+            <TextBox Text="{Binding BrowseQuery}" PlaceholderText="Search configured providers">
                 <TextBox.KeyBindings>
                     <KeyBinding Gesture="Enter" Command="{Binding SearchBrowseCommand}" />
                 </TextBox.KeyBindings>

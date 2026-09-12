@@ -55,8 +55,7 @@ impl WasmPackCodec {
         }
         if !(envelope.host_api.minimum..=envelope.host_api.maximum).contains(&HOST_API_VERSION) {
             return Err(PackCodecError::Codec(format!(
-                "WASM codec host API {} is unsupported",
-                HOST_API_VERSION
+                "WASM codec host API {HOST_API_VERSION} is unsupported"
             )));
         }
         Self::load(&envelope.payload)
@@ -109,7 +108,7 @@ impl WasmPackCodec {
         store.set_fuel(FUEL).map_err(runtime_error)?;
         let instance = instantiate(&mut store, &self.module)?;
         let response = match request {
-            Some(request) => call_with_request(&mut store, &instance, function, request)?,
+            Some(request) => call_with_request(&mut store, &instance, function, &request)?,
             None => call_without_request(&mut store, &instance, function)?,
         };
         serde_json::from_value(decode(response)?)
@@ -119,7 +118,7 @@ impl WasmPackCodec {
     fn call<T: serde::de::DeserializeOwned>(
         &self,
         function: &str,
-        request: Value,
+        request: &Value,
     ) -> Result<T, PackCodecError> {
         let mut store = Store::new(&self.engine, HostState::new(Box::new(EmptyInput)));
         store.set_fuel(FUEL).map_err(runtime_error)?;
@@ -159,7 +158,7 @@ impl PackCodec for WasmPackCodec {
     ) -> Result<PackExportPlan, PackCodecError> {
         self.call(
             "msbe_plan_export",
-            json!({
+            &json!({
                 "context": {
                     "game": context.game,
                     "target": context.target,
@@ -176,7 +175,7 @@ impl PackCodec for WasmPackCodec {
     fn layout(&self, plan: &PackExportPlan) -> Result<PackLayout, PackCodecError> {
         self.call(
             "msbe_layout",
-            serde_json::to_value(plan).map_err(runtime_error)?,
+            &serde_json::to_value(plan).map_err(runtime_error)?,
         )
     }
 }
@@ -378,9 +377,9 @@ fn call_with_request(
     store: &mut Store<HostState>,
     instance: &wasmtime::Instance,
     name: &str,
-    request: Value,
+    request: &Value,
 ) -> Result<Value, PackCodecError> {
-    let bytes = serde_json::to_vec(&request).map_err(runtime_error)?;
+    let bytes = serde_json::to_vec(request).map_err(runtime_error)?;
     let size = i32::try_from(bytes.len()).map_err(runtime_error)?;
     let pointer = instance
         .get_typed_func::<i32, i32>(&mut *store, "msbe_alloc")
@@ -419,8 +418,13 @@ fn read_response(
 }
 
 fn decode(response: Value) -> Result<Value, PackCodecError> {
-    if let Some(value) = response.get("ok") {
-        return Ok(value.clone());
+    let Value::Object(mut response) = response else {
+        return Err(PackCodecError::Codec(
+            "codec returned an invalid response".to_owned(),
+        ));
+    };
+    if let Some(value) = response.remove("ok") {
+        return Ok(value);
     }
     Err(PackCodecError::Codec(response.get("error").map_or_else(
         || "codec returned an invalid response".to_owned(),

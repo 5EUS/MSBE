@@ -617,7 +617,7 @@ fn update_moves_modrinth_mods_forward_on_their_channel_and_deploys_like_any_chan
             { "module": "sodium", "from": "0.8.12", "to": "0.8.13" }
         ])
     );
-    assert_eq!(at(&preview, "/not_from_modrinth"), &json!(["lithium"]));
+    assert_eq!(at(&preview, "/not_updatable"), &json!(["lithium"]));
     assert_eq!(
         at(&preview, "/unresolved"),
         &json!([{ "provider": "modrinth", "project_id": "P7dR8mSH", "declared_by": "iris" }])

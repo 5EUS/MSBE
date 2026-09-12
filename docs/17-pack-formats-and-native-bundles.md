@@ -420,6 +420,10 @@ typically the main executable ([08](08-platforms-and-detection.md)). A version s
 an identity. Two store editions of one game can share a version and differ in exactly the bytes
 that script extenders and patches depend on.
 
+A plan may limit its fingerprint and environment inputs to the loaders whose steps read them, so a
+profile that never derives from the installation neither pins nor requires those files. The
+Minecraft plan limits both to `jarmod`.
+
 Import verifies the fingerprint and every environment input before acquiring anything. A mismatch
 is `EnvironmentMismatch`, naming the expected and found digests, rather than an integrity failure
 after a long download.
@@ -1006,7 +1010,7 @@ Migration is incremental, but the end state is non-negotiable.
 
 The Rust workspace was audited for explicit Modrinth names and implicit assumptions such as
 `.mrpack` paths, provider wire fields, loader dependency keys, API endpoints, hash choices, and
-release-channel behavior. The remaining production violations are:
+release-channel behavior. The production violations it found, and how each was resolved:
 
 | Location                                    | Violation                                                                                                                                                                      | Required owner                                                                                                                     |
 | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
@@ -1014,8 +1018,8 @@ release-channel behavior. The remaining production violations are:
 | `msbe-cli::pack_import`                     | Resolved in Phase D: import previews and executes `msbe_pack` plans; codecs are detected through the registry, and requirements are acquired through the provider policy gate. | Phase D complete. |
 | `msbe-cli::pack_export`                     | Resolved in Phase D: export selects a codec by ID, normalizes its schema, and writes only the policy-gated `PackExportPlan`.                                                   | Phase D complete. |
 | `msbe-cli::loader_dependency`               | Resolved in Phase B: the mapping is private to the Modrinth codec.                                                                                                             | Phase B complete. |
-| `msbe-cli::UpdateReport::not_from_modrinth` | Exposes a provider-specific JSON field even though the implementation means that no registered provider has update capability.                                                 | Rename to a provider-neutral field in a versioned CLI/RPC contract change and retain an explicit compatibility path if required.   |
-| CLI help and pack errors                    | Pack help and errors are resolved in Phase D: formats come from descriptors and failures carry §17.14 codes. `add` and `search` help still name Modrinth as an example source.   | Generate source examples from registered providers. |
+| `msbe-cli::UpdateReport` | Resolved in Phase E: the provider-specific update field is now the provider-neutral `not_updatable`.                                                 | Phase E complete.   |
+| CLI help and pack errors                    | Resolved: pack help comes from descriptors, failures carry §17.14 codes, and `add` help and Desktop copy describe sources without naming a provider.   | Phase E complete. |
 
 The following matches were reviewed and are **not** boundary violations:
 
@@ -1035,8 +1039,9 @@ The following matches were reviewed and are **not** boundary violations:
 
 This audit is a baseline, not an allowlist. New provider, game, loader, endpoint, or external
 format literals in generic production code require either relocation to an extension or an
-explicit architecture review. Phase E adds an automated guard after the current violations have
-been removed.
+explicit architecture review. Phase E added the automated guard,
+`scripts/development/check-architecture.sh`, which CI runs over the generic crates and Desktop
+sources.
 
 ### Contract audit (2026-09-12)
 
@@ -1174,9 +1179,8 @@ lockfiles or removed APIs.
 1. [x] Continue importing existing `.mrpack` archives through the relocated codec.
 2. [x] Remove `loader_dependency`, hardcoded `minecraft`, `Pack::Modrinth`,
    `Pack::CurseForge`, and `export_modrinth` from generic crates.
-3. [x] Add CI guards forbidding provider/game/format literals in generic runtime crates outside
-  provider-specific crates, fixtures, and user-facing neutral examples.
-   outside fixtures and user-facing neutral examples.
+3. [x] Add CI guards forbidding provider, game, loader, and format literals in generic runtime
+   crates and Desktop sources, outside provider-specific crates and end-to-end fixtures.
 
 ### Phase F - sandboxed codecs
 
@@ -1186,9 +1190,6 @@ lockfiles or removed APIs.
    run.
 3. Deliver new third-party formats as WASM codecs. A new native codec requires a documented
    exception, as a native provider does.
-
-Until Phase B is complete, the existing implementation is explicitly temporary and must not be
-copied for another format.
 
 ## 17.17 Acceptance criteria
 

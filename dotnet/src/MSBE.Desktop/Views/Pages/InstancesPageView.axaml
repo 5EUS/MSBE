@@ -85,7 +85,7 @@
               </Grid>
 
               <Grid Grid.Row="1" ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="8">
-                <TextBox Text="{Binding ModSource}" PlaceholderText="Local path, HTTPS URL, or modrinth:project">
+                <TextBox Text="{Binding ModSource}" PlaceholderText="Local path, HTTPS URL, or provider:project">
                   <TextBox.KeyBindings>
                     <KeyBinding Gesture="Enter" Command="{Binding AddModSourceCommand}" />
                   </TextBox.KeyBindings>

@@ -61,17 +61,6 @@ impl Plan {
         require_text("plan id", &self.id)?;
         require_text("plan name", &self.name)?;
         require_text("plan version", &self.version)?;
-        if let Some(fingerprint) = &self.fingerprint {
-            fingerprint.validate()?;
-        }
-        let mut environment_ids = BTreeSet::new();
-        for input in &self.environment {
-            input.validate()?;
-            if !environment_ids.insert(&input.id) {
-                return Err(ValidationError::DuplicateEnvironment(input.id.clone()));
-            }
-        }
-
         let mut loader_ids = BTreeSet::new();
         let mut component_ids = BTreeSet::new();
         for component in &self.components {
@@ -89,6 +78,17 @@ impl Plan {
             loader.validate(&component_ids)?;
         }
 
+        if let Some(fingerprint) = &self.fingerprint {
+            fingerprint.validate(&loader_ids)?;
+        }
+        let mut environment_ids = BTreeSet::new();
+        for input in &self.environment {
+            input.validate(&loader_ids)?;
+            if !environment_ids.insert(&input.id) {
+                return Err(ValidationError::DuplicateEnvironment(input.id.clone()));
+            }
+        }
+
         for step in &self.steps {
             step.validate(&loader_ids)?;
         }
@@ -104,11 +104,20 @@ pub struct InstallationFingerprint {
     pub edition: String,
     /// Instance-relative identifying paths. Paths may use `{game_version}`.
     pub identifying: Vec<String>,
+    /// The loaders whose deployments depend on the installation. Empty means every loader.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub loaders: Vec<String>,
 }
 
 impl InstallationFingerprint {
-    fn validate(&self) -> Result<(), ValidationError> {
+    /// Whether a lockfile for the loader `id` pins this fingerprint.
+    pub fn applies_to(&self, id: &str) -> bool {
+        admits(&self.loaders, id)
+    }
+
+    fn validate(&self, loaders: &BTreeSet<&String>) -> Result<(), ValidationError> {
         require_text("fingerprint edition", &self.edition)?;
+        validate_input_loaders(&self.loaders, loaders)?;
         let mut paths = BTreeSet::new();
         for path in &self.identifying {
             validate_template_path(path)?;
@@ -128,12 +137,36 @@ pub struct EnvironmentInput {
     pub id: String,
     /// Instance-relative source path. It may use `{game_version}`.
     pub path: String,
+    /// The loaders whose derivations read this input. Empty means every loader.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub loaders: Vec<String>,
 }
 
 impl EnvironmentInput {
-    fn validate(&self) -> Result<(), ValidationError> {
+    /// Whether a lockfile for the loader `id` records this input.
+    pub fn applies_to(&self, id: &str) -> bool {
+        admits(&self.loaders, id)
+    }
+
+    fn validate(&self, loaders: &BTreeSet<&String>) -> Result<(), ValidationError> {
         require_text("environment input id", &self.id)?;
+        validate_input_loaders(&self.loaders, loaders)?;
         validate_template_path(&self.path)
+    }
+}
+
+/// Whether a `loaders` limit admits the loader `id`. An empty limit admits every loader.
+fn admits(limit: &[String], id: &str) -> bool {
+    limit.is_empty() || limit.iter().any(|loader| loader == id)
+}
+
+fn validate_input_loaders(
+    limit: &[String],
+    loaders: &BTreeSet<&String>,
+) -> Result<(), ValidationError> {
+    match limit.iter().find(|id| !loaders.contains(id)) {
+        Some(unknown) => Err(ValidationError::UnknownInputLoader(unknown.clone())),
+        None => Ok(()),
     }
 }
 
@@ -338,8 +371,7 @@ impl Step {
 
     /// Whether this step applies to the loader `id`.
     pub fn applies_to(&self, id: &str) -> bool {
-        let loaders = self.loaders();
-        loaders.is_empty() || loaders.iter().any(|loader| loader == id)
+        admits(self.loaders(), id)
     }
 
     fn validate(&self, loaders: &BTreeSet<&String>) -> Result<(), ValidationError> {
@@ -604,6 +636,9 @@ pub enum ValidationError {
     /// An installation fingerprint repeats one identifying path.
     #[error("duplicate fingerprint path {0:?}")]
     DuplicateFingerprintPath(String),
+    /// An installation fingerprint or environment input names an undeclared loader.
+    #[error("installation input refers to unknown loader {0:?}")]
+    UnknownInputLoader(String),
     /// A deployment path is not platform-independent and instance-relative.
     #[error("invalid instance-relative path {0:?}")]
     InvalidPath(String),
@@ -753,20 +788,34 @@ mod tests {
 
     #[test]
     fn validates_unique_installation_identity_inputs() {
-        let mut plan = minecraft_plan();
+        let mut plan = jarmod_plan();
         plan.fingerprint = Some(InstallationFingerprint {
             edition: "retail".to_owned(),
             identifying: vec!["game/{game_version}.exe".to_owned()],
+            loaders: vec!["jarmod".to_owned()],
         });
-        plan.environment = vec![EnvironmentInput {
+        let scoped = |loaders: &[&str]| EnvironmentInput {
             id: "game".to_owned(),
             path: "game/{game_version}.exe".to_owned(),
-        }];
+            loaders: loaders.iter().map(|loader| (*loader).to_owned()).collect(),
+        };
+        plan.environment = vec![scoped(&["jarmod"])];
         plan.validate().unwrap();
+        assert!(scoped(&["jarmod"]).applies_to("jarmod"));
+        assert!(!scoped(&["jarmod"]).applies_to("fabric"));
+        assert!(scoped(&[]).applies_to("fabric"));
+
+        plan.environment = vec![scoped(&["unknown"])];
+        assert_eq!(
+            plan.validate(),
+            Err(ValidationError::UnknownInputLoader("unknown".to_owned()))
+        );
+        plan.environment = vec![scoped(&[])];
 
         plan.environment.push(EnvironmentInput {
             id: "game".to_owned(),
             path: "game/other.exe".to_owned(),
+            loaders: Vec::new(),
         });
         assert!(matches!(
             plan.validate(),

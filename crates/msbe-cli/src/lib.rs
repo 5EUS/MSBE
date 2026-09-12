@@ -115,11 +115,11 @@ enum Command {
     /// Diagnose one broken module through deterministic trial deployments.
     #[command(subcommand)]
     Bisect(BisectCommand),
-    /// Add mods to a profile from local files, .zip archives, Modrinth, or https URLs.
+    /// Add mods to a profile from local files, .zip archives, provider references, or https URLs.
     Add {
         /// The instance.
         instance: String,
-        /// Files, .zip archives, modrinth:<project>[@<version>] references, or https:// URLs,
+        /// Files, .zip archives, <provider>:<project>[@<version>] references, or https:// URLs,
         /// optionally pinned with #sha256=<hex> or #sha512=<hex>.
         #[arg(required = true, value_name = "SOURCE")]
         sources: Vec<String>,
@@ -443,7 +443,7 @@ enum InstanceCommand {
         /// Whether this instance targets a player client or dedicated server.
         #[arg(long, value_enum, default_value_t = TargetSide::Client)]
         side: TargetSide,
-        /// The game version, such as 1.21.1. Needed to install from Modrinth.
+        /// The game version, such as 1.21.1. Needed by providers that filter by game version.
         #[arg(long)]
         game_version: Option<String>,
         /// The store shard. Defaults to .msbe/store beside the game directory, which keeps it
@@ -658,8 +658,8 @@ struct UpdateReport {
     current: Vec<Name>,
     no_compatible_version: Vec<Name>,
     unlisted: Vec<Name>,
-    /// Mods no provider can update. The key predates other providers, and scripts read it.
-    not_from_modrinth: Vec<Name>,
+    /// Mods no registered provider can update.
+    not_updatable: Vec<Name>,
     unresolved: Vec<Requirement>,
     incompatible: Vec<Requirement>,
 }
@@ -1988,7 +1988,7 @@ fn tracked_mods<'p>(
         });
         match updatable {
             Some(provenance) => tracked.push((module, provenance)),
-            None => report.not_from_modrinth.push(module.clone()),
+            None => report.not_updatable.push(module.clone()),
         }
     }
     Ok(tracked)
@@ -2388,7 +2388,7 @@ fn print_update(
         ("No longer listed by their provider", &report.unlisted),
         (
             "No provider can update these, left alone",
-            &report.not_from_modrinth,
+            &report.not_updatable,
         ),
     ] {
         if !names.is_empty() {

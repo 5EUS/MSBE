@@ -61,6 +61,10 @@ pub trait PackInput {
     /// Validated entries in lexical order.
     fn entries(&self) -> &[PackEntry];
     /// Reads one entry without exceeding either `limit` or the host limit.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PackCodecError`] when the entry is absent, unsafe, or larger than either limit.
     fn read(&self, path: &RelPath, limit: u64) -> Result<Vec<u8>, PackCodecError>;
 }
 

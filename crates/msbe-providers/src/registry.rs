@@ -1130,7 +1130,10 @@ mod tests {
         assert!(providers.accepts_extension_pins(&pins));
 
         let mut mismatched = pins;
-        mismatched[0].version = "2.0.0".to_owned();
+        let Some(pin) = mismatched.first_mut() else {
+            panic!("the native registration pins at least one extension");
+        };
+        pin.version = "2.0.0".to_owned();
         assert!(!providers.accepts_extension_pins(&mismatched));
         assert!(providers.accepts_extension_pins(&[]));
         Ok(())
@@ -1322,7 +1325,7 @@ mod tests {
         let providers = Providers::builtins().unwrap();
         match providers.request("http://example.test/mod.jar") {
             Err(RegistryError::Adapter(AdapterError::Specific(error))) => {
-                assert!(error.to_string().contains("InsecureUrl"));
+                assert!(error.to_string().contains("insecure URL"), "{error}");
             }
             other => panic!("expected the direct adapter's refusal, got {other:?}"),
         }

@@ -18,17 +18,23 @@ id      = "minecraft"
 name    = "Minecraft"
 version = "0.2.0"
 
+# Only jarmod derives files from the vanilla client, so only jarmod profiles pin it. Modern loaders
+# deploy the same bytes whether or not the launcher has downloaded that version.
+
 [fingerprint]
-edition = "minecraft-launcher"
+edition     = "minecraft-launcher"
 identifying = ["versions/{game_version}/{game_version}.jar"]
+loaders     = ["jarmod"]
 
 [[environment]]
-id = "game"
-path = "versions/{game_version}/{game_version}.jar"
+id      = "game"
+path    = "versions/{game_version}/{game_version}.jar"
+loaders = ["jarmod"]
 
 [[environment]]
-id = "launcher"
-path = "versions/{game_version}/{game_version}.json"
+id      = "launcher"
+path    = "versions/{game_version}/{game_version}.json"
+loaders = ["jarmod"]
 
 [[loaders]]
 id        = "fabric"

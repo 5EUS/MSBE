@@ -489,6 +489,7 @@ mod tests {
                 version: "0.2.0".to_owned(),
                 digest: None,
             },
+            extensions: Vec::new(),
             target: LockedTarget {
                 game_version: Some("1.21.1".to_owned()),
                 loader: "fabric".to_owned(),
@@ -496,6 +497,7 @@ mod tests {
                 side: msbe_plan_schema::Side::Client,
                 fingerprint: None,
             },
+            environment: Vec::new(),
             order: Vec::new(),
             mods: BTreeMap::new(),
             components: BTreeMap::new(),

@@ -508,16 +508,32 @@ pub(super) enum RuntimeError {
 }
 impl fmt::Display for RuntimeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MissingPointer(pointer) => write!(
-                formatter,
-                "provider program JSON pointer {pointer:?} was absent"
-            ),
-            Self::Json(error) => {
-                write!(formatter, "provider program returned invalid JSON: {error}")
+        let message = match self {
+            Self::MissingPointer(pointer) => {
+                return write!(
+                    formatter,
+                    "provider program JSON pointer {pointer:?} was absent"
+                );
             }
-            error => write!(formatter, "provider program runtime error: {error:?}"),
-        }
+            Self::Json(error) => {
+                return write!(formatter, "provider program returned invalid JSON: {error}");
+            }
+            Self::MissingMetadata => "provider program is missing required metadata",
+            Self::MissingRoute => "provider program has no route for this operation",
+            Self::MissingMapping => "provider program has no mapping for a required record field",
+            Self::ExpectedArray => "provider program expected a JSON array in the response",
+            Self::ExpectedText => "provider program expected a JSON string in the response",
+            Self::UnsafeReference => "provider program refused an unsafe reference",
+            Self::InvalidRouteTemplate => "provider program route template is invalid",
+            Self::UnsupportedReleaseProject => {
+                "provider program cannot resolve a release for this project"
+            }
+            Self::InsecureUrl => "provider program refused an insecure URL; only https is allowed",
+            Self::InvalidUrl => "provider program produced an invalid URL",
+            Self::InvalidChecksum => "provider program found an invalid checksum",
+            Self::NoFiles => "provider program found no files for the release",
+        };
+        formatter.write_str(message)
     }
 }
 impl Error for RuntimeError {}

@@ -57,14 +57,18 @@ const fn default_side() -> Side {
     Side::Client
 }
 
+/// A derived file's destination, its claim, the digests it was built from, and what built it.
+type DerivedClaim = (RelPath, Claim, Vec<Digest>, TransformId);
+
 fn plan_path(template: &str, game_version: Option<&str>) -> Result<RelPath, InstanceError> {
-    let path = match template.contains(msbe_plan_schema::GAME_VERSION) {
-        true => template.replace(
+    let path = if template.contains(msbe_plan_schema::GAME_VERSION) {
+        template.replace(
             msbe_plan_schema::GAME_VERSION,
             game_version
                 .ok_or_else(|| InstanceError::PlanPathNeedsGameVersion(template.to_owned()))?,
-        ),
-        false => template.to_owned(),
+        )
+    } else {
+        template.to_owned()
     };
     Ok(RelPath::new(&path)?)
 }
@@ -671,7 +675,7 @@ pub struct StoredFile {
 /// the hash it published for the file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Provenance {
-    /// The provider, such as `modrinth`.
+    /// The registered provider ID.
     pub provider: String,
     /// The provider's stable project id.
     pub project: String,
@@ -1180,6 +1184,10 @@ impl Instance {
     ///
     /// The registry supplies these pins because this crate deliberately does not depend on
     /// provider or codec implementations.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the profile is missing, its resolved deployment is invalid, or the extensions are invalid.
     pub fn lockfile_for_with_extensions(
         &self,
         profile: &Name,
@@ -1199,8 +1207,8 @@ impl Instance {
             .clone()
             .unwrap_or_else(|| self.default_target());
         self.validate_target(&target)?;
-        let fingerprint = self.lock_fingerprint()?;
-        let environment = self.lock_environment()?;
+        let fingerprint = self.lock_fingerprint(&target.loader)?;
+        let environment = self.lock_environment(&target.loader)?;
         let deployment_plan = self.plan_selection(profile, selection.clone())?;
         Ok(Lockfile {
             schema: 2,
@@ -1242,8 +1250,17 @@ impl Instance {
         })
     }
 
-    fn lock_fingerprint(&self) -> Result<Option<InstallationFingerprint>, InstanceError> {
-        let Some(fingerprint) = &self.plan.fingerprint else {
+    /// Pins the plan's installation fingerprint when the target loader depends on it.
+    fn lock_fingerprint(
+        &self,
+        loader: &str,
+    ) -> Result<Option<InstallationFingerprint>, InstanceError> {
+        let Some(fingerprint) = self
+            .plan
+            .fingerprint
+            .as_ref()
+            .filter(|fingerprint| fingerprint.applies_to(loader))
+        else {
             return Ok(None);
         };
         let identifying = fingerprint
@@ -1260,10 +1277,12 @@ impl Instance {
         }))
     }
 
-    fn lock_environment(&self) -> Result<Vec<LockedEnvironment>, InstanceError> {
+    /// Records the environment inputs the target loader's derivations read.
+    fn lock_environment(&self, loader: &str) -> Result<Vec<LockedEnvironment>, InstanceError> {
         self.plan
             .environment
             .iter()
+            .filter(|input| input.applies_to(loader))
             .map(|input| {
                 let path = plan_path(&input.path, self.config.game_version.as_deref())?;
                 Ok(LockedEnvironment {
@@ -2110,7 +2129,7 @@ impl Instance {
     fn derived_claims(
         &self,
         derivations: &Derivations,
-    ) -> Result<Vec<(RelPath, Claim, Vec<Digest>, TransformId)>, InstanceError> {
+    ) -> Result<Vec<DerivedClaim>, InstanceError> {
         /// The most bytes a JSON document a plan edits may be.
         const JSON_LIMIT: u64 = 16 << 20;
 
@@ -3185,9 +3204,9 @@ flatten = true
     #[test]
     fn deploys_a_pinned_loader_bootstrap_component() {
         let hash = "0".repeat(128);
-        let plan = PLAN.replace("bootstrap = \"none\"", "bootstrap = \"mc.fabric\"")
+        let plan = PLAN.replace("bootstrap = \"none\"", "bootstrap = \"mc.bootstrap\"")
             + &format!(
-                "\n[[components]]\nid = \"mc.fabric\"\nversion = \"0.16.0\"\nsha512 = \"{hash}\"\nfiles = [{{ source = \"profile.json\", path = \"versions/fabric/fabric.json\" }}]\n"
+                "\n[[components]]\nid = \"mc.bootstrap\"\nversion = \"0.16.0\"\nsha512 = \"{hash}\"\nfiles = [{{ source = \"profile.json\", path = \"versions/bootstrap/profile.json\" }}]\n"
             );
         let fixture = Fixture::with_plan(&plan);
         let mut instance = fixture.create();
@@ -3199,7 +3218,7 @@ flatten = true
         instance
             .install_component(
                 &name("default"),
-                "mc.fabric",
+                "mc.bootstrap",
                 ComponentEntry {
                     version: "0.16.0".to_owned(),
                     sha512: hash,
@@ -3215,7 +3234,7 @@ flatten = true
             .deploy(&name("default"), &mut NoopObserver)
             .unwrap();
         assert_eq!(
-            fs::read(fixture.game.join("versions/fabric/fabric.json")).unwrap(),
+            fs::read(fixture.game.join("versions/bootstrap/profile.json")).unwrap(),
             b"launcher profile"
         );
     }
@@ -3295,6 +3314,42 @@ flatten = true
     }
 
     #[test]
+    fn relocking_the_same_intent_on_another_day_is_byte_identical() {
+        fn age(directory: &std::path::Path, when: std::time::SystemTime) {
+            for entry in fs::read_dir(directory).unwrap() {
+                let path = entry.unwrap().path();
+                let metadata = fs::metadata(&path).unwrap();
+                if metadata.is_dir() {
+                    age(&path, when);
+                } else if !metadata.permissions().readonly() {
+                    let file = fs::File::options().write(true).open(&path).unwrap();
+                    file.set_modified(when).unwrap();
+                }
+            }
+        }
+
+        let fixture = Fixture::new();
+        let instance = fixture.create();
+        let profile = name("default");
+        instance
+            .add_mods(&profile, &[fixture.input("alpha.bin", b"alpha")])
+            .unwrap();
+        let path = fixture
+            .home
+            .instance(&name("demo"))
+            .join("locks/default.toml");
+        instance.write_lockfile(&profile).unwrap();
+        let first = fs::read(&path).unwrap();
+
+        // Lockfiles record content, never time: files stamped on another day relock the same.
+        let another_day = std::time::UNIX_EPOCH + std::time::Duration::from_secs(86_400);
+        age(&fixture.game, another_day);
+        age(&fixture.home.instance(&name("demo")), another_day);
+        instance.write_lockfile(&profile).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), first);
+    }
+
+    #[test]
     fn lockfile_records_declared_installation_inputs_and_transform_identity() {
         let fixture = Fixture::new();
         let mut instance = fixture.create();
@@ -3303,10 +3358,12 @@ flatten = true
         instance.plan.fingerprint = Some(InstallationFingerprint {
             edition: "retail".to_owned(),
             identifying: vec![base_path.as_str().to_owned()],
+            loaders: vec!["loader".to_owned()],
         });
         instance.plan.environment = vec![EnvironmentInput {
             id: "game".to_owned(),
             path: base_path.as_str().to_owned(),
+            loaders: vec!["loader".to_owned()],
         }];
         instance.plan.steps.push(Step::EditJson(EditJsonStep {
             id: Some("edit-base".to_owned()),
@@ -3319,7 +3376,10 @@ flatten = true
 
         let lockfile = instance.lockfile(&name("default")).unwrap();
         assert_eq!(lockfile.environment.len(), 1);
-        assert_eq!(lockfile.environment[0].path, base_path);
+        assert_eq!(
+            lockfile.environment.first().map(|input| &input.path),
+            Some(&base_path)
+        );
         assert!(lockfile.target.fingerprint.is_some());
         let generated = lockfile
             .classifications
@@ -3330,6 +3390,29 @@ flatten = true
         };
         assert_eq!(transform.step, "edit-base");
         assert_eq!(transform.plan, lockfile.plan.digest.unwrap());
+
+        // Inputs limited to another loader are neither pinned nor required, even when absent.
+        instance.plan.loaders.push(msbe_plan_schema::Loader {
+            id: "other".to_owned(),
+            provides: Vec::new(),
+            bootstrap: "none".to_owned(),
+            targets: Vec::new(),
+            sides: vec![Side::Client],
+        });
+        let absent = "absent.json".to_owned();
+        instance.plan.fingerprint = Some(InstallationFingerprint {
+            edition: "retail".to_owned(),
+            identifying: vec![absent.clone()],
+            loaders: vec!["other".to_owned()],
+        });
+        instance.plan.environment = vec![EnvironmentInput {
+            id: "game".to_owned(),
+            path: absent,
+            loaders: vec!["other".to_owned()],
+        }];
+        let lockfile = instance.lockfile(&name("default")).unwrap();
+        assert!(lockfile.environment.is_empty());
+        assert!(lockfile.target.fingerprint.is_none());
     }
 
     #[test]
@@ -3559,7 +3642,7 @@ flatten = true
     #[test]
     fn legacy_provenance_sha512_migrates_to_the_hash_map() {
         let provenance: super::Provenance = toml::from_str(
-            r#"provider = "modrinth"
+            r#"provider = "example"
 project = "AANobbMI"
 version = "S1"
 version_number = "0.8.12"

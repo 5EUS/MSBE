@@ -23,13 +23,13 @@
 
                 <StackPanel Spacing="6">
                     <TextBlock Classes="field-label" Text="NAME" />
-                    <TextBox Text="{Binding NewInstanceName}" PlaceholderText="My Minecraft instance" />
+                    <TextBox Text="{Binding NewInstanceName}" PlaceholderText="My instance" />
                     <TextBlock Classes="caption" Text="A short unique name used by profiles and commands." />
                 </StackPanel>
 
                 <StackPanel Spacing="6">
                     <TextBlock Classes="field-label" Text="GAME FOLDER" />
-                    <TextBox Text="{Binding NewInstanceRoot}" PlaceholderText="/home/user/.minecraft" />
+                    <TextBox Text="{Binding NewInstanceRoot}" PlaceholderText="/path/to/game" />
                 </StackPanel>
 
                 <StackPanel Spacing="6">

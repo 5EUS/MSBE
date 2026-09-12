@@ -1,19 +1,36 @@
 #!/usr/bin/env sh
-# Prevent provider, game, and pack-format behavior from leaking back into generic runtime crates.
+# Prevent provider, game, loader, and pack-format behavior from leaking back into generic runtime
+# crates and the desktop client (docs/17 §17.1). Matching is case-insensitive so help text and UI
+# copy are covered too.
 set -eu
 
 root=$(git rev-parse --show-toplevel)
 status=0
+pattern='loader_dependency|Pack::(?:Modrinth|CurseForge)|export_modrinth|\b(?:minecraft|modrinth|mrpack|curseforge|fabric|quilt|neoforge)\b'
 
-for crate in msbe-cli msbe-core msbe-daemon msbe-pack msbe-plan-host; do
+if ! command -v rg >/dev/null 2>&1; then
+  printf 'error: ripgrep (rg) is required for the architecture guards.\n' >&2
+  exit 1
+fi
+
+report() {
+  printf 'error: provider, game, loader, or format literal leaked into %s; move it to an extension.\n%s\n' \
+    "$1" "$2" >&2
+  status=1
+}
+
+for crate in msbe-cli msbe-core msbe-daemon msbe-pack msbe-plan-host msbe-rpc-schema; do
   directory="$root/crates/$crate/src"
-  if hits=$(rg --line-number --glob '*.rs' --glob '!end_to_end_tests.rs' \
-    'loader_dependency|Pack::(?:Modrinth|CurseForge)|export_modrinth|\b(?:minecraft|mrpack|curseforge)\b' \
-    "$directory" 2>/dev/null); then
-    printf 'error: provider, game, or format literal leaked into %s; move it to an extension crate.\n%s\n' \
-      "$crate" "$hits" >&2
-    status=1
+  [ -d "$directory" ] || continue
+  if hits=$(rg --ignore-case --line-number --glob '*.rs' --glob '!end_to_end_tests.rs' \
+    "$pattern" "$directory"); then
+    report "$crate" "$hits"
   fi
 done
+
+if hits=$(rg --ignore-case --line-number --glob '*.cs' --glob '*.axaml' \
+  "$pattern" "$root/dotnet/src"); then
+  report "MSBE desktop sources" "$hits"
+fi
 
 exit "$status"
