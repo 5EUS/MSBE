@@ -93,31 +93,104 @@ the applicable hash/size validation. Future primitives such as `browser_assisted
 `local_import`, and `steamcmd` require a runtime implementation and policy review before a
 manifest can select them.
 
-Manifest data routes sources and configures reviewed adapters. It does not replace provider
-semantics that cannot be described safely as mappings: Modrinth's dependency walk, release
-channel policy, and bulk update protocol remain a built-in adapter behind its manifest.
+The schema above is the M1 subset. The target model is a **provider program**: a versioned TOML
+document interpreted by a reviewed, fail-closed runtime. The program is the default way to add a
+provider. It declares only a composition of closed vocabulary items; it never supplies code,
+scripts, regular expressions, arbitrary HTTP templates, or response transformations.
+
+```toml
+[runtime]
+type = "catalog-v1"
+
+[routes]
+search = "/search"
+project = "/project/{reference}"
+releases = "/project/{project}/version"
+
+[records.project]
+id = "/id"
+title = "/title"
+
+[records.release]
+id = "/id"
+number = "/version_number"
+files = "/files"
+dependencies = "/dependencies"
+
+[compatibility]
+game_versions = { query = "game_versions", encoding = "json-array" }
+loaders = { query = "loaders", values = "target-loader-and-provides", encoding = "json-array" }
+client_side = "/client_side"
+server_side = "/server_side"
+
+[downloads]
+type = "release-files-v1"
+url = "url"
+name = "filename"
+size = "size"
+sha512 = { object = "hashes", key = "sha512" }
+```
+
+The generic runtime owns HTTPS-only URL resolution, endpoint-relative route expansion, fixed
+request methods, response limits, pagination bounds, JSON-pointer extraction, scalar and enum
+conversion, compatibility filtering, dependency-relation interpretation, rate limits, retries,
+cache policy, and verified acquisition. Unknown vocabulary or fields fail closed. A program can
+only select a runtime implementation shipped and reviewed by MSBE, such as `catalog-v1` or a
+future `github-releases-v1`; it cannot alter that implementation's transport or policy rules.
+
+Provider programs are signed registry artifacts. Local policy chooses trusted signing keys and
+whether a program may be enabled. The daemon reports the program id, schema, signer, and selected
+runtime to clients. An untrusted or unsupported program is visible for diagnosis but cannot make
+network requests.
 
 The M1 runtime resolves every recognized source through a fail-closed reviewed-adapter registry.
-Only the built-in `modrinth` and `url` adapters are available; a registry manifest without a
-compiled adapter is rejected rather than interpreted generically. The registry checks manifest
-policy before an adapter can make a request. M1 has no credential or persisted-acknowledgement
-workflow, so providers declaring `requires_auth = true` or `ack_required = true` are refused
-with an explicit unsupported-workflow error. This permits future adapters to declare stronger
-requirements without accidentally weakening their policy on older clients.
+Only the built-in `modrinth` and `url` adapters are available today. M1 has no credential or
+persisted-acknowledgement workflow, so providers declaring `requires_auth = true` or
+`ack_required = true` are refused with an explicit unsupported-workflow error. This permits
+future runtimes to declare stronger requirements without accidentally weakening policy on older
+clients.
+
+### Declarative provider programs
+
+Provider programs use a deliberately small language. Each item has schema-defined semantics and
+bounded resource use:
+
+- **Source recognition:** `prefixed`, `https_url`, and future reviewed URI schemes.
+- **Protocol runtimes:** named, versioned families such as `catalog-v1`; manifests configure
+  declared slots but cannot describe arbitrary requests.
+- **Routes and queries:** endpoint-relative literal segments plus URL-encoded named values, and
+  a fixed set of query encodings.
+- **Record mappings:** JSON pointers to typed scalar fields and bounded arrays; no expression
+  language, implicit coercion, or user-provided parser.
+- **Capabilities:** `search`, `releases`, `updates`, and acquisition modes selected from the
+  runtime's advertised vocabulary.
+- **Compatibility and relations:** named target fields, closed availability values, and closed
+  dependency relation names.
+- **Policy:** authentication posture, acknowledgement, distribution handling, rate-limit class,
+  and terms metadata. The runtime enforces the restrictive interpretation.
+
+This is intentionally not a universal REST client. A provider whose API, update semantics,
+authentication flow, or legal policy cannot be represented safely uses `runtime = "native"` and
+a reviewed native adapter. The manifest must name that exception and its reason. Native adapters
+may use the same neutral records, acquisition service, policy gate, and conformance tests; they
+do not create a second client-facing protocol.
 
 ### Adapter implementation contract
 
-A new provider is a reviewed Rust adapter crate, not a manifest template. The workspace keeps
-everything specific to one provider inside that provider's crate:
+A provider program is the normal extension unit. A native adapter is a reviewed exception, not
+the default extension unit. The workspace keeps generic interpreter behavior and exceptional
+provider behavior separate:
 
-| Crate                | Holds                                                                                                                                              |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `msbe-provider-api`  | the `Adapter` and `PackCodec` contracts and capabilities, neutral records, `HttpClient`, verified acquisition, manifests, overlays, and resolution |
-| `msbe-provider-<id>` | one provider: its manifest, project and pack wire records, reviewed identity mappings, overlays, translation, and provider-specific policy         |
-| `msbe-providers`     | `BUILTIN`, the reviewed adapter and codec registrations, and `Providers`, the shared fail-closed policy gate                                       |
+| Crate                | Holds                                                                                                                                |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `msbe-provider-api`  | provider-program schema, runtime contracts, neutral records, `HttpClient`, verified acquisition, manifests, overlays, and resolution |
+| `msbe-providers`     | reviewed runtime implementations, trusted program loading, codec registrations, and the shared fail-closed policy gate               |
+| `msbe-provider-<id>` | only a native provider exception: wire records, protocol behavior, reviewed mappings, and a justification for code                   |
 
-Adding a provider is a new `msbe-provider-<id>` crate and one line in `BUILTIN`. The CLI, the
-daemon and `msbe-core` never name a provider. An adapter crate must obey these boundaries:
+Adding a declarative provider is a signed provider program. Adding a native provider is a new
+`msbe-provider-<id>` crate, one reviewed registration, and an explicit reason it cannot use an
+existing runtime. The CLI, daemon, and `msbe-core` never name a provider. Every runtime or native
+adapter must obey these boundaries:
 
 1. **Registration-only entry.** The crate exports one `Registration`: its provider id,
    manifest, overlay entries and constructor. `Providers` checks the manifest's policy before

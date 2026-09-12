@@ -18,6 +18,11 @@ The architecture defined here replaces that coupling with three layers:
 3. **`msbe-pack` orchestrates.** It selects a codec, validates options, plans blob inclusion, and
    runs import/export without knowing Modrinth, CurseForge, Minecraft, or any loader name.
 
+Provider acquisition follows the same principle as game plans: a signed, declarative provider
+program selects a closed runtime vocabulary by default. Native provider code is reserved for
+protocols whose semantics cannot be expressed safely by that vocabulary. Pack codecs remain
+reviewed code because archive parsing and wire-format validation are a separate security boundary.
+
 The native `.msbepack` format is implemented as a built-in codec through the same registration
 surface. It is privileged only in that MSBE defines its schema; it does not get a second path
 through the CLI or daemon.
@@ -56,11 +61,11 @@ The target repository layout is:
 ```text
 crates/
   msbe-core/                  profiles, lockfiles, resolution, provenance, CAS references
-  msbe-provider-api/          adapters plus neutral pack-codec contracts
-  msbe-provider-modrinth/     Modrinth API and .mrpack codec
-  msbe-provider-direct/       direct URL acquisition; no external pack format
+  msbe-provider-api/          provider-program contracts plus neutral pack-codec contracts
+  msbe-provider-modrinth/     native Modrinth exception and .mrpack codec
+  msbe-provider-direct/       direct URL program and acquisition fixture; no external pack format
   msbe-provider-local/        local acquisition and native .msbepack codec registration
-  msbe-providers/             reviewed adapter and codec registrations, policy gate
+  msbe-providers/             runtime registry, trusted provider programs, codecs, policy gate
   msbe-pack/                  codec selection, neutral import/export planning, option validation
   msbe-cli/                   generic pack commands; no format-specific branches
 ```
@@ -83,7 +88,8 @@ Acquisition adapters and pack codecs are related but separate capabilities:
 A provider may implement either or both. Direct HTTPS is an adapter without a public pack format.
 The native codec can package local content without a network API. Modrinth implements both.
 
-A reviewed extension exports one registration containing zero or more pack codecs:
+A provider program normally selects a reviewed runtime by name. Native extensions are explicit
+exceptions and export a registration containing zero or more pack codecs:
 
 ```rust
 pub struct Registration {
@@ -123,13 +129,16 @@ pub struct PackCodecDescriptor {
 explicit set or a universal marker. It is advisory for UI filtering and is checked again by the
 codec during planning.
 
-`msbe-providers` builds adapters and codecs from the same fail-closed `BUILTIN` list. It rejects:
+`msbe-providers` loads trusted provider programs and builds native adapters and codecs from the
+same fail-closed registry. It rejects:
 
 - duplicate codec IDs;
 - a codec claiming a provider other than its registration;
 - an extension or media-type collision with equal detection priority;
 - a codec whose option schema is invalid;
 - a codec enabled while its provider policy is unavailable;
+- a provider program whose signature, schema, runtime, or vocabulary is unsupported;
+- a native manifest without a matching reviewed registration;
 - an uncompiled manifest that claims codec behavior.
 
 Clients retrieve descriptors from the daemon. They do not hardcode a list of formats.
@@ -679,7 +688,19 @@ the existing external formats remain on their temporary paths until Phase B.
 4. Reduce `msbe-pack` to orchestration, probing, option validation, and blob planning.
 5. Replace CLI format branches with codec lookup.
 
-### Phase C - native bundles and clients
+### Phase C - declarative provider runtimes
+
+1. Define the signed provider-program schema and its closed vocabularies for source recognition,
+   routes, typed record mappings, compatibility, dependency relations, acquisition, and policy.
+2. Implement bounded `catalog-v1` and direct-URL runtimes plus fixture-based conformance tests.
+3. Load trusted provider programs through `msbe-providers`; report signer, schema, and runtime
+   through the daemon without exposing provider wire details to clients.
+4. Convert the declarative subset of existing providers to programs. Retain native adapters only
+   for documented protocol, update, authentication, or policy semantics the runtime cannot model.
+5. Require every native provider registration to state its exception reason and run the same
+   neutral-record, transport, acquisition, and policy conformance suite.
+
+### Phase D - native bundles and clients
 
 1. Register `msbe-native` through the local/native extension.
 2. Add thin, portable, complete, and public-distribution presets.
@@ -687,7 +708,7 @@ the existing external formats remain on their temporary paths until Phase B.
 4. Render codec schemas and export previews in Desktop.
 5. Keep the current command-run bridge only as a compatibility path until typed RPC ships.
 
-### Phase D - compatibility and removal
+### Phase E - compatibility and removal
 
 1. Read legacy lockfile schema 1 and classify missing source roles conservatively.
 2. Continue importing existing `.mrpack` archives through the relocated codec.
