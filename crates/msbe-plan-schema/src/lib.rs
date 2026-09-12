@@ -28,6 +28,12 @@ pub struct Plan {
     pub name: String,
     /// The plan's own version.
     pub version: String,
+    /// Installation files that distinguish compatible game editions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<InstallationFingerprint>,
+    /// Installation-owned inputs that deployment derivations may read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub environment: Vec<EnvironmentInput>,
     /// How resolved files are deployed.
     #[serde(default)]
     pub deploy: Deploy,
@@ -55,6 +61,16 @@ impl Plan {
         require_text("plan id", &self.id)?;
         require_text("plan name", &self.name)?;
         require_text("plan version", &self.version)?;
+        if let Some(fingerprint) = &self.fingerprint {
+            fingerprint.validate()?;
+        }
+        let mut environment_ids = BTreeSet::new();
+        for input in &self.environment {
+            input.validate()?;
+            if !environment_ids.insert(&input.id) {
+                return Err(ValidationError::DuplicateEnvironment(input.id.clone()));
+            }
+        }
 
         let mut loader_ids = BTreeSet::new();
         let mut component_ids = BTreeSet::new();
@@ -77,6 +93,47 @@ impl Plan {
             step.validate(&loader_ids)?;
         }
         self.deploy.validate(&self.loaders)
+    }
+}
+
+/// Installation identity fields a plan requires before it can reproduce environment-bound output.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InstallationFingerprint {
+    /// Detected edition or store variant.
+    pub edition: String,
+    /// Instance-relative identifying paths. Paths may use `{game_version}`.
+    pub identifying: Vec<String>,
+}
+
+impl InstallationFingerprint {
+    fn validate(&self) -> Result<(), ValidationError> {
+        require_text("fingerprint edition", &self.edition)?;
+        let mut paths = BTreeSet::new();
+        for path in &self.identifying {
+            validate_template_path(path)?;
+            if !paths.insert(path) {
+                return Err(ValidationError::DuplicateFingerprintPath(path.clone()));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A named file supplied by the user's installation rather than acquired or embedded.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EnvironmentInput {
+    /// Stable root name exposed in portable locks and exports.
+    pub id: String,
+    /// Instance-relative source path. It may use `{game_version}`.
+    pub path: String,
+}
+
+impl EnvironmentInput {
+    fn validate(&self) -> Result<(), ValidationError> {
+        require_text("environment input id", &self.id)?;
+        validate_template_path(&self.path)
     }
 }
 
@@ -440,6 +497,9 @@ impl PlaceStep {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InjectStep {
+    /// Stable identifier used to pin this transform in lockfiles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     /// Loaders this step is limited to. Empty means every loader.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub loaders: Vec<String>,
@@ -457,6 +517,9 @@ pub struct InjectStep {
 
 impl InjectStep {
     fn validate(&self) -> Result<(), ValidationError> {
+        if let Some(id) = &self.id {
+            require_text("inject step id", id)?;
+        }
         validate_template_path(&self.base)?;
         validate_template_path(&self.into)?;
         if self.remove.iter().any(String::is_empty) || self.include.iter().any(String::is_empty) {
@@ -473,6 +536,9 @@ impl InjectStep {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EditJsonStep {
+    /// Stable identifier used to pin this transform in lockfiles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     /// Loaders this step is limited to. Empty means every loader.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub loaders: Vec<String>,
@@ -491,6 +557,9 @@ pub struct EditJsonStep {
 
 impl EditJsonStep {
     fn validate(&self) -> Result<(), ValidationError> {
+        if let Some(id) = &self.id {
+            require_text("edit-json step id", id)?;
+        }
         validate_template_path(&self.base)?;
         validate_template_path(&self.into)?;
         for pointer in self.set.keys().chain(&self.remove) {
@@ -529,6 +598,12 @@ pub enum ValidationError {
     /// Multiple deployment targets on one loader have the same name.
     #[error("duplicate loader target {0:?}")]
     DuplicateTarget(String),
+    /// Multiple environment inputs use the same stable ID.
+    #[error("duplicate environment input {0:?}")]
+    DuplicateEnvironment(String),
+    /// An installation fingerprint repeats one identifying path.
+    #[error("duplicate fingerprint path {0:?}")]
+    DuplicateFingerprintPath(String),
     /// A deployment path is not platform-independent and instance-relative.
     #[error("invalid instance-relative path {0:?}")]
     InvalidPath(String),
@@ -596,8 +671,8 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::{
-        Deploy, EditJsonStep, Hygiene, InjectStep, Loader, NamedPath, PlaceStep, Plan,
-        SCHEMA_VERSION, Side, Step, ValidationError,
+        Deploy, EditJsonStep, EnvironmentInput, Hygiene, InjectStep, InstallationFingerprint,
+        Loader, NamedPath, PlaceStep, Plan, SCHEMA_VERSION, Side, Step, ValidationError,
     };
 
     fn minecraft_plan() -> Plan {
@@ -606,6 +681,8 @@ mod tests {
             id: "minecraft".to_owned(),
             name: "Minecraft".to_owned(),
             version: "1.0.0".to_owned(),
+            fingerprint: None,
+            environment: Vec::new(),
             deploy: Deploy::default(),
             loaders: vec![Loader {
                 id: "fabric".to_owned(),
@@ -648,6 +725,7 @@ mod tests {
             sides: vec![Side::Client],
         });
         plan.steps.push(Step::Inject(InjectStep {
+            id: Some("inject-client".to_owned()),
             loaders: vec!["jarmod".to_owned()],
             base: "versions/{game_version}/{game_version}.jar".to_owned(),
             into: "versions/{game_version}-msbe/{game_version}-msbe.jar".to_owned(),
@@ -655,6 +733,7 @@ mod tests {
             include: Vec::new(),
         }));
         plan.steps.push(Step::EditJson(EditJsonStep {
+            id: Some("edit-client-manifest".to_owned()),
             loaders: vec!["jarmod".to_owned()],
             base: "versions/{game_version}/{game_version}.json".to_owned(),
             into: "versions/{game_version}-msbe/{game_version}-msbe.json".to_owned(),
@@ -670,6 +749,29 @@ mod tests {
         plan.validate().unwrap();
         let json = serde_json::to_string(&plan).unwrap();
         assert_eq!(serde_json::from_str::<Plan>(&json).unwrap(), plan);
+    }
+
+    #[test]
+    fn validates_unique_installation_identity_inputs() {
+        let mut plan = minecraft_plan();
+        plan.fingerprint = Some(InstallationFingerprint {
+            edition: "retail".to_owned(),
+            identifying: vec!["game/{game_version}.exe".to_owned()],
+        });
+        plan.environment = vec![EnvironmentInput {
+            id: "game".to_owned(),
+            path: "game/{game_version}.exe".to_owned(),
+        }];
+        plan.validate().unwrap();
+
+        plan.environment.push(EnvironmentInput {
+            id: "game".to_owned(),
+            path: "game/other.exe".to_owned(),
+        });
+        assert!(matches!(
+            plan.validate(),
+            Err(ValidationError::DuplicateEnvironment(id)) if id == "game"
+        ));
     }
 
     #[test]

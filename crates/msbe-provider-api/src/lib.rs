@@ -16,7 +16,7 @@
 //! See `docs/06-providers-and-policy.md`.
 
 mod acquisition;
-mod adapter;
+pub mod adapter;
 mod artifact;
 mod codec;
 mod endpoint;
@@ -30,6 +30,9 @@ pub mod program;
 pub mod resolve;
 mod target;
 
+/// The host API implemented by this MSBE build for reviewed native extensions.
+pub const NATIVE_HOST_API_VERSION: u32 = 1;
+
 pub use acquisition::{
     AcquiredArtifact, AcquisitionError, ArtifactDescriptor, DOWNLOAD_LIMIT, acquire,
 };
@@ -41,9 +44,9 @@ pub use codec::{
     EnvironmentRequirement, ImportedTarget, LayoutEntry, Observation, Observations, PackChoice,
     PackCodec, PackCodecDescriptor, PackCodecError, PackCodecRegistration, PackDirections,
     PackEntry, PackExportContext, PackExportPlan, PackFile, PackFileRole, PackImportContext,
-    PackImportPlan, PackInclusion, PackInput, PackLayout, PackOptionConstraint, PackOptionField,
-    PackOptionKind, PackOptionSchema, PackOptionValue, PackOptions, PackOrigin, PackPreset,
-    PackProbe, PackRequirement, PackWarning, PathMode, RequirementSource, SupportSet,
+    PackImportPlan, PackInput, PackLayout, PackOptionConstraint, PackOptionField, PackOptionKind,
+    PackOptionSchema, PackOptionValue, PackOptions, PackOrigin, PackPreset, PackProbe,
+    PackRequirement, PackWarning, PathMode, RequirementSource, SupportSet,
 };
 pub use ed25519_dalek::{SigningKey, VerifyingKey};
 pub use endpoint::{EndpointError, JsonEndpoint};
@@ -53,6 +56,7 @@ pub use envelope::{
 pub use hashing::hex;
 pub use http::{HttpClient, HttpError};
 pub use manifest::{Catalog, ManifestError, Provider, Source};
+pub use msbe_core::instance::NativeExtensionIdentity;
 pub use msbe_core::{instance::Provenance, solver::PackageId};
 pub use overlay::{Overlay, OverlayError};
 pub use program::{

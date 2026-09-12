@@ -183,6 +183,8 @@ pub fn resolve(
 /// A container a plan builds from a file in the game and the profile's mods.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Injection {
+    /// Stable plan step identifier when the plan declared one.
+    pub step: Option<String>,
     /// The zip container the result starts from, as it was before MSBE changed it.
     pub base: RelPath,
     /// Where the result is placed.
@@ -206,6 +208,8 @@ impl Injection {
 /// A JSON document a plan derives from a file in the game.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JsonEdit {
+    /// Stable plan step identifier when the plan declared one.
+    pub step: Option<String>,
     /// The JSON document the result starts from, as it was before MSBE changed it.
     pub base: RelPath,
     /// Where the result is placed.
@@ -283,6 +287,7 @@ fn injection(
         .cloned()
         .collect();
     Ok(Injection {
+        step: step.id.clone(),
         base: template_path(&step.base, game_version)?,
         into: template_path(&step.into, game_version)?,
         remove: step.remove.clone(),
@@ -292,6 +297,7 @@ fn injection(
 
 fn json_edit(step: &EditJsonStep, game_version: Option<&str>) -> Result<JsonEdit, ResolveError> {
     Ok(JsonEdit {
+        step: step.id.clone(),
         base: template_path(&step.base, game_version)?,
         into: template_path(&step.into, game_version)?,
         set: step
@@ -590,6 +596,8 @@ mod tests {
             id: "example".to_owned(),
             name: "Example".to_owned(),
             version: "1.0.0".to_owned(),
+            fingerprint: None,
+            environment: Vec::new(),
             deploy: Deploy::default(),
             loaders: vec![Loader {
                 id: "loader".to_owned(),
@@ -642,6 +650,7 @@ mod tests {
             hygiene: Hygiene::Default,
         }));
         plan.steps.push(Step::Inject(InjectStep {
+            id: Some("inject-container".to_owned()),
             loaders: vec!["container".to_owned()],
             base: "game/{game_version}.jar".to_owned(),
             into: "game/{game_version}-modded.jar".to_owned(),
@@ -826,6 +835,7 @@ mod tests {
     #[test]
     fn json_edits_remove_then_set_pointers_and_refuse_a_missing_parent() {
         let edit = |set: &[(&str, &str)], remove: &[&str]| JsonEdit {
+            step: Some("edit-version".to_owned()),
             base: RelPath::new("versions/1.5.2/1.5.2.json").unwrap(),
             into: RelPath::new("versions/1.5.2-msbe/1.5.2-msbe.json").unwrap(),
             set: set

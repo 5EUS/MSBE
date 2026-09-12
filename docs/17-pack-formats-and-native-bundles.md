@@ -1105,8 +1105,9 @@ reviewed codec registry.
 Phase C provider-program execution is implemented. `direct-url-v1` runs as a signed declarative
 program; Modrinth remains a reviewed native exception because its bulk update and release
 protocol semantics are not yet representable by `catalog-v1`. The shared envelope is active for
-provider programs; applying it to plans, native registrations, codecs, and lockfile pins remains
-the next extension-identity migration.
+provider programs. Compiled native registrations and codecs carry reviewed identity metadata and
+are pinned in native export lockfiles; loading every extension kind through the signed envelope
+remains the next extension-identity migration.
 
 1. [x] Define the signed provider-program schema and its closed vocabularies for source recognition,
    routes, typed record mappings, compatibility, dependency relations, acquisition, and policy.
@@ -1118,8 +1119,12 @@ the next extension-identity migration.
    for documented protocol, update, authentication, or policy semantics the runtime cannot model.
 5. [x] Require every native provider registration to state its exception reason and run the same
    neutral-record, transport, acquisition, and policy conformance suite.
-6. [ ] Load plans, provider programs, and native registrations through the shared extension envelope
-   (§17.6), and pin extension digests wherever they affect a lockfile.
+6. [~] Load plans, provider programs, and native registrations through the shared extension envelope
+  (§17.6), and pin extension digests wherever they affect a lockfile. Native registrations and
+  codecs now declare host-compatible identities whose canonical descriptors are pinned in native
+  export lockfiles and verified on import. Plan-declared installation fingerprints/environment
+  inputs and stable derivation transform identities are also recorded. Signed envelopes for plans
+  and compiled native extensions remain outstanding.
 
 ### Phase D - native bundles and clients
 
@@ -1152,9 +1157,12 @@ Carried forward:
 - Export planning reads the dated observation cache beside the store but does not refresh it. No
   adapter exposes an availability or redistribution probe yet, so provider content without an
   observation has unknown distribution rights.
-- The lockfile writer does not yet populate installation fingerprints, environment inputs, or
-  `TransformId`s, so derived outputs remain unsourceable. Import verifies whichever of these a
-  lockfile carries, before acquiring anything.
+- The lockfile writer pins the normalized plan digest and records plan-declared installation
+  fingerprints and environment inputs. Stable IDs on inject/edit-json derivations produce
+  deterministic `TransformId`s; legacy or unnamed derivations retain a deterministic fallback ID.
+  Native exports also pin their reviewed provider and codec identities; import checks a non-legacy
+  native bundle's pin set against the running build before acquiring anything. Import verifies
+  whichever of these a lockfile carries, before acquiring anything.
 - Installer questions have no producer in pack workflows, so `job.answer` is not in contract 4.
 - The daemon serves Unix domain sockets only.
 

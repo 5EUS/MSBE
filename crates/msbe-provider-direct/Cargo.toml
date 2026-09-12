@@ -16,6 +16,7 @@ publish.workspace      = true
 workspace = true
 
 [dependencies]
+msbe-core           = { version = "0.0.0", path = "../msbe-core" }
 msbe-fsops          = { version = "0.0.0", path = "../msbe-fsops" }
 msbe-provider-api   = { version = "0.0.0", path = "../msbe-provider-api" }
 thiserror.workspace = true

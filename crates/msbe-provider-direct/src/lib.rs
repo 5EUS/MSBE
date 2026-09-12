@@ -12,14 +12,24 @@ use msbe_provider_api::{
     AcquiredArtifact, Adapter, AdapterError, Availability, PackageId, Provenance, Registration,
     model::{Channel, Project, Release, ReleaseFile, Request, Selection},
 };
+use msbe_core::instance::NativeExtensionIdentity;
 use thiserror::Error;
 
 /// The provider id the direct URL manifest declares.
 pub const ID: &str = "url";
 
+const IDENTITY: NativeExtensionIdentity = NativeExtensionIdentity {
+    id: ID,
+    version: env!("CARGO_PKG_VERSION"),
+    host_api_minimum: 1,
+    host_api_maximum: 1,
+    signer: "msbe-build",
+};
+
 /// How direct URLs join MSBE.
 pub const REGISTRATION: Registration = Registration {
     id: ID,
+    identity: IDENTITY,
     manifest: include_str!("../manifest.toml"),
     overlay: &[],
     build: |_| Ok(Box::new(Direct)),

@@ -18,6 +18,18 @@ id      = "minecraft"
 name    = "Minecraft"
 version = "0.2.0"
 
+[fingerprint]
+edition = "minecraft-launcher"
+identifying = ["versions/{game_version}/{game_version}.jar"]
+
+[[environment]]
+id = "game"
+path = "versions/{game_version}/{game_version}.jar"
+
+[[environment]]
+id = "launcher"
+path = "versions/{game_version}/{game_version}.json"
+
 [[loaders]]
 id        = "fabric"
 bootstrap = "mc.fabric-installer"
@@ -195,6 +207,7 @@ type = "extract"
 type = "inject"
 
   [steps.with]
+  id      = "inject-jarmods"
   loaders = ["jarmod"]
   base    = "versions/{game_version}/{game_version}.jar"
   into    = "versions/{game_version}-msbe/{game_version}-msbe.jar"
@@ -204,6 +217,7 @@ type = "inject"
 type = "edit-json"
 
   [steps.with]
+  id      = "edit-jarmod-manifest"
   loaders = ["jarmod"]
   base    = "versions/{game_version}/{game_version}.json"
   into    = "versions/{game_version}-msbe/{game_version}-msbe.json"

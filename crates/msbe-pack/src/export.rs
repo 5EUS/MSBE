@@ -108,7 +108,11 @@ pub fn preview_export(
     let codec = providers.pack_codec(&request.codec)?;
     let instance = Instance::open(home, &request.instance)?;
     let profile = instance.profile(&request.profile)?;
-    let lockfile = instance.lockfile_for(&request.profile, profile.clone())?;
+    let lockfile = instance.lockfile_for_with_extensions(
+        &request.profile,
+        profile.clone(),
+        providers.extension_pins(),
+    )?;
     if !descriptor.supported_games.contains(&lockfile.plan.id) {
         return Err(PackError::issue(
             IssueCode::UnsupportedTarget,

@@ -53,10 +53,20 @@ static NOTHING_DEPLOYED: BTreeMap<RelPath, Digest> = BTreeMap::new();
 type BootstrapClaims = Vec<(RelPath, Claim)>;
 
 /// Claims on the files a plan derives from the game's own files.
-type DerivedClaims = Vec<(RelPath, Claim, Vec<Digest>)>;
-
 const fn default_side() -> Side {
     Side::Client
+}
+
+fn plan_path(template: &str, game_version: Option<&str>) -> Result<RelPath, InstanceError> {
+    let path = match template.contains(msbe_plan_schema::GAME_VERSION) {
+        true => template.replace(
+            msbe_plan_schema::GAME_VERSION,
+            game_version
+                .ok_or_else(|| InstanceError::PlanPathNeedsGameVersion(template.to_owned()))?,
+        ),
+        false => template.to_owned(),
+    };
+    Ok(RelPath::new(&path)?)
 }
 
 /// A validated name for an instance, profile or mod.
@@ -335,8 +345,14 @@ pub struct Lockfile {
     pub schema: u32,
     /// The pinned plan identity.
     pub plan: LockedPlan,
+    /// Reviewed extensions whose identities affected this lockfile.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extensions: Vec<ExtensionPin>,
     /// The compatibility target used to select artifacts.
     pub target: LockedTarget,
+    /// Exact installation-owned inputs declared by the plan.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub environment: Vec<LockedEnvironment>,
     /// The order modules apply in, where the plan makes order matter.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub order: Vec<Name>,
@@ -353,6 +369,54 @@ pub struct Lockfile {
     /// The profile lineage: imported pack layers with their bases, then the changes layer.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub layers: Vec<ProfileLayer>,
+}
+
+/// A reviewed extension identity pinned into a lockfile or native bundle.
+///
+/// Native extensions are compiled into the MSBE build, so `signer` identifies that build rather
+/// than making a runtime signature claim.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExtensionPin {
+    /// Stable extension identifier.
+    pub id: String,
+    /// Extension version.
+    pub version: String,
+    /// SHA-256 digest of its canonical reviewed descriptor.
+    pub digest: Digest,
+    /// Lowest host API version this extension supports.
+    pub host_api_minimum: u32,
+    /// Highest host API version this extension supports.
+    pub host_api_maximum: u32,
+    /// The build authority that supplied this compiled extension.
+    pub signer: String,
+}
+
+/// Compact identity metadata for a compiled-in reviewed extension.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NativeExtensionIdentity {
+    /// Stable extension identifier.
+    pub id: &'static str,
+    /// Extension version.
+    pub version: &'static str,
+    /// Lowest compatible host API version.
+    pub host_api_minimum: u32,
+    /// Highest compatible host API version.
+    pub host_api_maximum: u32,
+    /// Build authority for compiled code.
+    pub signer: &'static str,
+}
+
+/// An installation file whose exact bytes influence a reproducible deployment.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LockedEnvironment {
+    /// Named installation root from the plan.
+    pub root: String,
+    /// Path beneath the instance root.
+    pub path: RelPath,
+    /// Exact digest read while the lockfile was generated.
+    pub digest: Digest,
 }
 
 impl Lockfile {
@@ -1109,26 +1173,51 @@ impl Instance {
         profile: &Name,
         selection: Profile,
     ) -> Result<Lockfile, InstanceError> {
+        self.lockfile_for_with_extensions(profile, selection, Vec::new())
+    }
+
+    /// Derives a canonical lockfile and pins reviewed extensions selected by the caller.
+    ///
+    /// The registry supplies these pins because this crate deliberately does not depend on
+    /// provider or codec implementations.
+    pub fn lockfile_for_with_extensions(
+        &self,
+        profile: &Name,
+        selection: Profile,
+        mut extensions: Vec<ExtensionPin>,
+    ) -> Result<Lockfile, InstanceError> {
+        extensions.sort_by(|left, right| left.id.cmp(&right.id));
+        extensions.dedup_by(|left, right| left.id == right.id);
+        let plan_digest = Digest::of_bytes(&serde_json::to_vec(&self.plan).map_err(|error| {
+            InstanceError::Encode {
+                path: self.dir.join("plan.toml"),
+                reason: error.to_string(),
+            }
+        })?);
         let target = selection
             .target
             .clone()
             .unwrap_or_else(|| self.default_target());
         self.validate_target(&target)?;
+        let fingerprint = self.lock_fingerprint()?;
+        let environment = self.lock_environment()?;
         let deployment_plan = self.plan_selection(profile, selection.clone())?;
         Ok(Lockfile {
             schema: 2,
             plan: LockedPlan {
                 id: self.plan.id.clone(),
                 version: self.plan.version.clone(),
-                digest: None,
+                digest: Some(plan_digest),
             },
+            extensions,
             target: LockedTarget {
                 game_version: self.config.game_version.clone(),
                 loader: target.loader,
                 loader_version: target.loader_version,
                 side: target.side,
-                fingerprint: None,
+                fingerprint,
             },
+            environment,
             order: selection.load_order(),
             mods: selection
                 .mods
@@ -1151,6 +1240,39 @@ impl Instance {
             classifications: deployment_plan.classifications,
             layers: selection.layers,
         })
+    }
+
+    fn lock_fingerprint(&self) -> Result<Option<InstallationFingerprint>, InstanceError> {
+        let Some(fingerprint) = &self.plan.fingerprint else {
+            return Ok(None);
+        };
+        let identifying = fingerprint
+            .identifying
+            .iter()
+            .map(|path| {
+                let path = plan_path(path, self.config.game_version.as_deref())?;
+                Ok((path.clone(), self.pristine(&path)?))
+            })
+            .collect::<Result<BTreeMap<_, _>, InstanceError>>()?;
+        Ok(Some(InstallationFingerprint {
+            edition: fingerprint.edition.clone(),
+            identifying,
+        }))
+    }
+
+    fn lock_environment(&self) -> Result<Vec<LockedEnvironment>, InstanceError> {
+        self.plan
+            .environment
+            .iter()
+            .map(|input| {
+                let path = plan_path(&input.path, self.config.game_version.as_deref())?;
+                Ok(LockedEnvironment {
+                    root: input.id.clone(),
+                    digest: self.pristine(&path)?,
+                    path,
+                })
+            })
+            .collect()
     }
 
     /// Writes a canonical lockfile in the instance's portable lockfile directory.
@@ -1956,15 +2078,13 @@ impl Instance {
             self.config.game_version.as_deref(),
             &ordered,
         )?;
-        for (path, claim, _) in self.derived_claims(&derivations)? {
+        for (path, claim, inputs, transform) in self.derived_claims(&derivations)? {
             merge_classification(
                 &mut resolved.classifications,
                 path.clone(),
                 LockedFileClassification {
                     role: PackFileRole::Generated,
-                    // The current derivation API cannot yet record a complete TransformId.
-                    // Treat its outputs as unsourceable until a subsequent relock can do so.
-                    source: BlobSource::Unknown,
+                    source: BlobSource::Derived { inputs, transform },
                 },
             );
             resolved.claims.entry(path).or_default().push(claim);
@@ -1987,12 +2107,21 @@ impl Instance {
 
     /// Builds every file the plan derives from the game's own files into the store, and claims
     /// each one's destination for the plan.
-    fn derived_claims(&self, derivations: &Derivations) -> Result<DerivedClaims, InstanceError> {
+    fn derived_claims(
+        &self,
+        derivations: &Derivations,
+    ) -> Result<Vec<(RelPath, Claim, Vec<Digest>, TransformId)>, InstanceError> {
         /// The most bytes a JSON document a plan edits may be.
         const JSON_LIMIT: u64 = 16 << 20;
 
         let owner = Name::new("plan")?;
         let store = self.applier.store();
+        let plan = Digest::of_bytes(&serde_json::to_vec(&self.plan).map_err(|error| {
+            InstanceError::Encode {
+                path: self.dir.join("plan.toml"),
+                reason: error.to_string(),
+            }
+        })?);
         let mut claims = Vec::new();
         for injection in &derivations.injections {
             let base = self.pristine(&injection.base)?;
@@ -2007,6 +2136,12 @@ impl Instance {
                 .collect();
             let removes = |path: &str| injection.removes(path);
             let blob = inject(store, &base, &entries, &removes, &Limits::default())?;
+            let parameters = Digest::of_bytes(&serde_json::to_vec(injection).map_err(|error| {
+                InstanceError::Encode {
+                    path: self.dir.join("plan.toml"),
+                    reason: error.to_string(),
+                }
+            })?);
             claims.push((
                 injection.into.clone(),
                 Claim {
@@ -2014,6 +2149,17 @@ impl Instance {
                     blob,
                 },
                 inputs,
+                TransformId {
+                    plan,
+                    step: injection
+                        .step
+                        .clone()
+                        .unwrap_or_else(|| format!("inject:{}", injection.into)),
+                    extensions: Vec::new(),
+                    parameters,
+                    data: Vec::new(),
+                    deterministic: true,
+                },
             ));
         }
         for edit in &derivations.edits {
@@ -2032,6 +2178,12 @@ impl Instance {
                 });
             }
             let blob = store.put_bytes(&edit_json(&bytes, edit)?)?;
+            let parameters = Digest::of_bytes(&serde_json::to_vec(edit).map_err(|error| {
+                InstanceError::Encode {
+                    path: self.dir.join("plan.toml"),
+                    reason: error.to_string(),
+                }
+            })?);
             claims.push((
                 edit.into.clone(),
                 Claim {
@@ -2039,6 +2191,17 @@ impl Instance {
                     blob,
                 },
                 vec![base],
+                TransformId {
+                    plan,
+                    step: edit
+                        .step
+                        .clone()
+                        .unwrap_or_else(|| format!("edit-json:{}", edit.into)),
+                    extensions: Vec::new(),
+                    parameters,
+                    data: Vec::new(),
+                    deterministic: true,
+                },
             ));
         }
         Ok(claims)
@@ -2493,6 +2656,10 @@ pub enum InstanceError {
     #[error("profile {0} is currently deployed; deploy another profile or purge first")]
     ProfileDeployed(Name),
 
+    /// A plan-declared installation input uses `{game_version}` but the instance has none.
+    #[error("plan path {0:?} requires a game version")]
+    PlanPathNeedsGameVersion(String),
+
     /// No profile has this name.
     #[error("no profile named {0}")]
     UnknownProfile(Name),
@@ -2881,7 +3048,7 @@ mod tests {
     use msbe_fsops::{
         Backend, Checkpoint, Error as FsError, NoopObserver, Observer, Operation, RelPath,
     };
-    use msbe_plan_schema::Side;
+    use msbe_plan_schema::{EditJsonStep, EnvironmentInput, InstallationFingerprint, Side, Step};
     use tempfile::TempDir;
 
     use super::{
@@ -3096,6 +3263,7 @@ flatten = true
         let lockfile = instance.write_lockfile(&profile).unwrap();
         assert_eq!(lockfile.schema, 2);
         assert_eq!(lockfile.plan.id, "example");
+        assert!(lockfile.plan.digest.is_some());
         assert_eq!(lockfile.target.game_version.as_deref(), Some("1.0"));
         assert_eq!(lockfile.target.loader, "loader");
         assert!(lockfile.mods.contains_key(&name("alpha")));
@@ -3124,6 +3292,44 @@ flatten = true
         let legacy: super::Lockfile = legacy.try_into().unwrap();
         assert_eq!(legacy.schema, 1);
         assert!(legacy.classifications.is_empty());
+    }
+
+    #[test]
+    fn lockfile_records_declared_installation_inputs_and_transform_identity() {
+        let fixture = Fixture::new();
+        let mut instance = fixture.create();
+        let base_path = RelPath::new("base.json").unwrap();
+        fs::write(fixture.game.join(base_path.as_str()), b"{\"id\":\"base\"}").unwrap();
+        instance.plan.fingerprint = Some(InstallationFingerprint {
+            edition: "retail".to_owned(),
+            identifying: vec![base_path.as_str().to_owned()],
+        });
+        instance.plan.environment = vec![EnvironmentInput {
+            id: "game".to_owned(),
+            path: base_path.as_str().to_owned(),
+        }];
+        instance.plan.steps.push(Step::EditJson(EditJsonStep {
+            id: Some("edit-base".to_owned()),
+            loaders: vec!["loader".to_owned()],
+            base: base_path.as_str().to_owned(),
+            into: "generated.json".to_owned(),
+            set: BTreeMap::new(),
+            remove: Vec::new(),
+        }));
+
+        let lockfile = instance.lockfile(&name("default")).unwrap();
+        assert_eq!(lockfile.environment.len(), 1);
+        assert_eq!(lockfile.environment[0].path, base_path);
+        assert!(lockfile.target.fingerprint.is_some());
+        let generated = lockfile
+            .classifications
+            .get(&RelPath::new("generated.json").unwrap())
+            .unwrap();
+        let super::BlobSource::Derived { transform, .. } = &generated.source else {
+            panic!("expected a derived source");
+        };
+        assert_eq!(transform.step, "edit-base");
+        assert_eq!(transform.plan, lockfile.plan.digest.unwrap());
     }
 
     #[test]

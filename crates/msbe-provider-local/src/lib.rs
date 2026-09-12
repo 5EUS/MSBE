@@ -7,6 +7,7 @@
 
 mod native;
 
+use msbe_core::instance::NativeExtensionIdentity;
 use msbe_provider_api::{
     Adapter, AdapterError, PackCodec, PackCodecError, PackCodecRegistration, Registration,
     model::Request,
@@ -18,14 +19,29 @@ pub use native::{CODEC_ID, NativeCodec};
 /// The provider id the local manifest declares.
 pub const ID: &str = "local";
 
+const IDENTITY: NativeExtensionIdentity = NativeExtensionIdentity {
+    id: ID,
+    version: env!("CARGO_PKG_VERSION"),
+    host_api_minimum: 1,
+    host_api_maximum: 1,
+    signer: "msbe-build",
+};
+
+const CODEC_IDENTITY: NativeExtensionIdentity = NativeExtensionIdentity {
+    id: CODEC_ID,
+    ..IDENTITY
+};
+
 /// How local content and the native bundle codec join MSBE.
 pub const REGISTRATION: Registration = Registration {
     id: ID,
+    identity: IDENTITY,
     manifest: include_str!("../manifest.toml"),
     overlay: &[],
     build: |_| Ok(Box::new(Local)),
     pack_codecs: &[PackCodecRegistration {
         id: CODEC_ID,
+        identity: CODEC_IDENTITY,
         build: build_native_codec,
     }],
     exception_reason: "Local content is ingested by the host from user-selected paths and has no remote protocol; the native bundle codec is reviewed host-format code.",

@@ -407,8 +407,9 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use msbe_core::instance::{
-        BlobSource, DistributionDecision, InstallAnswers, LockedFileClassification, LockedModule,
-        LockedPlan, LockedTarget, Lockfile, Name, PackFileRole, ProfileLayer, StoredFile,
+        BlobSource, DistributionDecision, ExtensionPin, InstallAnswers, LockedFileClassification,
+        LockedModule, LockedPlan, LockedTarget, Lockfile, Name, PackFileRole, ProfileLayer,
+        StoredFile,
     };
     use msbe_fsops::{Digest, RelPath};
     use msbe_plan_schema::Side;
@@ -494,6 +495,14 @@ mod tests {
                 version: "1.0.0".to_owned(),
                 digest: None,
             },
+            extensions: vec![ExtensionPin {
+                id: "msbe-native".to_owned(),
+                version: "1.0.0".to_owned(),
+                digest: Digest::of_bytes(b"native-extension"),
+                host_api_minimum: 1,
+                host_api_maximum: 1,
+                signer: "msbe-build".to_owned(),
+            }],
             target: LockedTarget {
                 game_version: Some("2.0".to_owned()),
                 loader: "example-loader".to_owned(),
@@ -501,6 +510,7 @@ mod tests {
                 side: Side::Client,
                 fingerprint: None,
             },
+            environment: Vec::new(),
             order: Vec::new(),
             mods: BTreeMap::from([(Name::new("local").unwrap(), module)]),
             components: BTreeMap::new(),

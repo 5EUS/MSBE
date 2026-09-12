@@ -2,6 +2,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use msbe_core::instance::ExtensionPin;
+use msbe_fsops::Digest;
 use msbe_provider_api::{
     Adapter, AdapterError, Catalog, ExtensionCapability, ExtensionEnvelope, ExtensionProvide,
     HostApiRange, HttpClient, ManifestError, Overlay, OverlayError, PackCodec, PackCodecDescriptor,
@@ -13,6 +15,8 @@ use msbe_provider_api::{
 use thiserror::Error;
 
 use crate::runtime;
+
+const NATIVE_HOST_API_VERSION: u32 = 1;
 
 /// The adapters MSBE ships. A new provider is a crate beside these and one line here.
 pub const BUILTIN: &[Registration] = &[
@@ -68,6 +72,7 @@ pub struct Providers {
     catalog: Catalog,
     adapters: BTreeMap<String, Box<dyn Adapter>>,
     codecs: BTreeMap<String, RegisteredCodec>,
+    extensions: Vec<ExtensionPin>,
     overlay: Overlay,
 }
 
@@ -159,6 +164,7 @@ impl Providers {
         let catalog = Catalog::from_toml(&documents)?;
         let mut adapters = BTreeMap::new();
         let mut codecs = CodecTable::default();
+        let mut extensions = Vec::new();
         let mut overlay = Vec::new();
         for registration in registrations {
             if registration.exception_reason.trim().is_empty() {
@@ -166,6 +172,15 @@ impl Providers {
                     registration.id.to_owned(),
                 ));
             }
+            if registration.identity.id != registration.id {
+                return Err(RegistryError::MismatchedNativeIdentity {
+                    registration: registration.id.to_owned(),
+                    identity: registration.identity.id.to_owned(),
+                });
+            }
+            let manifest: toml::Value = toml::from_str(registration.manifest)
+                .map_err(|error| RegistryError::NativeCanonical(error.to_string()))?;
+            extensions.push(native_pin(&registration.identity, manifest)?);
             let provider = catalog.provider(registration.id)?;
             let adapter = (registration.build)(provider)?;
             if adapter.id() != provider.id {
@@ -176,7 +191,7 @@ impl Providers {
             }
             adapters.insert(provider.id.clone(), adapter);
             for codec_registration in registration.pack_codecs {
-                codecs.register(&provider.id, codec_registration)?;
+                extensions.push(codecs.register(&provider.id, codec_registration)?);
             }
             overlay.extend_from_slice(registration.overlay);
         }
@@ -197,6 +212,7 @@ impl Providers {
             catalog,
             adapters,
             codecs: codecs.codecs,
+            extensions,
             overlay: Overlay::from_toml(&overlay)?,
         })
     }
@@ -242,6 +258,25 @@ impl Providers {
             })
             .map(|registered| registered.codec.descriptor())
             .collect()
+    }
+
+    /// Reviewed native extension identities pinned by this MSBE build.
+    #[must_use]
+    pub fn extension_pins(&self) -> Vec<ExtensionPin> {
+        self.extensions.clone()
+    }
+
+    /// Whether `pins` name precisely the native extensions reviewed into this build.
+    ///
+    /// Empty pins are accepted for native bundles produced before extension pinning was added.
+    #[must_use]
+    pub fn accepts_extension_pins(&self, pins: &[ExtensionPin]) -> bool {
+        if pins.is_empty() {
+            return true;
+        }
+        let mut expected = self.extension_pins();
+        expected.sort_by(|left, right| left.id.cmp(&right.id));
+        expected == pins
     }
 
     /// Looks up a reviewed pack codec after enforcing its provider's policy.
@@ -405,7 +440,7 @@ impl CodecTable {
         &mut self,
         provider: &str,
         registration: &PackCodecRegistration,
-    ) -> Result<(), RegistryError> {
+    ) -> Result<ExtensionPin, RegistryError> {
         let codec = (registration.build)()?;
         let descriptor = codec.descriptor();
         descriptor.validate()?;
@@ -413,6 +448,12 @@ impl CodecTable {
             return Err(RegistryError::MismatchedCodec {
                 registration: registration.id.to_owned(),
                 descriptor: descriptor.id.clone(),
+            });
+        }
+        if registration.identity.id != registration.id {
+            return Err(RegistryError::MismatchedNativeIdentity {
+                registration: registration.id.to_owned(),
+                identity: registration.identity.id.to_owned(),
             });
         }
         if descriptor
@@ -435,6 +476,7 @@ impl CodecTable {
         for media_type in &descriptor.media_types {
             register_hint(&mut self.media_types, media_type, &descriptor.id)?;
         }
+        let extension = native_pin(&registration.identity, descriptor)?;
         self.codecs.insert(
             descriptor.id.clone(),
             RegisteredCodec {
@@ -442,8 +484,51 @@ impl CodecTable {
                 codec,
             },
         );
-        Ok(())
+        Ok(extension)
     }
+}
+
+fn native_pin(
+    identity: &msbe_core::instance::NativeExtensionIdentity,
+    source: impl serde::Serialize,
+) -> Result<ExtensionPin, RegistryError> {
+    for (field, value) in [
+        ("extension id", identity.id),
+        ("extension version", identity.version),
+        ("extension signer", identity.signer),
+    ] {
+        if value.trim().is_empty() || !value.is_ascii() {
+            return Err(RegistryError::InvalidNativeIdentity {
+                field,
+                value: value.to_owned(),
+            });
+        }
+    }
+    if identity.host_api_minimum > identity.host_api_maximum
+        || !(identity.host_api_minimum..=identity.host_api_maximum)
+            .contains(&NATIVE_HOST_API_VERSION)
+    {
+        return Err(RegistryError::UnsupportedNativeHostApi {
+            id: identity.id.to_owned(),
+            minimum: identity.host_api_minimum,
+            maximum: identity.host_api_maximum,
+        });
+    }
+    let source: toml::Value = toml::from_str(
+        &toml::to_string(&source)
+            .map_err(|error| RegistryError::NativeCanonical(error.to_string()))?,
+    )
+    .map_err(|error| RegistryError::NativeCanonical(error.to_string()))?;
+    let bytes = serde_json::to_vec(&source)
+        .map_err(|error| RegistryError::NativeCanonical(error.to_string()))?;
+    Ok(ExtensionPin {
+        id: identity.id.to_owned(),
+        version: identity.version.to_owned(),
+        digest: Digest::of_bytes(&bytes),
+        host_api_minimum: identity.host_api_minimum,
+        host_api_maximum: identity.host_api_maximum,
+        signer: identity.signer.to_owned(),
+    })
 }
 
 fn register_hint(
@@ -466,6 +551,35 @@ fn register_hint(
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum RegistryError {
+    /// Native registration identity differs from the provider or codec it serves.
+    #[error("native extension identity {identity:?} does not match registration {registration:?}")]
+    MismatchedNativeIdentity {
+        /// Provider or codec registration ID.
+        registration: String,
+        /// ID declared by native identity metadata.
+        identity: String,
+    },
+    /// Native identity contains an empty or non-ASCII field.
+    #[error("invalid native {field} {value:?}")]
+    InvalidNativeIdentity {
+        /// Identity field that failed validation.
+        field: &'static str,
+        /// Rejected identity value.
+        value: String,
+    },
+    /// The compiled extension cannot run against this host API.
+    #[error("native extension {id:?} supports host API {minimum}..={maximum}, not this build")]
+    UnsupportedNativeHostApi {
+        /// Extension ID.
+        id: String,
+        /// Lowest supported host API.
+        minimum: u32,
+        /// Highest supported host API.
+        maximum: u32,
+    },
+    /// A built-in manifest or descriptor could not be canonicalized for a pin.
+    #[error("cannot canonicalize native extension identity: {0}")]
+    NativeCanonical(String),
     /// A native extension did not state why a reviewed runtime cannot serve it.
     #[error("native provider {0:?} must state an exception reason")]
     MissingNativeException(String),
@@ -568,6 +682,7 @@ pub enum RegistryError {
 mod tests {
     use std::io::Write;
 
+    use msbe_core::instance::NativeExtensionIdentity;
     use msbe_plan_schema::Side;
     use msbe_provider_api::{
         Adapter, AdapterError, ContainerKind, ExtensionCapability, ExtensionEnvelope,
@@ -757,24 +872,59 @@ mod tests {
 
     const ALPHA: PackCodecRegistration = PackCodecRegistration {
         id: "alpha",
+        identity: NativeExtensionIdentity {
+            id: "alpha",
+            version: "1.0.0",
+            host_api_minimum: 1,
+            host_api_maximum: 1,
+            signer: "msbe-build",
+        },
         build: build_alpha,
     };
     const BETA: PackCodecRegistration = PackCodecRegistration {
         id: "beta",
+        identity: NativeExtensionIdentity {
+            id: "beta",
+            version: "1.0.0",
+            host_api_minimum: 1,
+            host_api_maximum: 1,
+            signer: "msbe-build",
+        },
         build: build_beta,
     };
     const DUPLICATE_HINT: PackCodecRegistration = PackCodecRegistration {
         id: "beta",
+        identity: NativeExtensionIdentity {
+            id: "beta",
+            version: "1.0.0",
+            host_api_minimum: 1,
+            host_api_maximum: 1,
+            signer: "msbe-build",
+        },
         build: build_duplicate_hint,
     };
     const MISMATCH: PackCodecRegistration = PackCodecRegistration {
         id: "registered",
+        identity: NativeExtensionIdentity {
+            id: "registered",
+            version: "1.0.0",
+            host_api_minimum: 1,
+            host_api_maximum: 1,
+            signer: "msbe-build",
+        },
         build: build_mismatch,
     };
 
     fn registration(codecs: &'static [PackCodecRegistration]) -> Registration {
         Registration {
             id: "example",
+            identity: NativeExtensionIdentity {
+                id: "example",
+                version: "1.0.0",
+                host_api_minimum: 1,
+                host_api_maximum: 1,
+                signer: "msbe-build",
+            },
             manifest: EXAMPLE,
             overlay: &[],
             build: build_example,
@@ -889,6 +1039,19 @@ mod tests {
             Providers::new(&[registration], &[]),
             Err(RegistryError::MissingNativeException(id)) if id == "example"
         ));
+    }
+
+    #[test]
+    fn native_extension_pins_must_match_the_running_build() -> Result<(), RegistryError> {
+        let providers = Providers::new(&[registration(&[])], &[])?;
+        let pins = providers.extension_pins();
+        assert!(providers.accepts_extension_pins(&pins));
+
+        let mut mismatched = pins;
+        mismatched[0].version = "2.0.0".to_owned();
+        assert!(!providers.accepts_extension_pins(&mismatched));
+        assert!(providers.accepts_extension_pins(&[]));
+        Ok(())
     }
 
     #[test]

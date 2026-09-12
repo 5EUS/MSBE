@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{Availability, PackageId};
+use msbe_core::instance::NativeExtensionIdentity;
 
 /// Builds one reviewed pack codec from its provider's validated registration.
 pub type BuildPackCodec = fn() -> Result<Box<dyn PackCodec>, PackCodecError>;
@@ -25,6 +26,8 @@ pub type BuildPackCodec = fn() -> Result<Box<dyn PackCodec>, PackCodecError>;
 pub struct PackCodecRegistration {
     /// Stable, globally unique codec identifier.
     pub id: &'static str,
+    /// Identity metadata for this compiled codec extension.
+    pub identity: NativeExtensionIdentity,
     /// Builds the codec implementation.
     pub build: BuildPackCodec,
 }
@@ -58,10 +61,6 @@ pub trait PackInput {
     /// Validated entries in lexical order.
     fn entries(&self) -> &[PackEntry];
     /// Reads one entry without exceeding either `limit` or the host limit.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PackCodecError`] when the entry is missing or exceeds its limit.
     fn read(&self, path: &RelPath, limit: u64) -> Result<Vec<u8>, PackCodecError>;
 }
 
@@ -706,6 +705,24 @@ pub struct PackWarning {
     pub message: String,
 }
 
+/// The host's policy-gated decision about how an export may carry content.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackInclusion {
+    /// Digests the export may embed.
+    #[serde(default)]
+    pub embed: BTreeSet<Digest>,
+    /// Digests policy permits a codec to embed.
+    #[serde(default)]
+    pub permitted: BTreeSet<Digest>,
+    /// Exact requirements the export records instead of bytes.
+    #[serde(default)]
+    pub requirements: Vec<PackRequirement>,
+    /// Installation-owned inputs the recipient must supply.
+    #[serde(default)]
+    pub environment: Vec<EnvironmentRequirement>,
+}
+
 /// Resolved profile state available to an exporter.
 pub struct PackExportContext<'a> {
     /// Pinned plan identity.
@@ -718,7 +735,7 @@ pub struct PackExportContext<'a> {
     pub files: &'a [PackFile],
     /// Dated source and policy observations used for planning.
     pub observations: &'a Observations,
-    /// The host's blob-inclusion decision. A codec may embed only digests it permits.
+    /// The host's policy-gated inclusion decision.
     pub inclusion: &'a PackInclusion,
 }
 
@@ -740,50 +757,20 @@ impl fmt::Debug for PackExportContext<'_> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PackFile {
-    /// Portable deployment path, or the artifact source path when `deployed` is false.
+    /// Portable deployment path.
     pub path: RelPath,
     /// Exact content digest.
     pub digest: Digest,
     /// Semantic role recorded by core.
     pub role: PackFileRole,
     /// The profile layer that introduced the file.
-    #[serde(default = "default_layer")]
     pub layer: String,
-    /// Whether `path` is a deployment destination. Artifact files a plan consumes without
-    /// placing, such as injection inputs, are required blobs but not deployment paths.
-    #[serde(default = "default_deployed")]
+    /// Whether the file is placed in the deployed instance.
     pub deployed: bool,
     /// How the exact bytes can be reproduced.
     pub source: BlobSource,
     /// Current distribution decision derived from immutable facts and observations.
     pub distribution: DistributionDecision,
-}
-
-fn default_layer() -> String {
-    "changes".to_owned()
-}
-
-const fn default_deployed() -> bool {
-    true
-}
-
-/// The host's decision about which blobs an export embeds and how the rest are reproduced.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PackInclusion {
-    /// Digests the host chose to embed.
-    #[serde(default)]
-    pub embed: BTreeSet<Digest>,
-    /// Digests policy allows embedding at all. A codec that cannot represent a requirement may
-    /// embed its digest instead only when it is here; the host rejects any other embedding.
-    #[serde(default)]
-    pub permitted: BTreeSet<Digest>,
-    /// Exact requirements emitted instead of embedded bytes.
-    #[serde(default)]
-    pub requirements: Vec<PackRequirement>,
-    /// Installation-owned inputs the recipient must already have.
-    #[serde(default)]
-    pub environment: Vec<EnvironmentRequirement>,
 }
 
 /// Time-varying facts consulted during export planning.
@@ -803,7 +790,7 @@ pub struct Observation {
     pub observed_at: String,
     /// Whether the exact content was available through its source.
     pub currently_acquirable: bool,
-    /// The provider's current redistribution decision, when one was observed.
+    /// Current redistribution decision, when the source can establish one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub distribution: Option<DistributionDecision>,
 }
@@ -820,8 +807,8 @@ pub struct PackExportPlan {
     pub embedded: Vec<PackFile>,
     /// Requirements emitted instead of embedded bytes.
     pub requirements: Vec<PackRequirement>,
-    /// Installation-owned inputs recorded by the export.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Installation-owned inputs the recipient must supply.
+    #[serde(default)]
     pub environment: Vec<EnvironmentRequirement>,
     /// Non-fatal warnings.
     pub warnings: Vec<PackWarning>,
@@ -859,8 +846,8 @@ pub enum PackCodecError {
     /// A manifest or entry exceeds a shared limit.
     #[error("pack input exceeds limit: {0}")]
     Limit(String),
-    /// An entry path is absolute, escapes its root, or collides after normalization.
-    #[error("unsafe pack entry path: {0}")]
+    /// A format supplied a path the host cannot safely represent.
+    #[error("pack path is unsafe: {0}")]
     UnsafePath(String),
     /// A required blob is unavailable.
     #[error("required blob {0} is unavailable")]

@@ -11,8 +11,8 @@
 
 #[cfg(feature = "test")]
 pub mod cli_test_support;
-mod client;
 mod codec;
+mod client;
 mod reference;
 #[cfg(test)]
 mod resolution_tests;
@@ -23,10 +23,11 @@ mod wire;
 
 use msbe_provider_api::{
     Adapter, AdapterError, HttpClient, ManifestError, PackCodec, PackCodecError,
-    PackCodecRegistration, PackageId, Provenance, Provider, Registration, Releases, Search, Target,
-    UpdateCheck, Updates,
+    PackCodecRegistration, PackageId, Provenance, Provider, Registration, Releases, Search,
+    Target, UpdateCheck, Updates,
     model::{Project, Release, Request, SearchResult},
 };
+use msbe_core::instance::NativeExtensionIdentity;
 use thiserror::Error;
 
 use crate::{client::Client, reference::Spec};
@@ -37,9 +38,23 @@ pub const ID: &str = "modrinth";
 /// Modrinth's production API.
 pub const API_BASE: &str = "https://api.modrinth.com/v2";
 
+const IDENTITY: NativeExtensionIdentity = NativeExtensionIdentity {
+    id: ID,
+    version: env!("CARGO_PKG_VERSION"),
+    host_api_minimum: 1,
+    host_api_maximum: 1,
+    signer: "msbe-build",
+};
+
+const CODEC_IDENTITY: NativeExtensionIdentity = NativeExtensionIdentity {
+    id: "modrinth-mrpack",
+    ..IDENTITY
+};
+
 /// How Modrinth joins MSBE.
 pub const REGISTRATION: Registration = Registration {
     id: ID,
+    identity: IDENTITY,
     manifest: include_str!("../manifest.toml"),
     overlay: &[
         include_str!("../overlays/Aqlf1Shp.toml"),
@@ -48,6 +63,7 @@ pub const REGISTRATION: Registration = Registration {
     build,
     pack_codecs: &[PackCodecRegistration {
         id: "modrinth-mrpack",
+        identity: CODEC_IDENTITY,
         build: build_pack_codec,
     }],
     exception_reason: "Modrinth uses reviewed bulk update and release protocol semantics not expressible by catalog-v1.",

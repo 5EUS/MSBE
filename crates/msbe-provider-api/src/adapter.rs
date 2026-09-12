@@ -23,6 +23,8 @@ pub type Build = fn(&Provider) -> Result<Box<dyn Adapter>, ManifestError>;
 pub struct Registration {
     /// The provider id its manifest declares.
     pub id: &'static str,
+    /// Identity metadata for this compiled provider extension.
+    pub identity: msbe_core::instance::NativeExtensionIdentity,
     /// The provider manifest, as TOML.
     pub manifest: &'static str,
     /// Overlay entries about the provider's projects, one TOML document each.
