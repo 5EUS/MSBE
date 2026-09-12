@@ -28,9 +28,15 @@ public sealed class UnixSocketMsbeClient : IMsbeClient
     {
         using JsonDocument response = await this.SendAsync("daemon.info", null, cancellationToken).ConfigureAwait(false);
         JsonElement result = GetResult(response.RootElement);
+
+        // Daemons that predate the data directory omit it.
+        string? dataDirectory = result.TryGetProperty("data_directory", out JsonElement directory) && directory.ValueKind == JsonValueKind.String
+            ? directory.GetString()
+            : null;
         return new DaemonInfo(
             result.GetProperty("version").GetString() ?? string.Empty,
-            result.GetProperty("rpc_version").GetInt32());
+            result.GetProperty("rpc_version").GetInt32(),
+            dataDirectory);
     }
 
     /// <inheritdoc />

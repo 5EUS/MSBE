@@ -1,4 +1,5 @@
 using MSBE.Client;
+using MSBE.Desktop.Services;
 using MSBE.Desktop.ViewModels;
 
 using Xunit;
@@ -8,6 +9,8 @@ namespace MSBE.Desktop.Tests;
 /// <summary>Tests for <see cref="MainViewModel" />.</summary>
 public sealed class MainViewModelTests
 {
+    private const string DataDirectory = "/data/msbe";
+
     /// <summary>Refresh loads, sorts and selects registered instances.</summary>
     /// <returns>A task representing the test.</returns>
     [Fact]
@@ -424,6 +427,36 @@ public sealed class MainViewModelTests
         Assert.Contains("Exported distributable pack", vm.StatusMessage, StringComparison.Ordinal);
     }
 
+    /// <summary>Settings opens the data folder the daemon reports, once it has reported one.</summary>
+    /// <returns>A task representing the test.</returns>
+    [Fact]
+    public async Task OpenDataDirectoryOpensTheFolderReportedByTheDaemon()
+    {
+        var folders = new TestFolderLauncher(succeeds: true);
+        MainViewModel vm = new(new TestClient(_ => new CommandResult(0, "[]", string.Empty)), folders);
+        Assert.False(vm.OpenDataDirectoryCommand.CanExecute(parameter: null));
+
+        await vm.ConnectAsync();
+        await vm.OpenDataDirectoryCommand.ExecuteAsync(parameter: null);
+
+        Assert.Equal(DataDirectory, vm.DataDirectoryText);
+        Assert.Equal([DataDirectory], folders.Opened);
+        Assert.Equal($"Opened data folder {DataDirectory}.", vm.StatusMessage);
+    }
+
+    /// <summary>A data folder the platform cannot open is reported, not silently ignored.</summary>
+    /// <returns>A task representing the test.</returns>
+    [Fact]
+    public async Task OpenDataDirectoryReportsAFolderThatCannotBeOpened()
+    {
+        MainViewModel vm = new(new TestClient(_ => new CommandResult(0, "[]", string.Empty)), new TestFolderLauncher(succeeds: false));
+
+        await vm.ConnectAsync();
+        await vm.OpenDataDirectoryCommand.ExecuteAsync(parameter: null);
+
+        Assert.StartsWith($"Could not open {DataDirectory}.", vm.StatusMessage, StringComparison.Ordinal);
+    }
+
     private static CommandResult PackWorkflowResponse(IReadOnlyList<string> arguments, List<IReadOnlyList<string>> calls)
     {
         calls.Add(arguments);
@@ -462,13 +495,28 @@ public sealed class MainViewModelTests
             : new CommandResult(0, """{"target":{"loader":"fabric","loader_version":"0.16.10","side":"client"},"order":[],"components":{},"mods":{},"configs":{}}""", string.Empty);
     }
 
+    private sealed class TestFolderLauncher : IFolderLauncher
+    {
+        private readonly bool succeeds;
+
+        public TestFolderLauncher(bool succeeds) => this.succeeds = succeeds;
+
+        public List<string> Opened { get; } = [];
+
+        public Task<bool> OpenAsync(string path)
+        {
+            this.Opened.Add(path);
+            return Task.FromResult(this.succeeds);
+        }
+    }
+
     private sealed class TestClient : IMsbeClient
     {
         private readonly Func<IReadOnlyList<string>, CommandResult> runCommand;
 
         public TestClient(Func<IReadOnlyList<string>, CommandResult> runCommand) => this.runCommand = runCommand;
 
-        public Task<DaemonInfo> GetInfoAsync(CancellationToken cancellationToken) => Task.FromResult(new DaemonInfo("test", 3));
+        public Task<DaemonInfo> GetInfoAsync(CancellationToken cancellationToken) => Task.FromResult(new DaemonInfo("test", 3, DataDirectory));
 
         public Task<IReadOnlyList<GameInfo>> GetGamesAsync(CancellationToken cancellationToken) => Task.FromResult<IReadOnlyList<GameInfo>>(
             [new GameInfo("minecraft", "Minecraft", "1", ["fabric", "neoforge"])]);

@@ -1,0 +1,29 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:MSBE.Desktop.ViewModels"
+             x:Class="MSBE.Desktop.Views.Pages.SettingsPageView"
+             x:DataType="vm:MainViewModel">
+    <StackPanel Margin="8" Spacing="16">
+        <StackPanel Spacing="3">
+            <TextBlock Classes="sectionHeading" Text="Settings" />
+            <TextBlock Classes="caption" Text="Preferences and shortcuts for this MSBE installation." />
+        </StackPanel>
+
+        <StackPanel Spacing="6">
+            <TextBlock Classes="field-label" Text="Data folder" />
+            <TextBlock Classes="caption" Text="Instances, journals, profiles and pinned plans, as reported by the daemon." />
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                <SelectableTextBlock VerticalAlignment="Center" TextWrapping="Wrap" Text="{Binding DataDirectoryText}" />
+                <Button Grid.Column="1"
+                        Classes="secondary-button"
+                        Command="{Binding OpenDataDirectoryCommand}"
+                        ToolTip.Tip="Show the data folder in the file manager">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <LucideIcon Kind="FolderOpen" Size="15" StrokeWidth="1.8" />
+                        <TextBlock Text="Open data folder" />
+                    </StackPanel>
+                </Button>
+            </Grid>
+        </StackPanel>
+    </StackPanel>
+</UserControl>

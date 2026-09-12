@@ -35,9 +35,14 @@ fn info(id: Value, params: &Value) -> Response {
     if !params.is_null() {
         return Response::error(id, -32602, "daemon.info does not accept parameters");
     }
+    // Commands run without `--home`, so the discovered home is the one they use.
+    let data_directory = msbe_core::config::Home::discover()
+        .ok()
+        .map(|home| home.root().to_string_lossy().into_owned());
     match serde_json::to_value(DaemonInfo {
         version: env!("CARGO_PKG_VERSION").to_owned(),
         rpc_version: CONTRACT_VERSION,
+        data_directory,
     }) {
         Ok(info) => Response::success(id, info),
         Err(error) => Response::error(id, -32603, error.to_string()),
@@ -248,6 +253,7 @@ bootstrap = "none"
         match response {
             Response::Success { result, .. } => {
                 assert_eq!(result.get("rpc_version"), Some(&json!(CONTRACT_VERSION)));
+                assert!(result.get("data_directory").is_some_and(Value::is_string));
             }
             Response::Error { error, .. } => assert_eq!(error.code, 0, "{error:?}"),
         }

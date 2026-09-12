@@ -412,6 +412,7 @@ name = "msbe-daemon"
 version = "0.0.0"
 dependencies = [
  "msbe-cli",
+ "msbe-core",
  "msbe-plan-schema",
  "msbe-rpc-schema",
  "serde",

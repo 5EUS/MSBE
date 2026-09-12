@@ -54,6 +54,11 @@ pub struct DaemonInfo {
     pub version: String,
     /// The highest RPC contract version the daemon understands.
     pub rpc_version: u32,
+    /// The data directory holding MSBE's instances and state, if the platform provides one.
+    ///
+    /// Absent from daemons that predate it, which clients must tolerate.
+    #[serde(default)]
+    pub data_directory: Option<String>,
 }
 
 /// A JSON-RPC request framed as one JSON object.
@@ -152,11 +157,24 @@ mod tests {
 
     #[test]
     fn info_round_trips_with_the_csharp_naming_policy() -> Result<(), serde_json::Error> {
-        let encoded = serde_json::to_string(&DaemonInfo {
+        let info = DaemonInfo {
             version: "0.0.0".to_owned(),
             rpc_version: CONTRACT_VERSION,
-        })?;
-        assert_eq!(encoded, r#"{"version":"0.0.0","rpc_version":3}"#);
+            data_directory: Some("/msbe".to_owned()),
+        };
+        let encoded = serde_json::to_string(&info)?;
+        assert_eq!(
+            encoded,
+            r#"{"version":"0.0.0","rpc_version":3,"data_directory":"/msbe"}"#
+        );
+        assert_eq!(serde_json::from_str::<DaemonInfo>(&encoded)?, info);
+        Ok(())
+    }
+
+    #[test]
+    fn info_from_an_older_daemon_has_no_data_directory() -> Result<(), serde_json::Error> {
+        let info = serde_json::from_str::<DaemonInfo>(r#"{"version":"0.0.0","rpc_version":3}"#)?;
+        assert_eq!(info.data_directory, None);
         Ok(())
     }
 

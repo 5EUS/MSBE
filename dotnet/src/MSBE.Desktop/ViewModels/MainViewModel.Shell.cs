@@ -61,8 +61,11 @@ internal sealed partial class MainViewModel
     /// <summary>Gets a value indicating whether the pack workspace is active.</summary>
     public bool IsPackWorkspace => this.ActiveWorkspace == WorkspacePage.Pack;
 
+    /// <summary>Gets a value indicating whether the settings workspace is active.</summary>
+    public bool IsSettingsWorkspace => this.ActiveWorkspace == WorkspacePage.Settings;
+
     /// <summary>Gets a value indicating whether a not-yet-implemented workspace is active.</summary>
-    public bool IsPlaceholderWorkspace => !this.IsInstancesWorkspace && !this.IsBrowseWorkspace && !this.IsGamesWorkspace && !this.IsPackWorkspace;
+    public bool IsPlaceholderWorkspace => !this.IsInstancesWorkspace && !this.IsBrowseWorkspace && !this.IsGamesWorkspace && !this.IsPackWorkspace && !this.IsSettingsWorkspace;
 
     /// <summary>Gets the available instance library sort orders.</summary>
     public IReadOnlyList<string> InstanceSorts { get; } = ["Name (A-Z)", "Name (Z-A)"];
@@ -76,6 +79,7 @@ internal sealed partial class MainViewModel
         this.OnPropertyChanged(nameof(this.IsBrowseWorkspace));
         this.OnPropertyChanged(nameof(this.IsGamesWorkspace));
         this.OnPropertyChanged(nameof(this.IsPackWorkspace));
+        this.OnPropertyChanged(nameof(this.IsSettingsWorkspace));
         this.OnPropertyChanged(nameof(this.IsPlaceholderWorkspace));
     }
 

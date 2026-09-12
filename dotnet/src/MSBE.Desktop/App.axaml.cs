@@ -3,6 +3,7 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 
 using MSBE.Client;
+using MSBE.Desktop.Services;
 using MSBE.Desktop.ViewModels;
 using MSBE.Desktop.Views.Shell;
 
@@ -19,7 +20,7 @@ internal partial class App : Application
     {
         if (this.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            var viewModel = new MainViewModel(new UnixSocketMsbeClient());
+            var viewModel = new MainViewModel(new UnixSocketMsbeClient(), new TopLevelFolderLauncher(() => desktop.MainWindow));
             desktop.MainWindow = new MainWindow { DataContext = viewModel };
             _ = viewModel.ConnectAsync();
         }

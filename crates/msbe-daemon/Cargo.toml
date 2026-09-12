@@ -17,6 +17,7 @@ workspace = true
 
 [dependencies]
 msbe-cli        = { version = "0.0.0", path = "../msbe-cli" }
+msbe-core       = { version = "0.0.0", path = "../msbe-core" }
 msbe-plan-schema = { version = "0.0.0", path = "../msbe-plan-schema" }
 msbe-rpc-schema = { version = "0.0.0", path = "../msbe-rpc-schema" }
 serde.workspace = true
