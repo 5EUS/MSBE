@@ -25,7 +25,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use msbe_archive::{ArchiveError, Limits, ingest};
+use msbe_archive::{ArchiveError, Limits, ingest, ingest_as_file};
 use msbe_fsops::{
     Applier, Backend, Capabilities, Digest, Journal, Observer, Operation, RelPath, Store, TxnId,
     atomic,
@@ -332,6 +332,8 @@ pub struct Artifact {
     pub module: Option<Name>,
     /// Where the file came from, when a provider supplied it.
     pub provider: Option<Provenance>,
+    /// Verified logical source path that a deployment plan may use for routing.
+    pub source: Option<RelPath>,
 }
 
 /// Everything needed to register an instance.
@@ -1054,7 +1056,15 @@ impl Instance {
                 }
                 (Placement::Add, false) | (Placement::Replace, true) => {}
             }
-            let files = ingest(self.applier.store(), &artifact.path, &Limits::default())?;
+            let files = match artifact.source.clone() {
+                Some(source) => ingest_as_file(
+                    self.applier.store(),
+                    &artifact.path,
+                    source,
+                    &Limits::default(),
+                )?,
+                None => ingest(self.applier.store(), &artifact.path, &Limits::default())?,
+            };
             let origin = artifact
                 .path
                 .file_name()
@@ -1093,6 +1103,7 @@ impl Instance {
                 path: path.clone(),
                 module: None,
                 provider: None,
+                source: None,
             })
             .collect();
         self.add_artifacts(profile, &artifacts)
@@ -2291,6 +2302,7 @@ flatten = true
                     path: fixture.input("download.bin", b"remote"),
                     module: Some(name("remote-mod")),
                     provider: Some(provenance.clone()),
+                    source: None,
                 }],
             )
             .unwrap();
@@ -2325,6 +2337,7 @@ flatten = true
                 version_number: version.to_owned(),
                 hashes: BTreeMap::from([("sha512".to_owned(), "ab".repeat(64))]),
             }),
+            source: None,
         };
         instance
             .add_artifacts(&default, &[artifact("remote-1.0.bin", b"one", "1.0")])
@@ -2506,11 +2519,13 @@ sha512 = "abc"
                     path: fixture.input("good.bin", b"good"),
                     module: None,
                     provider: None,
+                    source: None,
                 },
                 super::Artifact {
                     path: fixture.inputs.join("does-not-exist.bin"),
                     module: None,
                     provider: None,
+                    source: None,
                 },
             ],
         );

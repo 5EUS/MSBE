@@ -181,8 +181,23 @@ pub fn ingest(
     if is_zip(path) {
         extract_zip(store, path, limits)
     } else {
-        ingest_file(store, path, limits)
+        ingest_file(store, path, None, limits)
     }
+}
+
+/// Stores an artifact whole under a verified logical path, without treating ZIP bytes as an
+/// archive container.
+///
+/// # Errors
+///
+/// Returns [`ArchiveError`] when the file cannot be read or exceeds the configured limit.
+pub fn ingest_as_file(
+    store: &Store,
+    path: &Path,
+    source: RelPath,
+    limits: &Limits,
+) -> Result<Vec<IngestedFile>, ArchiveError> {
+    ingest_file(store, path, Some(source), limits)
 }
 
 fn is_zip(path: &Path) -> bool {
@@ -193,6 +208,7 @@ fn is_zip(path: &Path) -> bool {
 fn ingest_file(
     store: &Store,
     path: &Path,
+    source: Option<RelPath>,
     limits: &Limits,
 ) -> Result<Vec<IngestedFile>, ArchiveError> {
     let io_error = |source: io::Error| ArchiveError::Io {
@@ -203,17 +219,20 @@ fn ingest_file(
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let source = RelPath::new(&name).map_err(|source| ArchiveError::UnsafePath {
-        entry: name.clone(),
-        source,
-    })?;
+    let source =
+        source.unwrap_or(
+            RelPath::new(&name).map_err(|source| ArchiveError::UnsafePath {
+                entry: name.clone(),
+                source,
+            })?,
+        );
     let file = File::open(path).map_err(io_error)?;
     let mut reader = Limited::new(BufReader::new(file), limits.max_file_bytes);
     let blob = match store.put_reader(&mut reader) {
         Ok(blob) => blob,
         Err(_) if reader.tripped => {
             return Err(ArchiveError::TooLarge {
-                entry: name,
+                entry: source.as_str().to_owned(),
                 limit: limits.max_file_bytes,
             });
         }

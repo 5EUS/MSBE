@@ -1,8 +1,7 @@
 # Minecraft with modern mod loaders.
 #
-# The M1 easy path (docs/13-roadmap.md): mods are .jar files placed flat into the loader's
-# mods directory. Archives are unpacked and only their jars are deployed; every other file
-# stays in the store and appears in the exclusion report.
+# Mods are .jar files placed flat into the loader's mods directory. Pack-declared resource and
+# shader ZIP files are retained whole and routed to their respective Minecraft directories.
 
 schema  = 1
 id      = "minecraft"
@@ -48,7 +47,7 @@ targets   = [
 type = "extract"
 
   [steps.with]
-  allow   = ["**/*.jar"]
+  allow   = ["**/*.jar", "resourcepacks/**/*.zip", "shaderpacks/**/*.zip"]
   hygiene = "default"
 
 [[steps]]
@@ -56,4 +55,23 @@ type = "place"
 
   [steps.with]
   into    = "@loader.targets.mods"
+  include = ["**/*.jar"]
   flatten = true
+
+[[steps]]
+type = "place"
+
+  [steps.with]
+  into          = "@loader.targets.resourcepacks"
+  include       = ["resourcepacks/**/*.zip"]
+  strip_prefix  = "resourcepacks"
+  flatten       = true
+
+[[steps]]
+type = "place"
+
+  [steps.with]
+  into          = "@loader.targets.shaderpacks"
+  include       = ["shaderpacks/**/*.zip"]
+  strip_prefix  = "shaderpacks"
+  flatten       = true

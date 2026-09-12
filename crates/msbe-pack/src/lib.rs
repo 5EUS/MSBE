@@ -89,6 +89,8 @@ pub struct ModrinthPack {
 /// One downloadable Modrinth pack file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModrinthFile {
+    /// Intended game-relative path from the Modrinth pack manifest.
+    pub path: RelPath,
     /// Candidate download URLs.
     pub downloads: Vec<String>,
     /// Published hashes keyed by algorithm.
@@ -157,10 +159,11 @@ fn import_modrinth(path: &Path) -> Result<ModrinthPack, PackError> {
             .files
             .into_iter()
             .map(|file| ModrinthFile {
+                path: file.path,
                 downloads: file.downloads,
                 hashes: file.hashes,
-                client: file.env.client,
-                server: file.env.server,
+                client: file.env.client.required(),
+                server: file.env.server.required(),
             })
             .collect(),
     })
@@ -207,17 +210,49 @@ struct ModrinthExportIndex<'a> {
 }
 #[derive(Deserialize)]
 struct ModrinthIndexFile {
+    path: RelPath,
     downloads: Vec<String>,
     hashes: BTreeMap<String, String>,
     #[serde(default)]
     env: Environment,
 }
-#[derive(Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, PartialEq, Eq)]
 struct Environment {
-    #[serde(default = "yes")]
-    client: bool,
-    #[serde(default = "yes")]
-    server: bool,
+    #[serde(default)]
+    client: EnvironmentRequirement,
+    #[serde(default)]
+    server: EnvironmentRequirement,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+enum EnvironmentRequirement {
+    Boolean(bool),
+    State(EnvironmentState),
+}
+
+impl Default for EnvironmentRequirement {
+    fn default() -> Self {
+        Self::State(EnvironmentState::Required)
+    }
+}
+
+impl EnvironmentRequirement {
+    const fn required(&self) -> bool {
+        match self {
+            Self::Boolean(required) => *required,
+            Self::State(EnvironmentState::Required) => true,
+            Self::State(EnvironmentState::Optional | EnvironmentState::Unsupported) => false,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum EnvironmentState {
+    Required,
+    Optional,
+    Unsupported,
 }
 const fn yes() -> bool {
     true
@@ -265,4 +300,26 @@ pub enum PackError {
     /// This Modrinth pack schema version is unsupported.
     #[error("unsupported Modrinth pack format version {0}")]
     UnsupportedVersion(u32),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Environment;
+
+    #[test]
+    fn environment_accepts_official_states_and_legacy_booleans() -> Result<(), serde_json::Error> {
+        let environment: Environment =
+            serde_json::from_str(r#"{"client":"required","server":"unsupported"}"#)?;
+        assert!(environment.client.required());
+        assert!(!environment.server.required());
+
+        let environment: Environment = serde_json::from_str(r#"{"client":true,"server":false}"#)?;
+        assert!(environment.client.required());
+        assert!(!environment.server.required());
+
+        let environment: Environment = serde_json::from_str(r#"{"client":"optional"}"#)?;
+        assert!(!environment.client.required());
+        assert!(environment.server.required());
+        Ok(())
+    }
 }

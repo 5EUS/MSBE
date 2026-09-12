@@ -194,6 +194,11 @@ plan preserve runtime changes rather than being overwritten or removed.
 | `verify INSTANCE`                                                                                                                                | **Implemented** | Report deployment drift.                            |
 | `status INSTANCE`                                                                                                                                | **Implemented** | Show instance and deployment state.                 |
 
+Modrinth pack import honors each manifest file's `path`. Minecraft plans route JARs to `mods/`
+and retain ZIP resource packs and shader packs for `resourcepacks/` and `shaderpacks/` respectively.
+The archive `overrides/` directory is not yet imported, so packs that depend on configuration,
+scripts, or other overrides remain incomplete.
+
 ## 6. Planned command surface
 
 These commands are part of the documented product direction, but they are not available

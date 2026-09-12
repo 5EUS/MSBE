@@ -34,14 +34,7 @@ fn main() -> ExitCode {
 fn run_via_daemon(args: Vec<OsString>) -> Result<u8, String> {
     use std::{os::unix::net::UnixStream, thread, time::Duration};
 
-    let command = args
-        .into_iter()
-        .skip(1)
-        .map(|arg| {
-            arg.into_string()
-                .map_err(|_| "arguments must be valid UTF-8".to_owned())
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let command = daemon_command(args)?;
     let socket = msbe_rpc_schema::default_socket();
     let mut stream = if let Ok(stream) = UnixStream::connect(&socket) {
         stream
@@ -81,6 +74,31 @@ fn run_via_daemon(args: Vec<OsString>) -> Result<u8, String> {
         .and_then(Value::as_u64)
         .ok_or_else(|| "daemon returned no exit code".to_owned())?;
     u8::try_from(exit_code).map_err(|_| "daemon returned an invalid exit code".to_owned())
+}
+
+#[cfg(unix)]
+fn daemon_command(args: Vec<OsString>) -> Result<Vec<String>, String> {
+    let mut command = args
+        .into_iter()
+        .skip(1)
+        .map(|arg| {
+            arg.into_string()
+                .map_err(|_| "arguments must be valid UTF-8".to_owned())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if !command
+        .iter()
+        .any(|arg| arg == "--home" || arg.starts_with("--home="))
+    {
+        let home = msbe_core::config::Home::discover()
+            .map_err(|error| error.to_string())?
+            .root()
+            .to_str()
+            .ok_or_else(|| "MSBE_HOME must be valid UTF-8".to_owned())?
+            .to_owned();
+        command.splice(0..0, ["--home".to_owned(), home]);
+    }
+    Ok(command)
 }
 
 #[cfg(unix)]

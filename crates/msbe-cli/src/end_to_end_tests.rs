@@ -389,9 +389,10 @@ fn pack_import_acquires_target_compatible_verified_modrinth_files() {
     let index = json!({
         "formatVersion": 1,
         "files": [{
+            "path": "mods/imported.jar",
             "downloads": [url],
             "hashes": { "sha512": sha512_hex(bytes) },
-            "env": { "client": true, "server": false }
+            "env": { "client": "required", "server": "unsupported" }
         }]
     });
     let pack = world.zip(
@@ -409,6 +410,64 @@ fn pack_import_acquires_target_compatible_verified_modrinth_files() {
         fs::read(world.game.join("mods/imported.jar")).unwrap(),
         bytes
     );
+}
+
+#[test]
+fn pack_import_preserves_zip_assets_at_their_declared_targets() {
+    let world = World::new();
+    world.add_instance(Some("1.21.1"));
+    let resource_archive = world.zip(
+        "Better-Leaves.zip",
+        &[("assets/example/leaves.png", b"resource pack")],
+    );
+    let shader_archive = world.zip(
+        "Complementary.zip",
+        &[("shaders/example.glsl", b"shader pack")],
+    );
+    let resource_bytes = fs::read(&resource_archive).unwrap();
+    let shader_bytes = fs::read(&shader_archive).unwrap();
+    let resource_url = "https://cdn.modrinth.test/Better-Leaves.zip";
+    let shader_url = "https://cdn.modrinth.test/Complementary.zip";
+    world.modrinth.files.borrow_mut().extend([
+        (resource_url.to_owned(), resource_bytes.clone()),
+        (shader_url.to_owned(), shader_bytes.clone()),
+    ]);
+    let index = json!({
+        "formatVersion": 1,
+        "files": [
+            {
+                "path": "resourcepacks/Better-Leaves.zip",
+                "downloads": [resource_url],
+                "hashes": { "sha512": sha512_hex(&resource_bytes) },
+                "env": { "client": "required", "server": "unsupported" }
+            },
+            {
+                "path": "shaderpacks/Complementary.zip",
+                "downloads": [shader_url],
+                "hashes": { "sha512": sha512_hex(&shader_bytes) },
+                "env": { "client": "required", "server": "unsupported" }
+            }
+        ]
+    });
+    let pack = world.zip(
+        "assets.mrpack",
+        &[(
+            "modrinth.index.json",
+            serde_json::to_string(&index).unwrap().as_bytes(),
+        )],
+    );
+
+    world.json(&["pack", "import", "mc", pack.as_str()]);
+    assert_eq!(world.msbe(&["deploy", "mc"]).code, exit::OK);
+    assert_eq!(
+        fs::read(world.game.join("resourcepacks/Better-Leaves.zip")).unwrap(),
+        resource_bytes
+    );
+    assert_eq!(
+        fs::read(world.game.join("shaderpacks/Complementary.zip")).unwrap(),
+        shader_bytes
+    );
+    assert!(!world.game.join("mods/leaves.png").exists());
 }
 
 #[test]

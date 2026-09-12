@@ -522,7 +522,7 @@ fn execute(cli: &Cli, console: &mut Console<'_>) -> Result<u8, CliError> {
             profile,
             with_deps,
         } => add(
-            &providers, &home, instance, profile, sources, *with_deps, console,
+            &providers, &home, instance, profile, sources, *with_deps, None, console,
         ),
         Command::Search {
             instance,
@@ -652,12 +652,29 @@ fn pack_import(
             .map(pack_source)
             .collect::<Result<Vec<_>, _>>()?,
     };
+    let sources: Vec<String> = selected.iter().map(|source| source.url.clone()).collect();
+    let paths: BTreeMap<String, RelPath> = selected
+        .into_iter()
+        .map(|source| (source.url, source.path))
+        .collect();
     add(
-        providers, home, instance, profile, &selected, with_deps, console,
+        providers,
+        home,
+        instance,
+        profile,
+        &sources,
+        with_deps,
+        Some(&paths),
+        console,
     )
 }
 
-fn pack_source(file: pack::ModrinthFile) -> Result<String, CliError> {
+struct PackSource {
+    url: String,
+    path: RelPath,
+}
+
+fn pack_source(file: pack::ModrinthFile) -> Result<PackSource, CliError> {
     let url = file
         .downloads
         .into_iter()
@@ -669,7 +686,10 @@ fn pack_source(file: pack::ModrinthFile) -> Result<String, CliError> {
         .map(|digest| ("sha512", digest))
         .or_else(|| file.hashes.get("sha256").map(|digest| ("sha256", digest)))
         .ok_or(CliError::PackHashMissing)?;
-    Ok(format!("{url}#{algorithm}={digest}"))
+    Ok(PackSource {
+        url: format!("{url}#{algorithm}={digest}"),
+        path: file.path,
+    })
 }
 
 fn pack_export(
@@ -929,6 +949,7 @@ fn add(
     profile: &str,
     sources: &[String],
     with_deps: bool,
+    paths: Option<&BTreeMap<String, RelPath>>,
     console: &mut Console<'_>,
 ) -> Result<u8, CliError> {
     let opened = open(home, instance, console)?;
@@ -949,12 +970,16 @@ fn add(
             Ok(Routed {
                 request: Request::File(selection),
                 ..
-            }) => files.push(*selection),
+            }) => files.push((
+                *selection,
+                paths.and_then(|paths| paths.get(source).cloned()),
+            )),
             Err(RegistryError::Manifest(ManifestError::UnknownSource(_))) => {
                 artifacts.push(Artifact {
                     path: PathBuf::from(source),
                     module: None,
                     provider: None,
+                    source: None,
                 });
             }
             Err(error) => return Err(error.into()),
@@ -990,7 +1015,7 @@ fn add(
             .plan_install(&projects, with_deps, &installed_releases(&existing))?;
             fetch.plan(plan)?;
         }
-        fetch.selections(&files)?;
+        fetch.pack_selections(&files)?;
     }
     report.added = opened.add_artifacts(&profile, &artifacts)?;
 
@@ -1070,24 +1095,44 @@ impl Fetch<'_> {
 
     fn selections(&mut self, selections: &[Selection]) -> Result<(), CliError> {
         for selection in selections {
-            let project = &selection.project.id;
-            if let Some(name) = installed_from(self.existing, &project.provider, &project.project) {
-                self.report.skipped.push(name.clone());
-                continue;
-            }
-            let adapter = self.providers.adapter(&project.provider)?;
-            let acquired = adapter.acquire(self.http, &selection.file, self.scratch)?;
-            self.artifacts.push(Artifact {
-                provider: Some(adapter.provenance(&selection.release, &acquired)),
-                module: selection
-                    .project
-                    .slug
-                    .as_deref()
-                    .map(Name::sanitize)
-                    .transpose()?,
-                path: acquired.path,
-            });
+            self.selection(selection, None)?;
         }
+        Ok(())
+    }
+
+    fn pack_selections(
+        &mut self,
+        selections: &[(Selection, Option<RelPath>)],
+    ) -> Result<(), CliError> {
+        for (selection, source) in selections {
+            self.selection(selection, source.clone())?;
+        }
+        Ok(())
+    }
+
+    fn selection(
+        &mut self,
+        selection: &Selection,
+        source: Option<RelPath>,
+    ) -> Result<(), CliError> {
+        let project = &selection.project.id;
+        if let Some(name) = installed_from(self.existing, &project.provider, &project.project) {
+            self.report.skipped.push(name.clone());
+            return Ok(());
+        }
+        let adapter = self.providers.adapter(&project.provider)?;
+        let acquired = adapter.acquire(self.http, &selection.file, self.scratch)?;
+        self.artifacts.push(Artifact {
+            provider: Some(adapter.provenance(&selection.release, &acquired)),
+            module: selection
+                .project
+                .slug
+                .as_deref()
+                .map(Name::sanitize)
+                .transpose()?,
+            path: acquired.path,
+            source,
+        });
         Ok(())
     }
 }
@@ -1135,6 +1180,7 @@ fn update(
                     provider: Some(adapter.provenance(&update.release, &acquired)),
                     module: Some((*module).clone()),
                     path: acquired.path,
+                    source: None,
                 });
             }
             opened.replace_artifacts(&profile, &artifacts)?;
