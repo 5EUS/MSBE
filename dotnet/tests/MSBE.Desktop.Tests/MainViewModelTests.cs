@@ -51,6 +51,31 @@ public sealed class MainViewModelTests
         Assert.Equal("Could not load instances.", vm.StatusMessage);
     }
 
+    /// <summary>Instance removal uses the structured command and refreshes the library.</summary>
+    /// <returns>A task representing the test.</returns>
+    [Fact]
+    public async Task RemoveSelectedInstanceUnregistersAndRefreshesTheLibrary()
+    {
+        List<IReadOnlyList<string>> calls = [];
+        var client = new TestClient(arguments =>
+        {
+            calls.Add(arguments);
+            return arguments.Contains("list", StringComparer.Ordinal)
+                ? new CommandResult(0, "[]", string.Empty)
+                : new CommandResult(0, string.Empty, string.Empty);
+        });
+        MainViewModel vm = new(client) { SelectedInstance = "alpha" };
+
+        await vm.RemoveSelectedInstanceCommand.ExecuteAsync(parameter: null);
+
+        Assert.Contains(calls, arguments => arguments.SequenceEqual(
+            ["--format", "json", "instance", "remove", "alpha"],
+            StringComparer.Ordinal));
+        Assert.Null(vm.SelectedInstance);
+        Assert.Empty(vm.Instances);
+        Assert.Equal("Removed instance alpha. Its game files remain in place.", vm.StatusMessage);
+    }
+
     /// <summary>Native registration sends structured arguments and selects the new instance.</summary>
     /// <returns>A task representing the test.</returns>
     [Fact]

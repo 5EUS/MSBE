@@ -20,7 +20,13 @@ internal sealed partial class MainViewModel
 
     /// <summary>Gets or sets the currently selected instance, if any.</summary>
     [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(RemoveSelectedInstanceCommand))]
     public partial string? SelectedInstance { get; set; }
+
+    /// <summary>Gets or sets whether the selected instance is being removed.</summary>
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(RemoveSelectedInstanceCommand))]
+    public partial bool IsRemovingInstance { get; set; }
 
     /// <summary>Gets or sets whether registered instances are loading.</summary>
     [ObservableProperty]
@@ -60,6 +66,8 @@ internal sealed partial class MainViewModel
 
     /// <summary>Gets a value indicating whether instance loading has failed.</summary>
     public bool HasInstanceError => !string.IsNullOrEmpty(this.InstanceError);
+
+    private bool CanRemoveSelectedInstance => this.SelectedInstance is not null && !this.IsRemovingInstance;
 
     partial void OnInstanceSearchTextChanged(string value) => this.ApplyInstanceFilter();
 
@@ -121,6 +129,41 @@ internal sealed partial class MainViewModel
         {
             this.IsInstancesLoading = false;
             this.OnPropertyChanged(nameof(this.IsInstanceListEmpty));
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanRemoveSelectedInstance))]
+    private async Task RemoveSelectedInstanceAsync()
+    {
+        if (this.SelectedInstance is not { } instance || this.IsRemovingInstance)
+        {
+            return;
+        }
+
+        this.IsRemovingInstance = true;
+        this.InstanceError = string.Empty;
+        try
+        {
+            CommandResult result = await this.client.RunCommandAsync(
+                ["--format", "json", "instance", "remove", instance],
+                CancellationToken.None).ConfigureAwait(true);
+            if (result.ExitCode != 0)
+            {
+                throw new InvalidOperationException(result.StandardError.Trim());
+            }
+
+            this.SelectedInstance = null;
+            await this.RefreshInstancesAsync().ConfigureAwait(true);
+            this.StatusMessage = $"Removed instance {instance}. Its game files remain in place.";
+        }
+        catch (Exception exception) when (exception is IOException or SocketException or InvalidOperationException)
+        {
+            this.InstanceError = $"Could not remove {instance}: {exception.Message}";
+            this.StatusMessage = "Could not remove instance.";
+        }
+        finally
+        {
+            this.IsRemovingInstance = false;
         }
     }
 

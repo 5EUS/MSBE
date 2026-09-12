@@ -352,6 +352,11 @@ enum InstanceCommand {
     },
     /// List instances.
     List,
+    /// Unregister an instance after restoring its managed files.
+    Remove {
+        /// The instance.
+        name: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -452,6 +457,12 @@ enum CliError {
     Scratch(#[source] io::Error),
     #[error("cannot read config {}: {source}", .path.display())]
     ReadConfig {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("cannot remove instance data at {}: {source}", .path.display())]
+    RemoveInstance {
         path: PathBuf,
         #[source]
         source: io::Error,
@@ -1060,6 +1071,15 @@ fn instance_command(
                 }
                 Ok(())
             })?;
+        }
+        InstanceCommand::Remove { name } => {
+            let name = Name::new(name)?;
+            let mut instance = Instance::open(home, &name)?;
+            instance.purge()?;
+            let path = home.instance(&name);
+            fs::remove_dir_all(&path)
+                .map_err(|source| CliError::RemoveInstance { path, source })?;
+            console.emit(&name, |out, name| writeln!(out, "Removed instance {name}."))?;
         }
     }
     Ok(exit::OK)

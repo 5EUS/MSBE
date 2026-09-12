@@ -9,21 +9,32 @@
             <TextBlock Classes="caption" Text="Preferences and shortcuts for this MSBE installation." />
         </StackPanel>
 
-        <StackPanel Spacing="6">
-            <TextBlock Classes="field-label" Text="Data folder" />
-            <TextBlock Classes="caption" Text="Instances, journals, profiles and pinned plans, as reported by the daemon." />
-            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
-                <SelectableTextBlock VerticalAlignment="Center" TextWrapping="Wrap" Text="{Binding DataDirectoryText}" />
-                <Button Grid.Column="1"
-                        Classes="secondary-button"
-                        Command="{Binding OpenDataDirectoryCommand}"
-                        ToolTip.Tip="Show the data folder in the file manager">
-                    <StackPanel Orientation="Horizontal" Spacing="6">
-                        <LucideIcon Kind="FolderOpen" Size="15" StrokeWidth="1.8" />
-                        <TextBlock Text="Open data folder" />
-                    </StackPanel>
-                </Button>
-            </Grid>
-        </StackPanel>
+        <TabControl>
+            <TabItem Header="Storage">
+                <StackPanel Margin="0,12,0,0" Spacing="6">
+                    <TextBlock Classes="field-label" Text="Data folder" />
+                    <TextBlock Classes="caption" Text="Instances, journals, profiles and pinned plans, as reported by the daemon." />
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                        <SelectableTextBlock VerticalAlignment="Center" TextWrapping="Wrap" Text="{Binding DataDirectoryText}" />
+                        <Button Grid.Column="1"
+                                Classes="secondary-button"
+                                Command="{Binding OpenDataDirectoryCommand}"
+                                ToolTip.Tip="Show the data folder in the file manager">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <LucideIcon Kind="FolderOpen" Size="15" StrokeWidth="1.8" />
+                                <TextBlock Text="Open data folder" />
+                            </StackPanel>
+                        </Button>
+                    </Grid>
+                </StackPanel>
+            </TabItem>
+            <TabItem Header="About">
+                <StackPanel Margin="0,12,0,0" Spacing="6">
+                    <TextBlock Classes="field-label" Text="MSBE" />
+                    <TextBlock Text="Managed game installations" />
+                    <TextBlock Classes="caption" TextWrapping="Wrap" Text="The local daemon owns instance data and deployment history. Game folders remain yours." />
+                </StackPanel>
+            </TabItem>
+        </TabControl>
     </StackPanel>
 </UserControl>

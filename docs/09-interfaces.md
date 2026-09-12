@@ -8,7 +8,7 @@ from the CLI, and the test fails the build if one is not.
 
 Rust + `clap`. Nouns and verbs match the domain model exactly.
 
-> **Implemented so far (M1):** `instance add|set|list`, `profile new|list|show`, `add`
+> **Implemented so far (M1):** `instance add|set|list|remove`, `profile new|list|show`, `add`
 > (local files, `.zip` archives, `https://` URLs optionally pinned with `#sha256=` or
 > `#sha512=`, and `modrinth:<project>[@<version>]` with `--with-deps`),
 > `search`, `update [<mod>...] [--dry-run]` (Modrinth mods, staying on each mod's release

@@ -38,7 +38,7 @@
           </StackPanel>
 
           <Grid RowDefinitions="Auto,Auto,*" RowSpacing="20" IsVisible="{Binding HasSelectedInstance}">
-            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+            <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="12">
               <StackPanel Spacing="4">
                 <TextBlock Classes="instance-name" Text="{Binding SelectedInstance}" />
                 <TextBlock Classes="caption" Text="{Binding SelectedInstanceRoot}" TextWrapping="Wrap" />
@@ -48,6 +48,11 @@
                       Content="Rollback latest"
                       IsEnabled="{Binding CanRollbackLatest}"
                       Command="{Binding RollbackLatestCommand}" />
+              <Button Grid.Column="2"
+                      Classes="danger-button"
+                      Content="Remove instance"
+                      Command="{Binding RemoveSelectedInstanceCommand}"
+                      ToolTip.Tip="Restore managed files and remove this instance from MSBE. The game folder is kept." />
             </Grid>
             <Grid Grid.Row="1" ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="24" RowSpacing="10">
               <TextBlock Classes="detail-label" Text="GAME" />
