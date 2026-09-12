@@ -287,11 +287,11 @@ write launch.json <<'EOF'
       "cwd": "${workspaceFolder}"
     },
     {
-      "name": ".NET: MSBE.Desktop",
+      "name": ".NET: MSBE",
       "type": "coreclr",
       "request": "launch",
       "preLaunchTask": "dotnet: build",
-      "program": "${workspaceFolder}/dotnet/src/MSBE.Desktop/bin/Debug/net10.0/MSBE.Desktop.dll",
+      "program": "${workspaceFolder}/dotnet/src/MSBE.Desktop/bin/Debug/net10.0/MSBE.dll",
       "args": [],
       "cwd": "${workspaceFolder}/dotnet/src/MSBE.Desktop",
       "console": "internalConsole",
@@ -302,7 +302,7 @@ write launch.json <<'EOF'
     {
       // The desktop app is a client of the daemon; this is the everyday debug session.
       "name": "Daemon + Desktop",
-      "configurations": ["Rust: msbe-daemon", ".NET: MSBE.Desktop"],
+      "configurations": ["Rust: msbe-daemon", ".NET: MSBE"],
       "stopAll": true
     }
   ]
