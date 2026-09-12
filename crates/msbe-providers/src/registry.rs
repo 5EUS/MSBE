@@ -1,10 +1,10 @@
 //! The fail-closed mapping from provider manifests to reviewed adapters.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, io::SeekFrom};
 
 use msbe_provider_api::{
-    Adapter, AdapterError, Catalog, HttpClient, ManifestError, Overlay, OverlayError, Provider,
-    Registration, Target,
+    Adapter, AdapterError, Catalog, HttpClient, ManifestError, Overlay, OverlayError, PackCodec,
+    PackCodecDescriptor, PackCodecError, Provider, ReadSeek, Registration, Target,
     model::{Request, SearchResult},
     resolve::{Adapters, ResolveError},
 };
@@ -31,7 +31,14 @@ pub struct Routed {
 pub struct Providers {
     catalog: Catalog,
     adapters: BTreeMap<String, Box<dyn Adapter>>,
+    codecs: BTreeMap<String, RegisteredCodec>,
     overlay: Overlay,
+}
+
+#[derive(Debug)]
+struct RegisteredCodec {
+    provider: String,
+    codec: Box<dyn PackCodec>,
 }
 
 impl Providers {
@@ -61,6 +68,9 @@ impl Providers {
             .collect();
         let catalog = Catalog::from_toml(&documents)?;
         let mut adapters = BTreeMap::new();
+        let mut codecs = BTreeMap::new();
+        let mut extensions = BTreeMap::new();
+        let mut media_types = BTreeMap::new();
         let mut overlay = Vec::new();
         for registration in registrations {
             let provider = catalog.provider(registration.id)?;
@@ -72,11 +82,50 @@ impl Providers {
                 });
             }
             adapters.insert(provider.id.clone(), adapter);
+            for codec_registration in registration.pack_codecs {
+                let codec = (codec_registration.build)()?;
+                let descriptor = codec.descriptor();
+                descriptor.validate()?;
+                if descriptor.id != codec_registration.id {
+                    return Err(RegistryError::MismatchedCodec {
+                        registration: codec_registration.id.to_owned(),
+                        descriptor: descriptor.id.clone(),
+                    });
+                }
+                if descriptor
+                    .provider
+                    .as_deref()
+                    .is_some_and(|id| id != provider.id)
+                {
+                    return Err(RegistryError::MismatchedCodecProvider {
+                        codec: descriptor.id.clone(),
+                        registration: provider.id.clone(),
+                        descriptor: descriptor.provider.clone(),
+                    });
+                }
+                if codecs.contains_key(&descriptor.id) {
+                    return Err(RegistryError::DuplicateCodec(descriptor.id.clone()));
+                }
+                for extension in &descriptor.extensions {
+                    register_hint(&mut extensions, extension, &descriptor.id)?;
+                }
+                for media_type in &descriptor.media_types {
+                    register_hint(&mut media_types, media_type, &descriptor.id)?;
+                }
+                codecs.insert(
+                    descriptor.id.clone(),
+                    RegisteredCodec {
+                        provider: provider.id.clone(),
+                        codec,
+                    },
+                );
+            }
             overlay.extend_from_slice(registration.overlay);
         }
         Ok(Self {
             catalog,
             adapters,
+            codecs,
             overlay: Overlay::from_toml(&overlay)?,
         })
     }
@@ -109,6 +158,74 @@ impl Providers {
     /// by policy.
     pub fn adapter(&self, id: &str) -> Result<&dyn Adapter, RegistryError> {
         self.permitted(self.catalog.provider(id)?)
+    }
+
+    /// Descriptors for policy-permitted pack codecs, ordered by codec ID.
+    pub fn pack_codecs(&self) -> Vec<&PackCodecDescriptor> {
+        self.codecs
+            .values()
+            .filter(|registered| {
+                self.catalog
+                    .provider(&registered.provider)
+                    .is_ok_and(|provider| authorize(provider).is_ok())
+            })
+            .map(|registered| registered.codec.descriptor())
+            .collect()
+    }
+
+    /// Looks up a reviewed pack codec after enforcing its provider's policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RegistryError`] when the codec is unknown or its provider is prohibited.
+    pub fn pack_codec(&self, id: &str) -> Result<&dyn PackCodec, RegistryError> {
+        let registered = self
+            .codecs
+            .get(id)
+            .ok_or_else(|| RegistryError::UnknownCodec(id.to_owned()))?;
+        authorize(self.catalog.provider(&registered.provider)?)?;
+        Ok(registered.codec.as_ref())
+    }
+
+    /// Detects a pack format using every policy-permitted codec.
+    ///
+    /// The input is rewound before each probe. A tie at the highest non-zero confidence is
+    /// rejected rather than resolved by registration order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RegistryError`] when seeking or probing fails, or detection is ambiguous.
+    pub fn detect_pack_codec(
+        &self,
+        input: &mut dyn ReadSeek,
+    ) -> Result<Option<&dyn PackCodec>, RegistryError> {
+        let mut best: Option<(&dyn PackCodec, u8)> = None;
+        let mut tied = Vec::new();
+        for descriptor in self.pack_codecs() {
+            let codec = self.pack_codec(&descriptor.id)?;
+            input
+                .seek(SeekFrom::Start(0))
+                .map_err(PackCodecError::from)?;
+            let confidence = codec.probe(input)?.confidence;
+            if confidence == 0 {
+                continue;
+            }
+            match best {
+                Some((_, best_confidence)) if confidence < best_confidence => {}
+                Some((_, best_confidence)) if confidence == best_confidence => {
+                    tied.push(descriptor.id.clone());
+                }
+                _ => {
+                    best = Some((codec, confidence));
+                    tied.clear();
+                    tied.push(descriptor.id.clone());
+                }
+            }
+        }
+        if tied.len() > 1 {
+            return Err(RegistryError::AmbiguousCodec(tied));
+        }
+        Ok(best.map(|(codec, _)| codec))
     }
 
     /// The ids of permitted providers that can search, in id order.
@@ -173,6 +290,22 @@ fn authorize(provider: &Provider) -> Result<(), RegistryError> {
     Ok(())
 }
 
+fn register_hint(
+    hints: &mut BTreeMap<String, String>,
+    hint: &str,
+    codec: &str,
+) -> Result<(), RegistryError> {
+    let normalized = hint.to_ascii_lowercase();
+    if let Some(existing) = hints.insert(normalized.clone(), codec.to_owned()) {
+        return Err(RegistryError::DuplicateCodecHint {
+            hint: normalized,
+            first: existing,
+            second: codec.to_owned(),
+        });
+    }
+    Ok(())
+}
+
 /// Why a provider could not be used through the reviewed adapter registry.
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -194,6 +327,48 @@ pub enum RegistryError {
         /// The provider the adapter serves.
         adapter: String,
     },
+    /// A codec registration and its descriptor use different IDs.
+    #[error("pack codec registration {registration:?} built a descriptor for {descriptor:?}")]
+    MismatchedCodec {
+        /// ID in the registration.
+        registration: String,
+        /// ID in the descriptor.
+        descriptor: String,
+    },
+    /// A codec descriptor claims another provider.
+    #[error(
+        "pack codec {codec:?} is registered by {registration:?} but claims provider {descriptor:?}"
+    )]
+    MismatchedCodecProvider {
+        /// Codec ID.
+        codec: String,
+        /// Provider registration containing it.
+        registration: String,
+        /// Provider claimed by the descriptor.
+        descriptor: Option<String>,
+    },
+    /// Two reviewed registrations use the same codec ID.
+    #[error("duplicate pack codec id {0:?}")]
+    DuplicateCodec(String),
+    /// Two codecs claim the same detection hint.
+    #[error("pack codec hint {hint:?} is claimed by both {first:?} and {second:?}")]
+    DuplicateCodecHint {
+        /// Conflicting extension or media type.
+        hint: String,
+        /// First codec ID.
+        first: String,
+        /// Second codec ID.
+        second: String,
+    },
+    /// No reviewed codec has this ID.
+    #[error("unknown pack codec {0:?}")]
+    UnknownCodec(String),
+    /// More than one codec matched with the same confidence.
+    #[error("pack format is ambiguous between codecs: {0:?}")]
+    AmbiguousCodec(Vec<String>),
+    /// A pack codec descriptor, probe or operation failed.
+    #[error(transparent)]
+    PackCodec(#[from] PackCodecError),
     /// The adapter does not support search.
     #[error("provider {0:?} does not support search")]
     SearchUnavailable(String),
@@ -217,11 +392,15 @@ pub enum RegistryError {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
+    use std::io::{Cursor, Write};
 
     use msbe_plan_schema::Side;
     use msbe_provider_api::{
-        AdapterError, HttpClient, HttpError, PackageId, Target, model::Request,
+        Adapter, AdapterError, BlobReader, HttpClient, HttpError, PackCodec, PackCodecDescriptor,
+        PackCodecError, PackCodecRegistration, PackDirections, PackExportContext, PackExportPlan,
+        PackExportResult, PackImportContext, PackImportPlan, PackOptionSchema, PackOptions,
+        PackProbe, PackageId, Provider, ReadSeek, Registration, SupportSet, Target, WriteSeek,
+        model::Request,
     };
     use msbe_provider_direct::DirectError;
     use serde_json::json;
@@ -264,6 +443,160 @@ mod tests {
         tos_url = ""
         ack_required = false
     "#;
+
+    #[derive(Debug)]
+    struct ExampleAdapter {
+        id: &'static str,
+    }
+
+    impl Adapter for ExampleAdapter {
+        fn id(&self) -> &str {
+            self.id
+        }
+
+        fn request(&self, reference: &str) -> Result<Request, AdapterError> {
+            Ok(Request::Project {
+                reference: reference.to_owned(),
+                version: None,
+            })
+        }
+    }
+
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "test builder must implement the fallible registration function pointer"
+    )]
+    fn build_example(_: &Provider) -> Result<Box<dyn Adapter>, msbe_provider_api::ManifestError> {
+        Ok(Box::new(ExampleAdapter { id: "example" }))
+    }
+
+    #[derive(Debug)]
+    struct FakeCodec {
+        descriptor: PackCodecDescriptor,
+        confidence: u8,
+    }
+
+    impl PackCodec for FakeCodec {
+        fn descriptor(&self) -> &PackCodecDescriptor {
+            &self.descriptor
+        }
+
+        fn probe(&self, _: &mut dyn ReadSeek) -> Result<PackProbe, PackCodecError> {
+            Ok(PackProbe {
+                confidence: self.confidence,
+                reason: None,
+            })
+        }
+
+        fn plan_import(
+            &self,
+            _: &mut dyn ReadSeek,
+            _: &PackImportContext,
+            _: &PackOptions,
+        ) -> Result<PackImportPlan, PackCodecError> {
+            Err(PackCodecError::UnsupportedDirection("import"))
+        }
+
+        fn plan_export(
+            &self,
+            _: &PackExportContext<'_>,
+            _: &PackOptions,
+        ) -> Result<PackExportPlan, PackCodecError> {
+            Err(PackCodecError::UnsupportedDirection("export"))
+        }
+
+        fn export(
+            &self,
+            _: &PackExportPlan,
+            _: &dyn BlobReader,
+            _: &mut dyn WriteSeek,
+        ) -> Result<PackExportResult, PackCodecError> {
+            Err(PackCodecError::UnsupportedDirection("export"))
+        }
+    }
+
+    fn fake_codec(id: &str, extension: &str, confidence: u8) -> Box<dyn PackCodec> {
+        Box::new(FakeCodec {
+            descriptor: PackCodecDescriptor {
+                id: id.to_owned(),
+                provider: Some("example".to_owned()),
+                name: id.to_owned(),
+                extensions: vec![extension.to_owned()],
+                media_types: Vec::new(),
+                directions: PackDirections {
+                    import: true,
+                    export: false,
+                },
+                supported_games: SupportSet::Universal,
+                option_schema: PackOptionSchema {
+                    schema: 1,
+                    presets: Vec::new(),
+                    fields: Vec::new(),
+                    constraints: Vec::new(),
+                },
+            },
+            confidence,
+        })
+    }
+
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "test builder must implement the fallible codec function pointer"
+    )]
+    fn build_alpha() -> Result<Box<dyn PackCodec>, PackCodecError> {
+        Ok(fake_codec("alpha", "alpha", 80))
+    }
+
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "test builder must implement the fallible codec function pointer"
+    )]
+    fn build_beta() -> Result<Box<dyn PackCodec>, PackCodecError> {
+        Ok(fake_codec("beta", "beta", 80))
+    }
+
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "test builder must implement the fallible codec function pointer"
+    )]
+    fn build_duplicate_hint() -> Result<Box<dyn PackCodec>, PackCodecError> {
+        Ok(fake_codec("beta", "alpha", 70))
+    }
+
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "test builder must implement the fallible codec function pointer"
+    )]
+    fn build_mismatch() -> Result<Box<dyn PackCodec>, PackCodecError> {
+        Ok(fake_codec("other", "other", 90))
+    }
+
+    const ALPHA: PackCodecRegistration = PackCodecRegistration {
+        id: "alpha",
+        build: build_alpha,
+    };
+    const BETA: PackCodecRegistration = PackCodecRegistration {
+        id: "beta",
+        build: build_beta,
+    };
+    const DUPLICATE_HINT: PackCodecRegistration = PackCodecRegistration {
+        id: "beta",
+        build: build_duplicate_hint,
+    };
+    const MISMATCH: PackCodecRegistration = PackCodecRegistration {
+        id: "registered",
+        build: build_mismatch,
+    };
+
+    fn registration(codecs: &'static [PackCodecRegistration]) -> Registration {
+        Registration {
+            id: "example",
+            manifest: EXAMPLE,
+            overlay: &[],
+            build: build_example,
+            pack_codecs: codecs,
+        }
+    }
 
     #[test]
     fn builtins_route_sources_only_through_their_reviewed_adapters() -> Result<(), RegistryError> {
@@ -326,6 +659,64 @@ mod tests {
         assert!(matches!(
             providers.request("example:mod"),
             Err(RegistryError::AuthenticationRequired(id)) if id == "example"
+        ));
+    }
+
+    #[test]
+    fn codecs_are_validated_looked_up_and_detected() -> Result<(), RegistryError> {
+        let providers = Providers::new(&[registration(&[ALPHA])], &[])?;
+        assert_eq!(
+            providers
+                .pack_codecs()
+                .first()
+                .map(|codec| codec.id.as_str()),
+            Some("alpha")
+        );
+        assert_eq!(providers.pack_codec("alpha")?.descriptor().id, "alpha");
+        assert_eq!(
+            providers
+                .detect_pack_codec(&mut Cursor::new(b"pack"))?
+                .map(|codec| codec.descriptor().id.as_str()),
+            Some("alpha")
+        );
+        assert!(matches!(
+            providers.pack_codec("missing"),
+            Err(RegistryError::UnknownCodec(id)) if id == "missing"
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn codec_registration_rejects_mismatches_and_duplicate_hints() {
+        assert!(matches!(
+            Providers::new(&[registration(&[MISMATCH])], &[]),
+            Err(RegistryError::MismatchedCodec { .. })
+        ));
+        assert!(matches!(
+            Providers::new(&[registration(&[ALPHA, DUPLICATE_HINT])], &[]),
+            Err(RegistryError::DuplicateCodecHint { .. })
+        ));
+        assert!(matches!(
+            Providers::new(&[registration(&[ALPHA, ALPHA])], &[]),
+            Err(RegistryError::DuplicateCodec(id)) if id == "alpha"
+        ));
+    }
+
+    #[test]
+    fn codec_policy_and_ambiguous_detection_fail_closed() {
+        let manifest = EXAMPLE.replace("requires_auth = false", "requires_auth = true");
+        let mut blocked = registration(&[ALPHA]);
+        blocked.manifest = Box::leak(manifest.into_boxed_str());
+        let providers = Providers::new(&[blocked], &[]).unwrap();
+        assert!(matches!(
+            providers.pack_codec("alpha"),
+            Err(RegistryError::AuthenticationRequired(id)) if id == "example"
+        ));
+
+        let providers = Providers::new(&[registration(&[ALPHA, BETA])], &[]).unwrap();
+        assert!(matches!(
+            providers.detect_pack_codec(&mut Cursor::new(b"pack")),
+            Err(RegistryError::AmbiguousCodec(ids)) if ids == ["alpha", "beta"]
         ));
     }
 

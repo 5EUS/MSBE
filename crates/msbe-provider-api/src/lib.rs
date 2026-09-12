@@ -18,6 +18,7 @@
 mod acquisition;
 mod adapter;
 mod artifact;
+mod codec;
 mod endpoint;
 mod hashing;
 mod http;
@@ -32,6 +33,14 @@ pub use acquisition::{
 };
 pub use adapter::{
     Adapter, AdapterError, Build, Registration, Releases, Search, Update, UpdateCheck, Updates,
+};
+pub use codec::{
+    BlobReader, BlobSource, BuildPackCodec, DistributionDecision, EmbeddedBlob, ImportedTarget,
+    PackChoice, PackCodec, PackCodecDescriptor, PackCodecError, PackCodecRegistration,
+    PackDirections, PackExportContext, PackExportPlan, PackExportResult, PackFile, PackFileRole,
+    PackImportContext, PackImportPlan, PackOptionConstraint, PackOptionField, PackOptionKind,
+    PackOptionSchema, PackOptionValue, PackOptions, PackPreset, PackProbe, PackRequirement,
+    PackWarning, PathMode, ReadSeek, SupportSet, WriteSeek,
 };
 pub use endpoint::{EndpointError, JsonEndpoint};
 pub use hashing::hex;

@@ -7,7 +7,7 @@ use thiserror::Error;
 
 use crate::{
     AcquiredArtifact, AcquisitionError, ArtifactDescriptor, DOWNLOAD_LIMIT, EndpointError,
-    HttpClient, HttpError, ManifestError, Provider, Target, acquire,
+    HttpClient, HttpError, ManifestError, PackCodecRegistration, Provider, Target, acquire,
     model::{Project, Release, ReleaseFile, Request, SearchResult},
 };
 
@@ -29,6 +29,8 @@ pub struct Registration {
     pub overlay: &'static [&'static str],
     /// Builds the adapter from its validated manifest.
     pub build: Build,
+    /// Pack formats implemented by this reviewed extension.
+    pub pack_codecs: &'static [PackCodecRegistration],
 }
 
 /// A reviewed provider adapter.

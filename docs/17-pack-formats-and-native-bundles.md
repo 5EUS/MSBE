@@ -659,12 +659,15 @@ been removed.
 
 ### Phase A - neutral contracts
 
-1. Add `PackCodec`, descriptors, plans, option schemas, file roles, source classifications, and
-   distribution decisions to `msbe-provider-api` or a smaller neutral API crate if dependency
-   direction requires it.
-2. Extend provider `Registration` and `Providers` with codec registration and lookup.
-3. Extend the lockfile schema with explicit file role/source data needed for blob planning.
-4. Add native codec conformance fixtures and deterministic archive tests.
+Phase A is implemented. The native codec remains intentionally unregistered until Phase C, and
+the existing external formats remain on their temporary paths until Phase B.
+
+1. [x] Add `PackCodec`, descriptors, plans, option schemas, file roles, source classifications, and
+       distribution decisions to `msbe-provider-api` or a smaller neutral API crate if dependency
+       direction requires it.
+2. [x] Extend provider `Registration` and `Providers` with codec registration and lookup.
+3. [x] Extend the lockfile schema with explicit file role/source data needed for blob planning.
+4. [x] Add native codec conformance fixtures and deterministic archive tests.
 
 ### Phase B - move existing formats
 
@@ -690,8 +693,8 @@ been removed.
 2. Continue importing existing `.mrpack` archives through the relocated codec.
 3. Remove `loader_dependency`, hardcoded `minecraft`, `Pack::Modrinth`,
    `Pack::CurseForge`, and `export_modrinth` from generic crates.
-4. Add CI guards forbidding provider/game/format literals in `msbe-cli`, `msbe-daemon`,
-   `msbe-core`, and Desktop outside fixtures and user-facing neutral examples.
+4. Add CI guards forbidding provider/game/format literals in anything but provider-specific crates
+   outside fixtures and user-facing neutral examples.
 
 Until Phase B is complete, the existing implementation is explicitly temporary and must not be
 copied for another format.

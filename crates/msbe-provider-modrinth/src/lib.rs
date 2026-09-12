@@ -44,6 +44,7 @@ pub const REGISTRATION: Registration = Registration {
         include_str!("../overlays/qvIfYCYJ.toml"),
     ],
     build,
+    pack_codecs: &[],
 };
 
 fn build(provider: &Provider) -> Result<Box<dyn Adapter>, ManifestError> {

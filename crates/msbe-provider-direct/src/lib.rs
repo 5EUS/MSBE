@@ -23,6 +23,7 @@ pub const REGISTRATION: Registration = Registration {
     manifest: include_str!("../manifest.toml"),
     overlay: &[],
     build: |_| Ok(Box::new(Direct)),
+    pack_codecs: &[],
 };
 
 /// The direct URL adapter.

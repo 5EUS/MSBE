@@ -53,7 +53,7 @@ static NOTHING_DEPLOYED: BTreeMap<RelPath, Digest> = BTreeMap::new();
 type BootstrapClaims = Vec<(RelPath, Claim)>;
 
 /// Claims on the files a plan derives from the game's own files.
-type DerivedClaims = Vec<(RelPath, Claim)>;
+type DerivedClaims = Vec<(RelPath, Claim, Vec<Digest>)>;
 
 const fn default_side() -> Side {
     Side::Client
@@ -250,6 +250,95 @@ pub struct Lockfile {
     pub components: BTreeMap<String, ComponentEntry>,
     /// Exact portable deployment shape, independent of filesystem backend.
     pub deployment: BTreeMap<RelPath, Digest>,
+    /// Semantic ownership and reproducibility facts for deployed files.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub classifications: BTreeMap<RelPath, LockedFileClassification>,
+}
+
+/// Semantic ownership and reproducibility facts for one deployed file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LockedFileClassification {
+    /// The file's role in the resolved deployment.
+    pub role: PackFileRole,
+    /// How its exact bytes can be reproduced.
+    pub source: BlobSource,
+    /// Whether an exporter may embed the bytes.
+    pub distribution: DistributionDecision,
+}
+
+/// Semantic role of a deployed file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PackFileRole {
+    /// Content supplied by a provider-backed mod.
+    ProviderArtifact,
+    /// Content supplied by a local mod.
+    LocalArtifact,
+    /// Configuration authored by the pack owner.
+    PackOwnedConfig,
+    /// A reviewed loader/bootstrap component.
+    Component,
+    /// Deterministically generated output.
+    Generated,
+    /// Content whose role is not represented or is ambiguous.
+    Other,
+}
+
+/// How exact content can be reproduced.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum BlobSource {
+    /// An exact provider release.
+    Provider {
+        /// Provider provenance.
+        provenance: Provenance,
+        /// Whether the reference and hashes identify exact bytes.
+        exact: bool,
+        /// Whether policy currently permits acquisition.
+        currently_acquirable: bool,
+    },
+    /// One or more direct locations with integrity metadata.
+    Direct {
+        /// Candidate HTTPS URLs.
+        urls: Vec<String>,
+        /// Integrity values keyed by normalized algorithm.
+        hashes: BTreeMap<String, String>,
+        /// Whether the URLs are currently acquirable.
+        currently_acquirable: bool,
+    },
+    /// User-supplied local content.
+    Local,
+    /// Content authored as part of the pack.
+    PackOwned,
+    /// Content derived from other blobs.
+    Derived {
+        /// Exact input blobs.
+        inputs: Vec<Digest>,
+        /// Whether the pinned plan reproduces identical bytes.
+        deterministic: bool,
+    },
+    /// A reviewed component bundle.
+    Component {
+        /// Stable component ID.
+        id: String,
+        /// Exact component version.
+        version: String,
+    },
+    /// Legacy or ambiguous content without enough metadata to classify safely.
+    Unknown,
+}
+
+/// Whether a blob may be embedded by an exporter.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "decision", content = "reason")]
+pub enum DistributionDecision {
+    /// Embedding is permitted.
+    Allowed,
+    /// Embedding is prohibited.
+    Forbidden(String),
+    /// Available metadata cannot establish permission.
+    Unknown,
 }
 
 /// The exact plan used to resolve a lockfile.
@@ -438,7 +527,17 @@ pub struct DeployPlan {
     #[serde(skip)]
     target: BTreeMap<RelPath, Digest>,
     #[serde(skip)]
+    classifications: BTreeMap<RelPath, LockedFileClassification>,
+    #[serde(skip)]
     mutable: BTreeSet<RelPath>,
+}
+
+#[derive(Debug, Default)]
+struct DeploymentClaims {
+    claims: BTreeMap<RelPath, Vec<Claim>>,
+    classifications: BTreeMap<RelPath, LockedFileClassification>,
+    mutable: BTreeSet<RelPath>,
+    excluded: Vec<ModExclusion>,
 }
 
 /// A file in one mod's artifact that the plan excluded.
@@ -784,9 +883,9 @@ impl Instance {
     pub fn lockfile(&self, profile: &Name) -> Result<Lockfile, InstanceError> {
         let selection = self.profile(profile)?;
         let target = self.profile_target(profile)?;
-        let deployment = self.plan_deploy(profile)?.target;
+        let deployment_plan = self.plan_deploy(profile)?;
         Ok(Lockfile {
-            schema: 1,
+            schema: 2,
             plan: LockedPlan {
                 id: self.plan.id.clone(),
                 version: self.plan.version.clone(),
@@ -813,7 +912,8 @@ impl Instance {
                 })
                 .collect(),
             components: selection.components,
-            deployment,
+            deployment: deployment_plan.target,
+            classifications: deployment_plan.classifications,
         })
     }
 
@@ -1342,56 +1442,27 @@ impl Instance {
             .clone()
             .unwrap_or_else(|| self.default_target());
         self.validate_target(&target)?;
-        let mut claims: BTreeMap<RelPath, Vec<Claim>> = BTreeMap::new();
-        let mut mutable = BTreeSet::new();
-        let mut excluded = Vec::new();
-        for (module, entry) in &selection.mods {
-            let resolved = resolve(&self.plan, &target.loader, &Self::resolved_files(entry))?;
-            excluded.extend(resolved.excluded.into_iter().map(|file| ModExclusion {
-                module: module.clone(),
-                file,
-            }));
-            for operation in resolved.operations {
-                if let Operation::Materialize {
-                    path,
-                    blob,
-                    mutable: declared,
-                } = operation
-                {
-                    if declared {
-                        mutable.insert(path.clone());
-                    }
-                    claims.entry(path).or_default().push(Claim {
-                        module: module.clone(),
-                        blob,
-                    });
-                }
-            }
+        let mut resolved = DeploymentClaims::default();
+        self.collect_module_claims(&selection, &target.loader, &mut resolved)?;
+        self.collect_component_claims(&selection, &target.loader, &mut resolved)?;
+        self.collect_derived_claims(&selection, &target.loader, &mut resolved)?;
+        let mut deployment = settle_claims(resolved.claims)?;
+        for (path, blob) in selection.configs {
+            deployment.insert(path.clone(), blob);
+            resolved.classifications.insert(
+                path,
+                LockedFileClassification {
+                    role: PackFileRole::PackOwnedConfig,
+                    source: BlobSource::PackOwned,
+                    distribution: DistributionDecision::Allowed,
+                },
+            );
         }
-        for (path, claim) in self.bootstrap_claims(&target.loader, &selection.components)? {
-            claims.entry(path).or_default().push(claim);
-        }
-        let ordered: Vec<Vec<ResolvedFile>> = selection
-            .ordered()
-            .into_iter()
-            .map(|(_, entry)| Self::resolved_files(entry))
-            .collect();
-        let derivations = derive(
-            &self.plan,
-            &target.loader,
-            self.config.game_version.as_deref(),
-            &ordered,
-        )?;
-        for (path, claim) in self.derived_claims(&derivations)? {
-            claims.entry(path).or_default().push(claim);
-        }
-        let mut target = settle_claims(claims)?;
-        target.extend(selection.configs);
 
         let current = self.deployed_files();
         let removing: BTreeSet<RelPath> = current
             .keys()
-            .filter(|path| !target.contains_key(*path))
+            .filter(|path| !deployment.contains_key(*path))
             .cloned()
             .collect();
         let mut operations: Vec<Operation> = removing
@@ -1399,14 +1470,14 @@ impl Instance {
             .map(|path| Operation::Remove { path: path.clone() })
             .collect();
         operations.extend(
-            self.prunable_dirs(&target, &removing)?
+            self.prunable_dirs(&deployment, &removing)?
                 .into_iter()
                 .map(|path| Operation::RemoveDir { path }),
         );
         let mut unchanged = 0;
         let mut kept = Vec::new();
-        for (path, blob) in &target {
-            let is_mutable = mutable.contains(path);
+        for (path, blob) in &deployment {
+            let is_mutable = resolved.mutable.contains(path);
             match self.settle(path, blob, current.get(path), is_mutable)? {
                 Settle::Unchanged => unchanged += 1,
                 Settle::Keep => kept.push(path.clone()),
@@ -1422,10 +1493,123 @@ impl Instance {
             operations,
             unchanged,
             kept,
-            excluded,
-            target,
-            mutable,
+            excluded: resolved.excluded,
+            target: deployment,
+            classifications: resolved.classifications,
+            mutable: resolved.mutable,
         })
+    }
+
+    fn collect_module_claims(
+        &self,
+        selection: &Profile,
+        loader: &str,
+        resolved_deployment: &mut DeploymentClaims,
+    ) -> Result<(), InstanceError> {
+        for (module, entry) in &selection.mods {
+            let resolved = resolve(&self.plan, loader, &Self::resolved_files(entry))?;
+            resolved_deployment
+                .excluded
+                .extend(resolved.excluded.into_iter().map(|file| ModExclusion {
+                    module: module.clone(),
+                    file,
+                }));
+            for operation in resolved.operations {
+                if let Operation::Materialize {
+                    path,
+                    blob,
+                    mutable: declared,
+                } = operation
+                {
+                    if declared {
+                        resolved_deployment.mutable.insert(path.clone());
+                    }
+                    merge_classification(
+                        &mut resolved_deployment.classifications,
+                        path.clone(),
+                        module_classification(entry, &blob),
+                    );
+                    resolved_deployment
+                        .claims
+                        .entry(path)
+                        .or_default()
+                        .push(Claim {
+                            module: module.clone(),
+                            blob,
+                        });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn collect_component_claims(
+        &self,
+        selection: &Profile,
+        loader: &str,
+        resolved: &mut DeploymentClaims,
+    ) -> Result<(), InstanceError> {
+        for (path, claim) in self.bootstrap_claims(loader, &selection.components)? {
+            let id = claim
+                .module
+                .as_str()
+                .strip_prefix("component-")
+                .unwrap_or(claim.module.as_str());
+            let version = selection
+                .components
+                .get(id)
+                .map(|entry| entry.version.clone())
+                .unwrap_or_default();
+            merge_classification(
+                &mut resolved.classifications,
+                path.clone(),
+                LockedFileClassification {
+                    role: PackFileRole::Component,
+                    source: BlobSource::Component {
+                        id: id.to_owned(),
+                        version,
+                    },
+                    distribution: DistributionDecision::Unknown,
+                },
+            );
+            resolved.claims.entry(path).or_default().push(claim);
+        }
+        Ok(())
+    }
+
+    fn collect_derived_claims(
+        &self,
+        selection: &Profile,
+        loader: &str,
+        resolved: &mut DeploymentClaims,
+    ) -> Result<(), InstanceError> {
+        let ordered: Vec<Vec<ResolvedFile>> = selection
+            .ordered()
+            .into_iter()
+            .map(|(_, entry)| Self::resolved_files(entry))
+            .collect();
+        let derivations = derive(
+            &self.plan,
+            loader,
+            self.config.game_version.as_deref(),
+            &ordered,
+        )?;
+        for (path, claim, inputs) in self.derived_claims(&derivations)? {
+            merge_classification(
+                &mut resolved.classifications,
+                path.clone(),
+                LockedFileClassification {
+                    role: PackFileRole::Generated,
+                    source: BlobSource::Derived {
+                        inputs,
+                        deterministic: true,
+                    },
+                    distribution: DistributionDecision::Allowed,
+                },
+            );
+            resolved.claims.entry(path).or_default().push(claim);
+        }
+        Ok(())
     }
 
     /// A mod's stored files, as the resolver sees them.
@@ -1452,6 +1636,10 @@ impl Instance {
         let mut claims = Vec::new();
         for injection in &derivations.injections {
             let base = self.pristine(&injection.base)?;
+            let mut inputs = vec![base];
+            inputs.extend(injection.entries.iter().map(|file| file.blob));
+            inputs.sort_unstable();
+            inputs.dedup();
             let entries: Vec<(RelPath, Digest)> = injection
                 .entries
                 .iter()
@@ -1465,6 +1653,7 @@ impl Instance {
                     module: owner.clone(),
                     blob,
                 },
+                inputs,
             ));
         }
         for edit in &derivations.edits {
@@ -1489,6 +1678,7 @@ impl Instance {
                     module: owner.clone(),
                     blob,
                 },
+                vec![base],
             ));
         }
         Ok(claims)
@@ -1635,7 +1825,7 @@ impl Instance {
             match on_disk(&path.to_path(&self.config.root), blob)? {
                 OnDisk::Matches => {}
                 OnDisk::Missing => report.missing.push(path.clone()),
-                OnDisk::Differs if mutable.is_some_and(|mutable| mutable.contains(path)) => {
+                OnDisk::Differs if matches!(mutable, Some(paths) if paths.contains(path)) => {
                     report.changed_at_runtime.push(path.clone());
                 }
                 OnDisk::Differs => report.modified.push(path.clone()),
@@ -2098,6 +2288,45 @@ fn settle_claims(
     }
 }
 
+fn merge_classification(
+    classifications: &mut BTreeMap<RelPath, LockedFileClassification>,
+    path: RelPath,
+    classification: LockedFileClassification,
+) {
+    if let Some(existing) = classifications.get_mut(&path) {
+        if *existing != classification {
+            *existing = LockedFileClassification {
+                role: PackFileRole::Other,
+                source: BlobSource::Unknown,
+                distribution: DistributionDecision::Unknown,
+            };
+        }
+    } else {
+        classifications.insert(path, classification);
+    }
+}
+
+fn module_classification(entry: &ModEntry, blob: &Digest) -> LockedFileClassification {
+    let digest = blob.to_string();
+    let sha256 = digest.strip_prefix("sha256:");
+    match &entry.provider {
+        Some(provenance) => LockedFileClassification {
+            role: PackFileRole::ProviderArtifact,
+            source: BlobSource::Provider {
+                provenance: provenance.clone(),
+                exact: provenance.hashes.get("sha256").map(String::as_str) == sha256,
+                currently_acquirable: false,
+            },
+            distribution: DistributionDecision::Unknown,
+        },
+        None => LockedFileClassification {
+            role: PackFileRole::LocalArtifact,
+            source: BlobSource::Local,
+            distribution: DistributionDecision::Unknown,
+        },
+    }
+}
+
 /// What deploying one file needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Settle {
@@ -2428,16 +2657,21 @@ flatten = true
             .unwrap();
 
         let lockfile = instance.write_lockfile(&profile).unwrap();
-        assert_eq!(lockfile.schema, 1);
+        assert_eq!(lockfile.schema, 2);
         assert_eq!(lockfile.plan.id, "example");
         assert_eq!(lockfile.target.game_version.as_deref(), Some("1.0"));
         assert_eq!(lockfile.target.loader, "loader");
         assert!(lockfile.mods.contains_key(&name("alpha")));
         assert_eq!(lockfile.deployment.len(), 1);
-        assert!(
-            lockfile
-                .deployment
-                .contains_key(&RelPath::new("mods/alpha.bin").unwrap())
+        let deployed_path = RelPath::new("mods/alpha.bin").unwrap();
+        assert!(lockfile.deployment.contains_key(&deployed_path));
+        assert_eq!(
+            lockfile.classifications.get(&deployed_path),
+            Some(&super::LockedFileClassification {
+                role: super::PackFileRole::LocalArtifact,
+                source: super::BlobSource::Local,
+                distribution: super::DistributionDecision::Unknown,
+            })
         );
 
         let path = fixture
@@ -2446,6 +2680,14 @@ flatten = true
             .join("locks/default.toml");
         let persisted: super::Lockfile = super::read_toml(&path).unwrap();
         assert_eq!(persisted, lockfile);
+
+        let mut legacy = toml::Value::try_from(lockfile).unwrap();
+        let table = legacy.as_table_mut().unwrap();
+        table.insert("schema".to_owned(), toml::Value::Integer(1));
+        table.remove("classifications");
+        let legacy: super::Lockfile = legacy.try_into().unwrap();
+        assert_eq!(legacy.schema, 1);
+        assert!(legacy.classifications.is_empty());
     }
 
     #[test]
@@ -2471,6 +2713,18 @@ flatten = true
         assert_eq!(
             instance.lockfile(&profile).unwrap().deployment.get(&path),
             Some(&digest)
+        );
+        assert_eq!(
+            instance
+                .lockfile(&profile)
+                .unwrap()
+                .classifications
+                .get(&path),
+            Some(&super::LockedFileClassification {
+                role: super::PackFileRole::PackOwnedConfig,
+                source: super::BlobSource::PackOwned,
+                distribution: super::DistributionDecision::Allowed,
+            })
         );
 
         instance.remove_profile_config(&profile, &path).unwrap();
