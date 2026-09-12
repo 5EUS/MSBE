@@ -6,35 +6,42 @@ and MSBE degenerates into Vortex with extra steps.
 
 ## 2.1 Install topologies as orthogonal axes
 
-The mistake would be to enumerate game *types* ("drop-in games", "load-order games").
+The mistake would be to enumerate game _types_ ("drop-in games", "load-order games").
 Real games mix and match. Instead, a Plan is a point in an eight-axis space. Every
 modding scheme encountered so far decomposes cleanly into these.
 
-| Axis | Question | Values |
-|---|---|---|
-| **A — Acquisition** | where do bytes come from? | provider API · direct URL · browser-assisted · local file · git · component upstream |
-| **B — Unpacking** | what container? | none (bare jar/dll) · zip/7z/rar/tar · nested · game container (`.pak`, `.bsa`, `.vpk`) · pack format (`.mrpack`, Thunderstore, CurseForge `manifest.json`) |
-| **C — Shape** | where do the files *inside* go, and which are **not** content? | strip-root heuristic · glob allow/deny · manifest-driven · interactive wizard (FOMOD/BAIN) · extension-computed |
-| **D — Materialization** | how do bytes reach the game dir? | reflink · hardlink · copy · symlink · junction · VFS overlay · in-place container injection · none (loader reads an external dir) |
-| **E — Ordering** | who wins a conflict? | unordered · priority overwrite · lexical · explicit order file · topological from deps · game-managed |
-| **F — Mutation** | what non-file changes? | structured config merge · INI/registry tweak · binary patch · launch-arg injection · env var |
-| **G — Loading regime** | which **Loader**, and how is it established? | `none` · one of several declared loaders (fabric / neoforge / paper / bepinex …) · bootstrap component · in-place patcher · external launcher |
-| **H — Validation** | what must hold? | artifact hash · game-version compat · loader compat · engine limits (e.g. plugin count) · anticheat warning |
+| Axis                    | Question                                                       | Values                                                                                                                                        |
+| ----------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| **A — Acquisition**     | where do bytes come from?                                      | provider API · direct URL · browser-assisted · local file · git · component upstream                                                          |
+| **B — Unpacking**       | what artifact container?                                       | none (bare jar/dll) · zip/7z/rar/tar · nested · game container (`.pak`, `.bsa`, `.vpk`)                                                       |
+| **C — Shape**           | where do the files _inside_ go, and which are **not** content? | strip-root heuristic · glob allow/deny · manifest-driven · interactive wizard (FOMOD/BAIN) · extension-computed                               |
+| **D — Materialization** | how do bytes reach the game dir?                               | reflink · hardlink · copy · symlink · junction · VFS overlay · in-place container injection · none (loader reads an external dir)             |
+| **E — Ordering**        | who wins a conflict?                                           | unordered · priority overwrite · lexical · explicit order file · topological from deps · game-managed                                         |
+| **F — Mutation**        | what non-file changes?                                         | structured config merge · INI/registry tweak · binary patch · launch-arg injection · env var                                                  |
+| **G — Loading regime**  | which **Loader**, and how is it established?                   | `none` · one of several declared loaders (fabric / neoforge / paper / bepinex …) · bootstrap component · in-place patcher · external launcher |
+| **H — Validation**      | what must hold?                                                | artifact hash · game-version compat · loader compat · engine limits (e.g. plugin count) · anticheat warning                                   |
 
 Three worked examples:
 
-| | No Man's Sky | Minecraft (Fabric) | Skyrim SE |
-|---|---|---|---|
-| A | Nexus, direct | Modrinth / CurseForge | Nexus (free → browser-assisted) |
-| B | zip/7z → `.pak` | bare `.jar` | 7z, often with FOMOD |
-| C | strip-root + hygiene filter | none | wizard + hygiene filter |
-| D | copy/hardlink → `GAMEDATA/MODS` | hardlink → `mods/` | VFS or hardlink |
-| E | lexical (pak load order) | unordered (deps resolve it) | priority + explicit plugin order |
-| F | optional ini tweak | TOML config merge | `.ini` edits |
-| G | pak-check disable | Fabric loader bootstrap | SKSE |
-| H | hash, ~100 pak soft cap | mc-version × loader × dep solve | ESL/ESP count, master graph |
+|     | No Man's Sky                    | Minecraft (Fabric)              | Skyrim SE                        |
+| --- | ------------------------------- | ------------------------------- | -------------------------------- |
+| A   | Nexus, direct                   | Modrinth / CurseForge           | Nexus (free → browser-assisted)  |
+| B   | zip/7z → `.pak`                 | bare `.jar`                     | 7z, often with FOMOD             |
+| C   | strip-root + hygiene filter     | none                            | wizard + hygiene filter          |
+| D   | copy/hardlink → `GAMEDATA/MODS` | hardlink → `mods/`              | VFS or hardlink                  |
+| E   | lexical (pak load order)        | unordered (deps resolve it)     | priority + explicit plugin order |
+| F   | optional ini tweak              | TOML config merge               | `.ini` edits                     |
+| G   | pak-check disable               | Fabric loader bootstrap         | SKSE                             |
+| H   | hash, ~100 pak soft cap         | mc-version × loader × dep solve | ESL/ESP count, master graph      |
 
 The core implements the axes. A Plan just says which values it picks.
+
+A distributable pack is not an Axis B container. It describes a set of source requirements,
+target facts and optional embedded files before individual artifacts enter the plan. Reviewed
+pack codecs translate external formats into neutral requirements, after which provider adapters
+acquire artifacts and the plan handles their topology normally. The native `.msbepack` codec
+preserves a canonical lockfile and selected CAS blobs. See
+[17](17-pack-formats-and-native-bundles.md).
 
 ### Axis C in practice: exclusion & hygiene
 
@@ -60,11 +67,11 @@ Deploying these is not merely untidy, it actively breaks things:
 
 So exclusion is a first-class part of every plan, at three layers:
 
-| Layer | Source | Overridable by |
-|---|---|---|
-| **Global hygiene set** | `msbe-core` default denylist — OS cruft, VCS dirs, debug symbols | plan, then user |
-| **Plan denylist** | `[[steps]] extract.deny` in the plan, e.g. `**/*.txt` for a game where text files are never content | user |
-| **Per-mod override** | registry overlay entry or user's own rule for one troublesome mod | — |
+| Layer                  | Source                                                                                              | Overridable by  |
+| ---------------------- | --------------------------------------------------------------------------------------------------- | --------------- |
+| **Global hygiene set** | `msbe-core` default denylist — OS cruft, VCS dirs, debug symbols                                    | plan, then user |
+| **Plan denylist**      | `[[steps]] extract.deny` in the plan, e.g. `**/*.txt` for a game where text files are never content | user            |
+| **Per-mod override**   | registry overlay entry or user's own rule for one troublesome mod                                   | —               |
 
 Two rules make this safe rather than dangerous:
 
@@ -77,7 +84,7 @@ Two rules make this safe rather than dangerous:
    an `excluded[]` list with the rule that matched each path, so
    `msbe plan explain` and the UI's install preview both show exactly what was
    dropped and why. Silent filtering is indistinguishable from a bug when a mod
-   genuinely ships a `.txt` that *is* its config.
+   genuinely ships a `.txt` that _is_ its config.
 
 When several rules match one file, the report names the most specific: a hygiene rule,
 then an explicit deny, then a quarantine pattern, and only then a miss against the allow
@@ -94,12 +101,12 @@ Minecraft is not one install model, it is four, and they are structurally unlike
 other. This is why it can validate the abstraction on its own — and why it is the sole
 v0.1 game ([13](13-roadmap.md)).
 
-| Era | Install model | Axes stressed |
-|---|---|---|
-| **Modern** (1.14+, Fabric / NeoForge) | drop a `.jar` into `mods/`; deps declared in `fabric.mod.json` / `neoforge.mods.toml` | B (none) · D (hardlink) · E (dep-resolved) · G (loader bootstrap) |
-| **Mid Forge** (1.6–1.12) | `mods/` plus `coremods/`, ASM transformers, `.cfg` configs, weak `mcmod.info` metadata | F (config merge) · E (solver degrades honestly on poor metadata) |
-| **Legacy jarmods** (pre-1.6) | class files injected **into** `minecraft.jar`, in order, with `META-INF/` deleted to defeat the signature check | **B (game container) · D (in-place container injection) · F (ordered mutation)** |
-| **Server plugins** (Bukkit / Paper) | an entirely different loader for the same game: `plugins/`, its own ecosystem | G · the Instance ↔ Plan relationship itself |
+| Era                                   | Install model                                                                                                   | Axes stressed                                                                    |
+| ------------------------------------- | --------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| **Modern** (1.14+, Fabric / NeoForge) | drop a `.jar` into `mods/`; deps declared in `fabric.mod.json` / `neoforge.mods.toml`                           | B (none) · D (hardlink) · E (dep-resolved) · G (loader bootstrap)                |
+| **Mid Forge** (1.6–1.12)              | `mods/` plus `coremods/`, ASM transformers, `.cfg` configs, weak `mcmod.info` metadata                          | F (config merge) · E (solver degrades honestly on poor metadata)                 |
+| **Legacy jarmods** (pre-1.6)          | class files injected **into** `minecraft.jar`, in order, with `META-INF/` deleted to defeat the signature check | **B (game container) · D (in-place container injection) · F (ordered mutation)** |
+| **Server plugins** (Bukkit / Paper)   | an entirely different loader for the same game: `plugins/`, its own ecosystem                                   | G · the Instance ↔ Plan relationship itself                                      |
 
 Plus, within any one of them: multiple deploy targets in a single plan (`mods/`,
 `config/`, `resourcepacks/`, `shaderpacks/`, per-world `datapacks/`), a real
@@ -107,7 +114,7 @@ version×loader compatibility matrix, client-versus-server capability splits, an
 pack formats to import.
 
 The legacy row is the important one. Jarmod injection is the only place in v0.1 that
-exercises Axis D's *in-place container injection* — the same shape later needed for
+exercises Axis D's _in-place container injection_ — the same shape later needed for
 Bethesda BSAs, Cyberpunk `archive/pc/mod`, and Baldur's Gate 3 `.pak` handling. Finding
 out in M3 that the schema cannot express it is cheap; finding out in M8 is not.
 
@@ -129,8 +136,8 @@ Consequences, all of which are load-bearing:
 - `--dry-run` is the same code path minus the applier call. It cannot drift.
 - `msbe profile diff` is a set difference over two `OperationSet`s.
 - Rollback is replaying the journal backwards.
-- A malicious or buggy plan extension can emit a *bad* operation but cannot perform
-  an *unmodelled* one. There is no `std::fs` in the extension sandbox at all.
+- A malicious or buggy plan extension can emit a _bad_ operation but cannot perform
+  an _unmodelled_ one. There is no `std::fs` in the extension sandbox at all.
 - Steps are trivially unit-testable against fixture archives with no disk I/O.
 
 ## 2.3 Manifest format
@@ -264,7 +271,7 @@ replaced it, from disk otherwise. `into` may therefore equal `base` for a true i
 redeploying never patches an already-patched file. The Minecraft plan builds a separate launcher
 version instead, because the official launcher downloads a vanilla jar over a modified one; the
 vanilla version is only read. Entries from later mods in the profile's `order` win, and output
-bytes are deterministic, so redeploying unchanged inputs places nothing. *Implemented in M3.*
+bytes are deterministic, so redeploying unchanged inputs places nothing. _Implemented in M3._
 
 The Profile's **Target** names one of these ([01](01-domain-model.md)), the solver
 filters candidates by it before version solving ([05 §5.2](05-solver.md)), and steps
@@ -279,24 +286,24 @@ child plan can `insert-before`, `replace` or `remove` rather than copy-pasting.
 
 Closed and versioned on purpose — an open set becomes "arbitrary code" by degrees.
 
-| Step | Purpose |
-|---|---|
-| `fetch` | acquire an artifact via a provider or URL |
-| `verify` | hash / size / signature assertions |
-| `extract` | archive → CAS tree; strip-root, allow/deny globs, hygiene filter, quarantine report |
-| `select` | interactive choice (FOMOD wizard, optional-file picker) |
-| `transform` | glob-based move/rename/filter within a tree |
-| `place` | tree → deployment target |
-| `merge-config` | structured merge into TOML/JSON/INI/XML/YAML/NBT/SJSON |
-| `write-file` | emit a generated file (load order lists, `modsettings.lsx`) |
-| `patch-binary` | apply a bounded, hash-pinned binary diff |
-| `ensure-component` | install/verify a loader or script extender |
-| `set-launch-arg` / `set-env` | launch configuration; also the fallback route for Proton DLL overrides |
-| `set-dll-override` | Wine/Proton DLL override written to the prefix registry, scoped to one executable ([08 §8.2](08-platforms-and-detection.md)) |
-| `register-plugin` | add to a game-managed order file |
-| `reorder` | apply the plan's ordering strategy |
-| `validate` | assert a `[[validate]]` condition |
-| `run-extension` | hand off to a sandboxed WASM module (below) |
+| Step                         | Purpose                                                                                                                      |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `fetch`                      | acquire an artifact via a provider or URL                                                                                    |
+| `verify`                     | hash / size / signature assertions                                                                                           |
+| `extract`                    | archive → CAS tree; strip-root, allow/deny globs, hygiene filter, quarantine report                                          |
+| `select`                     | interactive choice (FOMOD wizard, optional-file picker)                                                                      |
+| `transform`                  | glob-based move/rename/filter within a tree                                                                                  |
+| `place`                      | tree → deployment target                                                                                                     |
+| `merge-config`               | structured merge into TOML/JSON/INI/XML/YAML/NBT/SJSON                                                                       |
+| `write-file`                 | emit a generated file (load order lists, `modsettings.lsx`)                                                                  |
+| `patch-binary`               | apply a bounded, hash-pinned binary diff                                                                                     |
+| `ensure-component`           | install/verify a loader or script extender                                                                                   |
+| `set-launch-arg` / `set-env` | launch configuration; also the fallback route for Proton DLL overrides                                                       |
+| `set-dll-override`           | Wine/Proton DLL override written to the prefix registry, scoped to one executable ([08 §8.2](08-platforms-and-detection.md)) |
+| `register-plugin`            | add to a game-managed order file                                                                                             |
+| `reorder`                    | apply the plan's ordering strategy                                                                                           |
+| `validate`                   | assert a `[[validate]]` condition                                                                                            |
+| `run-extension`              | hand off to a sandboxed WASM module (below)                                                                                  |
 
 New step kinds require an engine version bump, a spec change and a test fixture.
 That friction is the point.
@@ -308,7 +315,7 @@ ModuleManager patch semantics, deriving a load order from record-level conflicts
 Those load a **WebAssembly component** (wasmtime, WASI Preview 2 / component model).
 
 The extension **has no filesystem, no network, no process, and no clock** unless
-granted. It reads through host-provided handles and its *only* effect on the world is
+granted. It reads through host-provided handles and its _only_ effect on the world is
 emitting operations:
 
 ```wit

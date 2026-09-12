@@ -227,8 +227,8 @@ preview, rather than copied into the game's mod directory.
 | `pack config set INSTANCE PATH (--content TEXT\|--file FILE) [-p PROFILE]`                                                                       | **Implemented** | Add or replace a pack-owned config.                 |
 | `pack config remove INSTANCE PATH [-p PROFILE]`                                                                                                  | **Implemented** | Remove a pack-owned config.                         |
 | `pack validate INSTANCE [-p PROFILE]`                                                                                                            | **Implemented** | Validate and write the canonical lockfile.          |
-| `pack export INSTANCE --output FILE [-p PROFILE]`                                                                                                | **Implemented** | Export verified files as `.mrpack` overrides.       |
-| `pack import INSTANCE FILE [-p PROFILE] [--with-deps]`                                                                                           | **Implemented** | Acquire compatible verified `.mrpack` files.        |
+| `pack export INSTANCE --output FILE [-p PROFILE]`                                                                                                | **Temporary**   | Current Modrinth-specific export pending codecs.    |
+| `pack import INSTANCE FILE [-p PROFILE] [--with-deps]`                                                                                           | **Temporary**   | Current Modrinth-specific import pending codecs.    |
 | `bisect start INSTANCE [-p PROFILE]`                                                                                                             | **Implemented** | Create a resumable module bisection session.        |
 | `bisect run INSTANCE`                                                                                                                            | **Implemented** | Deploy the current trial subset for manual testing. |
 | `bisect result INSTANCE --bad\|--good`                                                                                                           | **Implemented** | Record the trial verdict and select the next half.  |
@@ -242,6 +242,14 @@ Modrinth pack import honors each manifest file's `path`. Minecraft plans route J
 and retain ZIP resource packs and shader packs for `resourcepacks/` and `shaderpacks/` respectively.
 The archive `overrides/` directory is not yet imported, so packs that depend on configuration,
 scripts, or other overrides remain incomplete.
+
+This command shape is compatibility behavior, not the final architecture. The generic interface
+will discover codec IDs and option schemas (`pack formats`, `pack options`, and
+`--format`/`--options`) from the daemon. Modrinth archive records and Minecraft loader-key mapping
+will move to the Modrinth extension; generic CLI, core, daemon, and Desktop code will not name a
+provider, game, loader, or external format. Native `.msbepack` exports will package the canonical
+lockfile and a policy-selected set of CAS blobs. See
+[17 - Pack formats and native bundles](17-pack-formats-and-native-bundles.md).
 
 ## 7. Planned command surface
 

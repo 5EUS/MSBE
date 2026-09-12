@@ -65,10 +65,10 @@ crates/
   msbe-plan-host/     wasmtime host, capability enforcement, WIT bindings
   msbe-archive/       hardened extraction (zip/7z/rar/tar), path safety
   msbe-fsops/         CAS shards, capability probe, journaled applier (the only writer)
-  msbe-provider-api/  the adapter contract: neutral records, HttpClient, acquisition, resolution; no TLS
-  msbe-provider-*/    one crate per provider adapter (modrinth, direct); no TLS
-  msbe-providers/     the adapters MSBE ships, behind the policy gate
-  msbe-pack/          portable modpack manifest import and export; no provider policy
+  msbe-provider-api/  neutral adapter and pack-codec contracts; HttpClient, acquisition, resolution; no TLS
+  msbe-provider-*/    one crate per provider/format extension (modrinth, direct); no TLS
+  msbe-providers/     reviewed adapter and codec registrations, behind the policy gate
+  msbe-pack/          provider-neutral pack orchestration, options and native bundle planning
   msbe-http/          the one crate that links TLS: ureq + rustls/ring, OS trust store
   msbe-daemon/        JSON-RPC server, job queue, session auth
   msbe-cli/           clap; --format json; stable exit codes
@@ -93,6 +93,18 @@ fixtures/             synthetic game dirs + mod archives for tests
 scripts/development/  check.sh, check-xaml.sh, format.sh, install-git-hooks.sh
 docs/
 ```
+
+### Provider and pack extension boundary
+
+Provider registrations expose acquisition adapters and optional pack codecs. A codec owns an
+external format's detection, wire records, game/loader identity mapping and import/export rules;
+`msbe-pack` owns only generic codec selection, option validation and blob planning. Consequently
+the CLI, daemon, Desktop and core never branch on provider, game, loader or external format IDs.
+
+The native `.msbepack` codec uses the same registration and planning path. It packages the
+canonical lockfile plus selected content-addressed blobs; it is not a special CLI code path. See
+[17](17-pack-formats-and-native-bundles.md) for the complete contract, deterministic archive
+layout, redistribution policy and migration from the current format-specific implementation.
 
 ## 3.3 NativeAOT constraints — non-negotiable from commit #1
 

@@ -138,11 +138,13 @@ Where the domain gets hard, still without touching credentials.
   deployment and the separately persisted user override layer remain pending.
 - **Multiple deploy targets in one plan** — `mods/`, `config/`, `resourcepacks/`,
   `shaderpacks/`, per-world `datapacks/`.
-- **Pack import and export** — **implemented for Modrinth**: `msbe pack import` acquires
-  target-compatible `.mrpack` files through the reviewed HTTPS/checksum path, and `msbe pack
-export` writes a standard `.mrpack` with verified files as local overrides. CurseForge
-  manifests remain metadata-only; downloads wait for M5 and their distribution policy is
-  honoured from day one.
+- **Pack import and export** — the initial Modrinth path works, but its wire model and
+  Minecraft/loader mapping currently leak into generic pack and CLI crates. It is migration debt,
+  not the extension pattern. The target architecture registers format codecs with provider
+  extensions, routes neutral requirements through the normal provider policy gate, and adds a
+  provider-neutral `.msbepack` codec over lockfiles and selected CAS blobs. CurseForge support
+  requires its reviewed adapter and codec; metadata-only parsing does not authorize acquisition
+  or redistribution. See [17](17-pack-formats-and-native-bundles.md).
 - **Lockfiles and cross-platform reproducibility** — **implemented**: `msbe lock` writes a
   canonical TOML snapshot of the pinned plan, compatibility target, components, provider
   provenance, CAS digests, and portable relative deployment shape. Filesystem backend and host
@@ -225,8 +227,10 @@ Avalonia against the existing RPC. Mod list, install preview including the exclu
 report, conflict tree, wizard host, download queue, browser tab, journal with one-click
 rollback. **Modpack creation**: poll supported mod APIs and repositories for updates and
 metadata, search and compose a mod list, choose compatible versions and dependencies,
-add and edit pack-owned configs, then validate and export a reproducible lockfile and
-distributable pack manifest. Accessibility and i18n included, not deferred.
+add and edit pack-owned configs, then validate and export a reproducible lockfile, a configurable
+native MSBE bundle, or a distributable external pack through a provider-owned codec. Codec
+options are schema-driven so Desktop does not hardcode a game or format. Accessibility and i18n
+included, not deferred.
 
 **Current checkpoint (approximately 30%)**: the desktop connects to the local daemon;
 registers and browses instances; creates, clones, selects, and removes profiles; and
@@ -234,16 +238,20 @@ shows profile-ordered mods. Profile-specific loader, loader version, and side ta
 visible and editable, and changing them invalidates stale provider results. Users can add local files, URLs, and provider references,
 remove selected mods, search compatible providers, include required dependencies, and
 install a result into the selected profile. Pack-owned text configs can be added, edited,
-removed, validated into a canonical lockfile, and exported with the resolved profile as a
-distributable Modrinth pack. Deployment has a native review of ordered
+removed, validated into a canonical lockfile, and exported with the resolved profile through the
+temporary Modrinth-specific path. Replacing that path with provider codec discovery, native
+`.msbepack` thin/portable/complete presets, blob-policy preview, and typed RPC remains in this
+milestone. Deployment has a native review of ordered
 filesystem operations, unchanged and locally kept counts, the exclusion report, explicit
 confirmation before apply, and rollback of the latest transaction. Conflict resolution,
 the full journal timeline, wizards, download progress, browser-assisted acquisition,
 updates, pack import, complete accessibility, and i18n remain in this milestone.
 
-**Done when**: a user can create a Minecraft modpack in the app from provider search,
-review the resolved list, add configuration files, export it, and import the exported
-pack into a fresh profile with the same resolved result.
+**Done when**: a user can compose a pack from provider search, review the resolved list, edit
+configuration files, select a discovered codec and its schema-driven options, and import the
+export into a fresh profile with the same deployment digest map. Adding another format changes
+one extension crate and one registration line, while generic clients and core contain no
+provider, game, loader, or external-format branches.
 
 ## M7 — Registry (4–6 weeks)
 

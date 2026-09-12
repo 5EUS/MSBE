@@ -36,6 +36,11 @@ msbe rollback [<txn>]           # undo the last transaction
 msbe order     list | set | sort | pin | unpin
 msbe conflicts list | resolve
 
+msbe pack      formats | options <format>
+msbe pack      import <instance> <input> [--format <format>] [--options <file>]
+msbe pack      export <instance> <output> --format <format> [--options <file>]
+msbe pack      validate <instance>
+
 msbe plan      list | show | new | validate | test | explain
 msbe registry  update | sources | trust
 
@@ -118,6 +123,9 @@ Primary surfaces:
   per-instance health from `doctor`. Plan files and identifiers are not user-facing.
 - **Games** — the daemon's currently loaded game support and available mod ecosystems.
 - **Profiles** — switch, clone, diff two profiles side by side, export/import.
+- **Pack editor** — pack-owned configs, codec and preset selection, schema-driven options,
+  validation, and an export preview that separates references, embedded content, user actions,
+  estimated size, and policy blockers.
 - **Mod list** — virtualized (must stay smooth at 1000+ rows), drag-reorder where the
   plan declares ordering, inline enable/disable, filter by provider/tag/state.
 - **Browse** — unified search across providers, with provider policy shown honestly
@@ -128,6 +136,12 @@ Primary surfaces:
 - **Conflicts** — a tree of file and semantic conflicts with resolution actions.
 - **Wizard host** — renders `Question` events (FOMOD etc.) as native dialogs.
 - **Download queue** — including the browser-assisted queue with clear progress.
+
+Pack formats and their options are daemon-discovered capabilities. Neither frontend contains a
+format-specific command model or ViewModel. The typed preview returned by the daemon is also the
+execution plan, so Desktop and CLI show identical inclusion and policy decisions. See
+[17](17-pack-formats-and-native-bundles.md).
+
 - **Browser tab** — the CEF component, visually distinct so it is obvious the user is
   on a third-party site.
 - **Journal / history** — every transaction with a one-click rollback.

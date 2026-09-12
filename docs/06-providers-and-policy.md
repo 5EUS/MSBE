@@ -110,11 +110,11 @@ requirements without accidentally weakening their policy on older clients.
 A new provider is a reviewed Rust adapter crate, not a manifest template. The workspace keeps
 everything specific to one provider inside that provider's crate:
 
-| Crate                | Holds                                                                                                                                                                  |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `msbe-provider-api`  | the `Adapter` trait and its capabilities, the neutral records in `model`, `HttpClient`, `JsonEndpoint`, verified acquisition, manifests, the overlay, and resolution |
-| `msbe-provider-<id>` | one provider: its manifest, the overlay entries MSBE ships about its projects, its wire records and their translation, and any policy only it has                     |
-| `msbe-providers`     | `BUILTIN`, the list of registrations, and `Providers`, the policy gate; pack formats live here until they get crates of their own                                     |
+| Crate                | Holds                                                                                                                                              |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `msbe-provider-api`  | the `Adapter` and `PackCodec` contracts and capabilities, neutral records, `HttpClient`, verified acquisition, manifests, overlays, and resolution |
+| `msbe-provider-<id>` | one provider: its manifest, project and pack wire records, reviewed identity mappings, overlays, translation, and provider-specific policy         |
+| `msbe-providers`     | `BUILTIN`, the reviewed adapter and codec registrations, and `Providers`, the shared fail-closed policy gate                                       |
 
 Adding a provider is a new `msbe-provider-<id>` crate and one line in `BUILTIN`. The CLI, the
 daemon and `msbe-core` never name a provider. An adapter crate must obey these boundaries:
@@ -148,6 +148,26 @@ daemon and `msbe-core` never name a provider. An adapter crate must obey these b
 Modrinth is the reference adapter and implements all three capabilities. The `url` adapter
 implements none: it returns a `Request::File` that needs no resolution, the shape an `nxm://`
 link will take too.
+
+### Pack codec capability
+
+Pack formats are optional provider-extension capabilities, separate from acquisition adapters.
+A codec detects and translates an external pack format into neutral requirements, or translates
+a resolved lockfile and classified blobs into that format. It does not acquire files, resolve
+dependencies, write game directories, or bypass the provider registry. The orchestration layer
+routes every imported requirement back through the normal adapter and policy gate.
+
+Format-specific archive paths, project/file IDs, game and loader wire names, environment flags,
+and redistribution semantics stay in the extension crate. A provider may implement an adapter
+without a codec, a codec without network acquisition, or both. The CLI, daemon, core and Desktop
+discover codec descriptors and option schemas and do not name formats themselves.
+
+The native `.msbepack` codec is provider-neutral and embeds a canonical lockfile plus a selected
+set of CAS blobs. Blob sourceability and permission to redistribute are evaluated independently:
+an unsourceable file is never assumed redistributable, and a provider prohibition cannot be
+overridden by an export option. The complete registration contract, option schema, native layout,
+error model and migration plan are specified in
+[17](17-pack-formats-and-native-bundles.md).
 
 ## 6.4 What we will not do
 
