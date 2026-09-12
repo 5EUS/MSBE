@@ -65,11 +65,12 @@ planned with their corresponding solver, wizard, and provider-policy features.
 
 ## 4. Current Minecraft workflow
 
-The first-party plan supports Fabric, Quilt, NeoForge, and Forge. Fabric, Quilt, and
-NeoForge extract `.jar` files from an added file or archive and deploy them flat into
-`mods/`. For Forge 1.6-1.12 packs, regular jars go to `mods/`, jars packaged beneath
-`coremods/` go to `coremods/` for ASM transformation, and `config/**/*.cfg` files go to
-the mutable `config/` tree so game-created edits are retained. Loader bootstrap is not
+The first-party plan supports Fabric, Quilt, NeoForge, Forge, Bukkit, and Paper. Fabric,
+Quilt, and NeoForge extract `.jar` files from an added file or archive and deploy them
+flat into `mods/`. For Forge 1.6-1.12 packs, regular jars go to `mods/`, jars packaged
+beneath `coremods/` go to `coremods/` for ASM transformation, and `config/**/*.cfg` files
+go to the mutable `config/` tree so game-created edits are retained. Bukkit and Paper are
+server-only targets; their jars deploy flat into `plugins/`. Loader bootstrap is not
 implemented: register a game directory that already has the chosen loader.
 
 ### 4.1 Register an instance

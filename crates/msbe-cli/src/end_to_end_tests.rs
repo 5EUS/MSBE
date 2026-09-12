@@ -120,6 +120,15 @@ impl World {
     }
 
     fn add_instance_with_loader(&self, loader: &str, game_version: Option<&str>) {
+        self.add_instance_with_loader_and_side(loader, "client", game_version);
+    }
+
+    fn add_instance_with_loader_and_side(
+        &self,
+        loader: &str,
+        side: &str,
+        game_version: Option<&str>,
+    ) {
         let game = self.game.display().to_string();
         let plan = self.plan.display().to_string();
         let mut args = vec![
@@ -132,6 +141,8 @@ impl World {
             plan.as_str(),
             "--loader",
             loader,
+            "--side",
+            side,
         ];
         if let Some(version) = game_version {
             args.extend(["--game-version", version]);
@@ -988,6 +999,30 @@ fn forge_routes_explicit_coremods_and_preserves_cfg_files() {
     assert!(!world.game.join("mods/utility.jar").exists());
     assert!(!world.game.join("coremods/transformer.jar").exists());
     assert!(!config.exists());
+}
+
+#[test]
+fn paper_routes_plugins_to_the_server_plugin_directory() {
+    let world = World::new();
+    world.add_instance_with_loader_and_side("paper", "server", Some("1.21.1"));
+    let plugins = world.zip(
+        "plugins.zip",
+        &[
+            ("plugins/essentials.jar", b"paper plugin"),
+            ("Docs/readme.md", b"not a plugin"),
+        ],
+    );
+
+    world.json(&["add", "mc", plugins.as_str()]);
+    world.json(&["deploy", "mc"]);
+    assert_eq!(
+        fs::read(world.game.join("plugins/essentials.jar")).unwrap(),
+        b"paper plugin"
+    );
+    assert!(!world.game.join("mods/essentials.jar").exists());
+
+    world.json(&["purge", "mc"]);
+    assert!(!world.game.join("plugins/essentials.jar").exists());
 }
 
 #[test]

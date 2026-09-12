@@ -4,6 +4,7 @@
 # directory, and pack-declared resource and shader ZIP files are routed whole to their Minecraft
 # directories. Mid-era Forge uses the same mod directory plus an explicit coremods source
 # directory for ASM transformers and a mutable config directory for .cfg files.
+# Bukkit and Paper are separate server-only loaders whose plugin jars belong in plugins/.
 #
 # Legacy jarmods (before 1.6): the `jarmod` loader builds a separate launcher version,
 # `versions/<game version>-msbe`, from the vanilla client jar and version manifest, which are only
@@ -61,6 +62,18 @@ targets   = [
   { name = "coremods", path = "coremods" },
   { name = "config", path = "config" },
 ]
+
+[[loaders]]
+id        = "bukkit"
+bootstrap = "none"
+sides     = ["server"]
+targets   = [{ name = "plugins", path = "plugins" }]
+
+[[loaders]]
+id        = "paper"
+bootstrap = "none"
+sides     = ["server"]
+targets   = [{ name = "plugins", path = "plugins" }]
 
 [[loaders]]
 id        = "jarmod"
@@ -149,6 +162,25 @@ type = "place"
 
 [deploy]
 mutable = ["@loader.targets.config/**"]
+
+# Bukkit and Paper plugins.
+
+[[steps]]
+type = "extract"
+
+  [steps.with]
+  loaders = ["bukkit", "paper"]
+  allow   = ["**/*.jar"]
+  hygiene = "default"
+
+[[steps]]
+type = "place"
+
+  [steps.with]
+  loaders = ["bukkit", "paper"]
+  into    = "@loader.targets.plugins"
+  include = ["**/*.jar"]
+  flatten = true
 
 # Legacy jarmods.
 
