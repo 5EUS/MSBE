@@ -69,7 +69,7 @@ crates/
   msbe-archive/       hardened extraction (zip/7z/rar/tar), path safety
   msbe-fsops/         CAS shards, capability probe, journaled applier (the only writer)
   msbe-provider-api/  neutral adapter and pack-codec contracts; HttpClient, acquisition, resolution; no TLS
-  msbe-provider-*/    one crate per provider/format extension (modrinth, direct, local); no TLS
+  msbe-provider-*/    one crate per provider/format extension (modrinth, local); no TLS
   msbe-providers/     reviewed adapter and codec registrations, behind the policy gate
   msbe-pack/          provider-neutral pack orchestration: options, blob policy, previews, snapshots
   msbe-http/          the one crate that links TLS: ureq + rustls/ring, OS trust store

@@ -68,7 +68,6 @@ crates/
   msbe-core/                  profiles, lockfiles, resolution, provenance, CAS references
   msbe-provider-api/          provider-program contracts plus neutral pack-codec contracts
   msbe-provider-modrinth/     native Modrinth exception and .mrpack codec
-  msbe-provider-direct/       direct URL program and acquisition fixture; no external pack format
   msbe-provider-local/        local acquisition and native .msbepack codec registration
   msbe-providers/             runtime registry, trusted provider programs, codecs, policy gate
   msbe-pack/                  codec selection, neutral import/export planning, option validation
