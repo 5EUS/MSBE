@@ -8,7 +8,7 @@
             <TextBlock Classes="brand" Text="MSBE" />
             <Menu Grid.Column="1" Background="Transparent">
                 <MenuItem Header="File">
-                    <MenuItem Header="Detect instances" Command="{Binding DetectInstancesCommand}" InputGesture="Ctrl+R" />
+                    <MenuItem Header="Refresh instances" Command="{Binding RefreshInstancesCommand}" InputGesture="Ctrl+R" />
                     <Separator />
                     <MenuItem Header="Open command line" Command="{Binding ToggleCliCommand}" InputGesture="Ctrl+Shift+P" />
                 </MenuItem>

@@ -36,8 +36,9 @@ internal sealed partial class MainViewModel : ViewModelBase
     {
         try
         {
-            DaemonInfo daemon = await this.client.GetInfoAsync(CancellationToken.None).ConfigureAwait(false);
+            DaemonInfo daemon = await this.client.GetInfoAsync(CancellationToken.None).ConfigureAwait(true);
             this.StatusMessage = $"Connected to daemon {daemon.Version} (RPC {daemon.RpcVersion}).";
+            await this.RefreshInstancesAsync().ConfigureAwait(true);
         }
         catch (Exception exception) when (exception is IOException or SocketException or InvalidOperationException)
         {

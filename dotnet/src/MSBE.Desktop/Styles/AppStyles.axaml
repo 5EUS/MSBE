@@ -60,6 +60,19 @@
     <Setter Property="CornerRadius" Value="6" />
   </Style>
 
+  <Style Selector="Button.primary-button">
+    <Setter Property="Background" Value="#285C78" />
+    <Setter Property="Foreground" Value="#F7FAFC" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+  </Style>
+
+  <Style Selector="Button.secondary-button">
+    <Setter Property="Background" Value="#20242C" />
+    <Setter Property="Foreground" Value="#D8DCE4" />
+    <Setter Property="BorderBrush" Value="#343A46" />
+    <Setter Property="BorderThickness" Value="1" />
+  </Style>
+
   <Style Selector="Border.sidebar">
     <Setter Property="Background" Value="#121419" />
     <Setter Property="BorderBrush" Value="#252933" />
@@ -116,6 +129,40 @@
 
   <Style Selector="Border.workspace TextBlock">
     <Setter Property="Foreground" Value="#E4E7EC" />
+  </Style>
+
+  <Style Selector="Border.error-banner">
+    <Setter Property="Background" Value="#27191C" />
+    <Setter Property="BorderBrush" Value="#713E48" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="6" />
+    <Setter Property="Padding" Value="12" />
+  </Style>
+
+  <Style Selector="Border.instance-detail-panel">
+    <Setter Property="Background" Value="#1B1E25" />
+    <Setter Property="BorderBrush" Value="#303540" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="6" />
+    <Setter Property="Padding" Value="22" />
+  </Style>
+
+  <Style Selector="TextBlock.instance-name">
+    <Setter Property="Foreground" Value="#F3F4F6" />
+    <Setter Property="FontSize" Value="24" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+  </Style>
+
+  <Style Selector="TextBlock.detail-label">
+    <Setter Property="Foreground" Value="#737B8C" />
+    <Setter Property="FontSize" Value="11" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+  </Style>
+
+  <Style Selector="TextBlock.field-label">
+    <Setter Property="Foreground" Value="#8D94A3" />
+    <Setter Property="FontSize" Value="11" />
+    <Setter Property="FontWeight" Value="SemiBold" />
   </Style>
 
   <Style Selector="Border.status-bar">

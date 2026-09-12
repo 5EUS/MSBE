@@ -28,7 +28,7 @@ internal sealed partial class MainViewModel
 
     /// <summary>Gets or sets the selected presentation order for the instance library.</summary>
     [ObservableProperty]
-    public partial string InstanceSort { get; set; } = "Recent";
+    public partial string InstanceSort { get; set; } = "Name (A-Z)";
 
     /// <summary>Gets or sets the command staged in the CLI.</summary>
     [ObservableProperty]
@@ -52,7 +52,7 @@ internal sealed partial class MainViewModel
     public bool IsInstancesWorkspace => this.ActiveWorkspace == WorkspacePage.Instances;
 
     /// <summary>Gets the available instance library sort orders.</summary>
-    public IReadOnlyList<string> InstanceSorts { get; } = ["Recent", "Name", "Game", "Status"];
+    public IReadOnlyList<string> InstanceSorts { get; } = ["Name (A-Z)", "Name (Z-A)"];
 
     private static string[] SplitArguments(string command) => command.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 

@@ -1,0 +1,63 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:MSBE.Desktop.ViewModels"
+        x:Class="MSBE.Desktop.Views.Shell.AddInstanceWindow"
+        x:DataType="vm:MainViewModel"
+        Title="Add instance"
+        Background="#121419"
+        Width="620" Height="590"
+        MinWidth="520" MinHeight="540"
+        CanResize="True">
+    <Grid Margin="22" RowDefinitions="Auto,*,Auto" RowSpacing="20">
+        <StackPanel Spacing="4">
+            <TextBlock Classes="sectionHeading" Text="Add an instance" />
+            <TextBlock Classes="caption" Text="Register an existing game installation with a deployment plan." />
+        </StackPanel>
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <StackPanel Spacing="14">
+                <Border Classes="error-banner" IsVisible="{Binding HasAddInstanceError}">
+                    <TextBlock Text="{Binding AddInstanceError}" TextWrapping="Wrap" />
+                </Border>
+
+                <StackPanel Spacing="6">
+                    <TextBlock Classes="field-label" Text="NAME" />
+                    <TextBox Text="{Binding NewInstanceName}" PlaceholderText="My Minecraft instance" />
+                    <TextBlock Classes="caption" Text="A short unique name used by profiles and commands." />
+                </StackPanel>
+
+                <StackPanel Spacing="6">
+                    <TextBlock Classes="field-label" Text="GAME FOLDER" />
+                    <TextBox Text="{Binding NewInstanceRoot}" PlaceholderText="/home/user/.minecraft" />
+                </StackPanel>
+
+                <StackPanel Spacing="6">
+                    <TextBlock Classes="field-label" Text="PLAN FILE" />
+                    <TextBox Text="{Binding NewInstancePlan}" PlaceholderText="/path/to/plan.toml" />
+                </StackPanel>
+
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
+                    <StackPanel Spacing="6">
+                        <TextBlock Classes="field-label" Text="LOADER" />
+                        <TextBox Text="{Binding NewInstanceLoader}" PlaceholderText="fabric" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Spacing="6">
+                        <TextBlock Classes="field-label" Text="SIDE" />
+                        <ComboBox ItemsSource="{Binding InstanceSides}" SelectedItem="{Binding NewInstanceSide}" />
+                    </StackPanel>
+                </Grid>
+
+                <StackPanel Spacing="6">
+                    <TextBlock Classes="field-label" Text="GAME VERSION (OPTIONAL)" />
+                    <TextBox Text="{Binding NewInstanceGameVersion}" PlaceholderText="1.21.1" />
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+
+        <Grid Grid.Row="2" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+            <ProgressBar Width="120" Height="2" IsIndeterminate="True" IsVisible="{Binding IsAddingInstance}" />
+            <Button Grid.Column="1" Classes="secondary-button" Content="Cancel" Command="{Binding CancelAddInstanceCommand}" />
+            <Button Grid.Column="2" Classes="primary-button" Content="Add instance" Command="{Binding SubmitAddInstanceCommand}" />
+        </Grid>
+    </Grid>
+</Window>

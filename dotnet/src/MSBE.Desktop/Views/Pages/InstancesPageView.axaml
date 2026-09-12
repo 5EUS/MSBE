@@ -3,14 +3,56 @@
              xmlns:vm="using:MSBE.Desktop.ViewModels"
              x:Class="MSBE.Desktop.Views.Pages.InstancesPageView"
              x:DataType="vm:MainViewModel">
-  <StackPanel Margin="8" Spacing="10">
-    <TextBlock Classes="sectionHeading" Text="Instances" />
-    <TextBlock Classes="caption"
-               TextWrapping="Wrap"
-               Text="One installed copy of a game. Detection rules come from the plan, never from this application." />
-    <Button Content="Detect instances" Command="{Binding DetectInstancesCommand}" />
-    <ListBox ItemsSource="{Binding Instances}"
-             SelectedItem="{Binding SelectedInstance}"
-             MinHeight="200" />
-  </StackPanel>
+  <Grid Margin="8" RowDefinitions="Auto,Auto,*" RowSpacing="16">
+    <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+      <StackPanel Spacing="3">
+        <TextBlock Classes="sectionHeading" Text="Instances" />
+        <TextBlock Classes="caption" Text="Registered installations managed by the local daemon." />
+      </StackPanel>
+      <Button Grid.Column="1" Classes="secondary-button" Content="Refresh" Command="{Binding RefreshInstancesCommand}" />
+      <Button Grid.Column="2" Classes="primary-button" Content="Add instance" Command="{Binding AddInstanceCommand}" />
+    </Grid>
+
+    <Border Grid.Row="1" Classes="error-banner" IsVisible="{Binding HasInstanceError}">
+      <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+        <StackPanel Spacing="2">
+          <TextBlock FontWeight="SemiBold" Text="Instances could not be loaded" />
+          <TextBlock Classes="caption" Text="{Binding InstanceError}" TextWrapping="Wrap" />
+        </StackPanel>
+        <Button Grid.Column="1" Content="Try again" Command="{Binding RefreshInstancesCommand}" />
+      </Grid>
+    </Border>
+
+    <Border Grid.Row="2" Classes="instance-detail-panel">
+      <Grid RowDefinitions="Auto,*">
+        <ProgressBar Height="2" IsIndeterminate="True" IsVisible="{Binding IsInstancesLoading}" />
+        <Grid Grid.Row="1">
+          <StackPanel HorizontalAlignment="Center"
+                      VerticalAlignment="Center"
+                      MaxWidth="320"
+                      Spacing="6"
+                      IsVisible="{Binding !HasSelectedInstance}">
+            <TextBlock HorizontalAlignment="Center" FontWeight="SemiBold" Text="Choose an instance from the library" />
+            <TextBlock Classes="caption" TextAlignment="Center" TextWrapping="Wrap" Text="Select an installation in the left sidebar, or register a new one to begin." />
+            <Button Margin="0,8,0,0" HorizontalAlignment="Center" Classes="primary-button" Content="Add instance" Command="{Binding AddInstanceCommand}" />
+          </StackPanel>
+
+          <StackPanel Spacing="20" IsVisible="{Binding HasSelectedInstance}">
+            <StackPanel Spacing="4">
+              <TextBlock Classes="instance-name" Text="{Binding SelectedInstance}" />
+              <TextBlock Classes="caption" Text="{Binding SelectedInstanceRoot}" TextWrapping="Wrap" />
+            </StackPanel>
+            <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="24" RowSpacing="12">
+              <TextBlock Classes="detail-label" Text="PLAN" />
+              <TextBlock Grid.Column="1" Text="{Binding SelectedInstancePlan}" />
+              <TextBlock Grid.Row="1" Classes="detail-label" Text="TARGET" />
+              <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding SelectedInstanceTarget}" />
+              <TextBlock Grid.Row="2" Classes="detail-label" Text="DEPLOYMENT" />
+              <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding SelectedInstanceDeployment}" />
+            </Grid>
+          </StackPanel>
+        </Grid>
+      </Grid>
+    </Border>
+  </Grid>
 </UserControl>
