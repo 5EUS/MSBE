@@ -144,7 +144,9 @@ Where the domain gets hard, still without touching credentials.
   extensions, routes neutral requirements through the normal provider policy gate, and adds a
   provider-neutral `.msbepack` codec over lockfiles and selected CAS blobs. CurseForge support
   requires its reviewed adapter and codec; metadata-only parsing does not authorize acquisition
-  or redistribution. See [17](17-pack-formats-and-native-bundles.md).
+  or redistribution. Before any external format moves onto the codec contract, Phase A2 revises it
+  for host-owned containers, profile lineage, environment inputs, derivation identity, and a
+  facts/observations split in lockfiles. See [17](17-pack-formats-and-native-bundles.md).
 - **Lockfiles and cross-platform reproducibility** — **implemented**: `msbe lock` writes a
   canonical TOML snapshot of the pinned plan, compatibility target, components, provider
   provenance, CAS digests, and portable relative deployment shape. Filesystem backend and host
@@ -168,7 +170,9 @@ models that are structurally unlike the modern one.
   Axis D's _in-place container injection_ plus an ordered mutation. **Finding:** it needed two new
   step kinds, `inject` and `edit-json`, a `loaders` list on steps, and an explicit profile `order`
   that Bethesda load order will reuse ([02](02-plan-system.md)). A run against a real 1.5.2 setup
-  is still to come.
+  is still to come. **Open:** the injected jar derives from the user's vanilla jar, which the
+  lockfile cannot yet classify or pin. Environment inputs and derivation identity
+  ([17](17-pack-formats-and-native-bundles.md) §17.5) must land before jarmod profiles export.
 - **Coremods and ASM transformers** (1.6–1.12 Forge), `coremods/`, `.cfg` configs, and
   the much weaker `mcmod.info` dependency metadata — the solver must degrade honestly.
 - **Server ecosystems** — Bukkit/Paper `plugins/` are a _different loader for the same
@@ -240,8 +244,9 @@ remove selected mods, search compatible providers, include required dependencies
 install a result into the selected profile. Pack-owned text configs can be added, edited,
 removed, validated into a canonical lockfile, and exported with the resolved profile through the
 temporary Modrinth-specific path. Replacing that path with provider codec discovery, native
-`.msbepack` thin/portable/complete presets, blob-policy preview, and typed RPC remains in this
-milestone. Deployment has a native review of ordered
+`.msbepack` thin/portable/complete presets, blob-policy preview, and job-backed typed RPC, plus
+pack update over profile layers, capture of in-game config changes, and instance snapshots,
+remains in this milestone. Deployment has a native review of ordered
 filesystem operations, unchanged and locally kept counts, the exclusion report, explicit
 confirmation before apply, and rollback of the latest transaction. Conflict resolution,
 the full journal timeline, wizards, download progress, browser-assisted acquisition,

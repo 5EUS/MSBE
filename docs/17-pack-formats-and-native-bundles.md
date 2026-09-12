@@ -27,6 +27,11 @@ The native `.msbepack` format is implemented as a built-in codec through the sam
 surface. It is privileged only in that MSBE defines its schema; it does not get a second path
 through the CLI or daemon.
 
+A codec can export only what the lockfile records. §17.5 therefore defines what a lockfile must
+capture: every input that affects a deployed digest, and nothing that changes over time. §17.6
+defines the one identity that plans, provider programs, codecs, and WASM extensions share.
+§17.18 lists what this architecture deliberately does not grow into.
+
 ## 17.1 Boundary rule
 
 The rule is exact:
@@ -74,6 +79,9 @@ A dedicated `msbe-pack-native` crate may be split from `msbe-provider-local` if 
 becomes large. It still registers through `PackCodecRegistration`; moving code does not create a
 new architectural privilege.
 
+`msbe-provider-local` does not exist yet. Phase D creates it; until then the native codec lives
+unregistered in `msbe-pack`.
+
 The current `msbe-pack` implementation violates this boundary because it contains Modrinth and
 CurseForge wire types, and the current CLI violates it by constructing Minecraft and loader
 fields. Those are migration debt, not precedent.
@@ -108,6 +116,12 @@ pub struct PackCodecRegistration {
 }
 ```
 
+A pack codec is reviewed native code today. The contract in §17.4 passes only host-owned views
+and serializable records, so the same contract can later be served by a sandboxed WASM codec,
+loaded through the extension envelope (§17.6) with no network, filesystem, clock, or randomness.
+For pure bytes-to-records translation a sandbox is a stronger boundary than review, so
+third-party formats should arrive as WASM codecs rather than as new native crates (Phase F).
+
 Codec metadata is returned by the implementation rather than interpreted as executable behavior
 from provider TOML. A provider manifest may declare policy and display metadata, but an unknown
 manifest never activates a generic archive parser.
@@ -134,12 +148,17 @@ same fail-closed registry. It rejects:
 
 - duplicate codec IDs;
 - a codec claiming a provider other than its registration;
-- an extension or media-type collision with equal detection priority;
 - a codec whose option schema is invalid;
 - a codec enabled while its provider policy is unavailable;
 - a provider program whose signature, schema, runtime, or vocabulary is unsupported;
 - a native manifest without a matching reviewed registration;
-- an uncompiled manifest that claims codec behavior.
+- an uncompiled manifest that claims codec behavior;
+- a WASM codec whose extension envelope, signature, or capability request is invalid.
+
+Extensions and media types may overlap. CurseForge modpacks and Thunderstore packages are both
+`.zip` archives with a root `manifest.json`, so a registry that refused shared extensions would
+refuse real formats. Detection is decided by probe confidence (§17.12); an extension only orders
+which codecs probe first.
 
 Clients retrieve descriptors from the daemon. They do not hardcode a list of formats.
 
@@ -152,11 +171,11 @@ extension crate.
 pub trait PackCodec: fmt::Debug + Send + Sync {
     fn descriptor(&self) -> &PackCodecDescriptor;
 
-    fn probe(&self, input: &mut dyn ReadSeek) -> Result<Probe, PackCodecError>;
+    fn probe(&self, input: &dyn PackInput) -> Result<PackProbe, PackCodecError>;
 
     fn plan_import(
         &self,
-        input: &mut dyn ReadSeek,
+        input: &dyn PackInput,
         context: &PackImportContext,
         options: &PackOptions,
     ) -> Result<PackImportPlan, PackCodecError>;
@@ -167,22 +186,61 @@ pub trait PackCodec: fmt::Debug + Send + Sync {
         options: &PackOptions,
     ) -> Result<PackExportPlan, PackCodecError>;
 
-    fn export(
-        &self,
-        plan: &PackExportPlan,
-        blobs: &dyn BlobReader,
-        output: &mut dyn WriteSeek,
-    ) -> Result<PackExportResult, PackCodecError>;
+    fn layout(&self, plan: &PackExportPlan) -> Result<PackLayout, PackCodecError>;
 }
 ```
 
-`probe` reads bounded leading bytes and archive entry names. File extension is a hint, never the
-only detector. Probing cannot access the network, mutate state, or extract arbitrary archive
-content.
-
 `plan_import` and `plan_export` are pure planning phases. They expose every acquisition,
 embedded blob, omission, policy decision, incompatibility, and warning before bytes are written.
-This keeps preview and execution on the same path.
+This keeps preview and execution on the same path. `layout` is equally pure: it maps a validated
+plan to entries.
+
+### Host-owned containers
+
+A codec never opens, decompresses, or writes a container. The host does, through `msbe-archive`,
+so the limits in §17.15 and the determinism rules in §17.9 are enforced once instead of being
+trusted to every codec.
+
+```rust
+/// A bounded view of a pack input whose paths and sizes the host has already validated.
+pub trait PackInput {
+    fn container(&self) -> ContainerKind;
+    /// Every entry, with a normalized safe path and declared size, in lexical order.
+    fn entries(&self) -> &[PackEntry];
+    /// Reads one entry, failing past `limit` or the host's manifest ceiling.
+    fn read(&self, path: &RelPath, limit: u64) -> Result<Vec<u8>, PackCodecError>;
+}
+
+/// The entries an export contains. The host writes, hashes, and verifies them.
+pub struct PackLayout {
+    pub container: ContainerKind,
+    pub entries: Vec<LayoutEntry>,
+}
+
+pub struct LayoutEntry {
+    pub path: RelPath,
+    pub content: EntryContent,
+}
+
+pub enum EntryContent {
+    /// Streamed from the store; blob bytes never pass through the codec.
+    Blob(Digest),
+    /// Codec-generated manifest bytes, bounded by the manifest ceiling.
+    Inline(Vec<u8>),
+}
+```
+
+`ContainerKind` is a closed set: deterministic ZIP, directory, and single file. Directory input
+admits instance folders from other launchers and managers without a round trip through an
+archive. A format whose container is none of these is a documented native exception, reviewed
+like a native provider, and its output must still pass the host's hash and manifest verification.
+
+`probe` reads bounded leading bytes and entry names through `PackInput`. File extension is a
+hint, never the only detector. Probing cannot access the network, mutate state, or read past its
+bound.
+
+`PackInput` maps directly onto host imports and every record is serializable, so a sandboxed WASM
+codec can implement this contract unchanged (§17.3).
 
 ### Import records
 
@@ -190,42 +248,58 @@ This keeps preview and execution on the same path.
 pub struct PackImportPlan {
     pub codec: String,
     pub title: Option<String>,
+    pub origin: PackOrigin,
     pub target: ImportedTarget,
+    pub environment: Vec<EnvironmentRequirement>,
     pub requirements: Vec<PackRequirement>,
     pub embedded: Vec<EmbeddedBlob>,
     pub warnings: Vec<PackWarning>,
 }
 
-pub enum PackRequirement {
-    Provider {
-        package: PackageId,
-        version: Option<String>,
-        hashes: BTreeMap<String, String>,
-        destination: Option<RelPath>,
-        side: Availability,
-    },
-    Direct {
-        urls: Vec<String>,
-        hashes: BTreeMap<String, String>,
-        destination: Option<RelPath>,
-        side: Availability,
-    },
-    UserAction {
-        provider: String,
-        reference: String,
-        reason: String,
-        destination: Option<RelPath>,
-    },
+/// The pack an import came from, recorded as the profile's pack layer (§17.5).
+pub struct PackOrigin {
+    pub codec: String,
+    /// The pack's identity across versions, when the format declares one.
+    pub pack: Option<String>,
+    pub version: Option<String>,
+    /// Digest of the input as read.
+    pub digest: Digest,
+}
+
+pub struct PackRequirement {
+    /// Exact bytes, when the format pins them.
+    pub digest: Option<Digest>,
+    pub hashes: BTreeMap<String, String>,
+    pub destination: Option<RelPath>,
+    pub side: Availability,
+    /// Installer answers carried by the format (§17.5).
+    pub answers: InstallAnswers,
+    /// Where the bytes may be obtained, in preference order.
+    pub sources: Vec<RequirementSource>,
+}
+
+pub enum RequirementSource {
+    Provider { package: PackageId, version: Option<String> },
+    Direct { urls: Vec<String> },
+    UserAction { provider: String, reference: String, reason: String },
 }
 ```
 
-The orchestration layer sends `Provider` and `Direct` requirements back through the provider
-registry. A codec never downloads an artifact during parsing. `UserAction` is a normal result for
+A requirement is one set of bytes with ordered alternatives, not one source. The same file is
+often published on several hosts. Import tries each source in order and accepts the first whose
+bytes match every declared hash, so a file removed from one host still resolves from another.
+
+The orchestration layer sends `Provider` and `Direct` sources back through the provider registry.
+A codec never downloads an artifact during parsing. `UserAction` is a normal result for
 browser-assisted or distribution-restricted content.
 
-Embedded files are ingested through the normal archive limits and CAS. Their destination paths
-are validated `RelPath` values and still pass through plan resolution; a codec cannot write into
-a game directory.
+`environment` lists bytes the pack expects from the user's own installation (§17.5). Import
+verifies them before acquiring anything.
+
+Embedded files are declared by entry path and ingested by the host through the normal archive
+limits and CAS; their bytes never pass through the codec. Their destination paths are validated
+`RelPath` values and still pass through plan resolution; a codec cannot write into a game
+directory.
 
 ### Export context
 
@@ -235,12 +309,14 @@ pub struct PackExportContext<'a> {
     pub target: &'a LockedTarget,
     pub lockfile: &'a Lockfile,
     pub files: &'a [PackFile],
+    pub observations: &'a Observations,
 }
 
 pub struct PackFile {
     pub path: RelPath,
     pub digest: Digest,
     pub role: PackFileRole,
+    pub layer: LayerId,
     pub source: BlobSource,
     pub distribution: DistributionDecision,
 }
@@ -250,31 +326,178 @@ pub struct PackFile {
 output, loader component, and other resolved content. This classification is produced while the
 lockfile is built; exporters must not infer ownership from paths such as `config/` or `mods/`.
 
-`BlobSource` states whether the exact digest can be reacquired:
+`distribution` is not read from the lockfile. The planner decides it from the license facts the
+lockfile recorded and the current observations (§17.5).
+
+`BlobSource` states how the exact digest can be reproduced:
 
 ```rust
 pub enum BlobSource {
-    Provider {
-        provenance: Provenance,
-        exact: bool,
-        currently_acquirable: bool,
-    },
-    Direct {
-        urls: Vec<String>,
-        hashes: BTreeMap<String, String>,
-        currently_acquirable: bool,
-    },
+    Provider { provenance: Provenance, exact: bool },
+    Direct { urls: Vec<String>, hashes: BTreeMap<String, String> },
     Local,
     PackOwned,
-    Derived { inputs: Vec<Digest>, deterministic: bool },
+    Environment { root: String, path: RelPath },
+    Derived { inputs: Vec<Digest>, transform: TransformId },
     Component { id: String, version: String },
+    Unknown,
 }
 ```
 
-A provider reference counts as reproducible only when it identifies an exact release/file and
-has a verified digest. A project slug or mutable URL is not enough.
+Whether a source can still be acquired is an observation, not part of the source. A provider
+reference counts as reproducible only when it identifies an exact release/file and has a verified
+digest. A project slug or mutable URL is not enough.
 
-## 17.5 Game and loader identities
+## 17.5 Reproducibility model
+
+A codec can export only what the lockfile records, so pack correctness rests on one invariant:
+
+> Every input that affects a deployed digest has a content identity in the lockfile. Nothing that
+> can change without the user changing the profile is stored in it.
+
+The first half makes strict export and native import possible. The second keeps lockfiles
+diffable and deterministic: resolving the same intent against the same inputs produces the same
+bytes on any day. Each subsection below closes a place where a lockfile would otherwise break one
+half. They are schema facts, cheap to record when content enters a profile and unrecoverable
+afterwards: a lockfile written without them can only be repaired by guessing.
+
+### Profile lineage
+
+An imported pack is an upstream, not a one-time copy. A profile records ordered layers:
+
+```toml
+[[layer]]
+id = "pack"
+kind = "pack"
+codec = "modrinth-mrpack"
+pack = "example-pack"
+version = "1.8"
+digest = "sha256:..."
+
+[[layer]]
+id = "user"
+kind = "changes"
+```
+
+Every locked module, config, and order entry names the layer that introduced it. A `pack` layer is
+replaced as a whole. The `changes` layer records operations against the layers beneath it (add,
+remove, pin, disable, reorder, and config patch) rather than a flattened result. A profile that
+never imported a pack has only a `changes` layer.
+
+Updating a pack re-imports its layer at the new version and reapplies the `changes` layer. A change
+that no longer applies, such as a patch to a config the pack rewrote or a pin on a mod the pack
+removed, is reported as a `LayerConflict` for the user to resolve. It is never silently dropped or
+silently kept. Exports may flatten layers; the native format preserves them.
+
+Layers are recorded at import. An import that flattens a pack into an unlayered profile discards
+the one fact an update needs.
+
+### Environment inputs
+
+Some deployed bytes derive from the user's own installation: a jarmod output built from the
+vanilla client jar, a patch applied to a base game master file, a delta against a shipped
+executable. Those inputs are `BlobSource::Environment { root, path }` with their digest. They are
+never embedded, never acquired from a provider, and never classified as `Unknown`.
+
+`LockedTarget` also pins the installation fingerprint the lockfile was solved against: the
+detected edition or store variant and the digest of each file the plan declares identifying,
+typically the main executable ([08](08-platforms-and-detection.md)). A version string alone is not
+an identity. Two store editions of one game can share a version and differ in exactly the bytes
+that script extenders and patches depend on.
+
+Import verifies the fingerprint and every environment input before acquiring anything. A mismatch
+is `EnvironmentMismatch`, naming the expected and found digests, rather than an integrity failure
+after a long download.
+
+### Derivation identity
+
+`BlobSource::Derived` records what produced an output, not only what went in:
+
+```rust
+pub struct TransformId {
+    /// Digest of the pinned plan, not only its version string.
+    pub plan: Digest,
+    /// The step within the plan.
+    pub step: String,
+    /// Digest of each extension the step ran (§17.6).
+    pub extensions: Vec<Digest>,
+    /// Digest of the normalized step parameters and installer answers.
+    pub parameters: Digest,
+    /// Digest of external data the step read, such as a load-order masterlist revision.
+    pub data: Vec<Digest>,
+    /// Whether the step declares byte-identical output for an identical identity.
+    pub deterministic: bool,
+}
+```
+
+`LockedPlan` gains the plan digest for the same reason. A derived blob may be omitted from an
+export only when its transform is deterministic and every input, extension, and data digest is
+reproducible; otherwise it is unsourceable output (§17.10). When re-derivation on import produces
+different bytes, `DerivationMismatch` names the part of the identity that changed.
+
+### Facts and observations
+
+The lockfile holds facts that stay true: digests, exact references, the license and distribution
+terms declared when the bytes were acquired, and the date they were recorded. Whether a source can
+still be acquired, whether a provider currently permits redistribution, and whether a known-bad
+entry now applies are observations.
+
+Observations live in a dated cache beside the store. Export planning refreshes the ones it needs,
+and nothing ever writes them into the lockfile. `currently_acquirable` and the live distribution
+decision therefore leave `BlobSource` and the locked file classification. An export plan records
+which observations it relied on and when each was taken, so a preview that predates a provider
+change is visibly stale.
+
+### Installer answers
+
+A module's resolved install shape includes the choices made while installing it: FOMOD
+selections, optional-file picks, and extension questions. The locked module records them as
+`InstallAnswers`, keyed by plan step and question ID and opaque to core. Codecs carry them through
+`PackRequirement::answers`, so a format that records choices, such as a curated collection, never
+has to drop them, and replaying an install with recorded answers asks no questions.
+
+### Capture
+
+Games write into mutable paths after deployment, and pack authors routinely tune configs in-game
+before exporting. Capture turns those changes into profile content:
+
+1. Compare every file under the plan's mutable globs and target roots with the deployment record.
+2. Present each changed or new file with its diff, proposed role (`PackOwnedConfig` by default),
+   and the `changes` layer as its destination.
+3. On confirmation, ingest the accepted files into the store and record them as layer operations.
+
+Capture is always explicit. Export never captures implicitly, and capture never adopts a file
+outside the plan's declared roots.
+
+## 17.6 Extension identity
+
+Plans, provider programs, pack codecs, WASM step extensions, component bundles, and external data
+such as masterlists all change deployed bytes. They share one envelope instead of one trust and
+versioning story each:
+
+```toml
+[extension]
+id = "..."
+version = "1.4.0"
+digest = "sha256:..."          # normalized package contents
+provides = ["plan"]            # closed set: plan, provider-program, codec, wasm-step, component, data
+host-api = ">=3, <4"           # supported host contract range
+capabilities = []              # closed vocabulary; empty for pure extensions
+signer = "..."
+```
+
+The loader validates the envelope the same way for every kind: signature and signer trust,
+revocation, host API range, requested capabilities against the kind's permitted set, and digest.
+Kind-specific validation, such as plan schema, provider-program vocabulary, or codec conformance,
+runs afterwards. Key rotation and revocation are defined once, and the registry
+([10](10-registry.md)) is the distribution channel for every kind.
+
+Lockfiles pin extensions by digest wherever they affected a result: the plan, every extension a
+derivation ran, and the data it read (§17.5). Export records the codec's digest alongside its ID
+and schema version. Native registrations compiled into MSBE carry the same envelope with the MSBE
+build as signer, so a native exception is visible as one.
+
+## 17.7 Game and loader identities
 
 The CLI must not translate `fabric` to `fabric-loader`, and core must not know that a Modrinth
 pack uses `minecraft` as a dependency key.
@@ -304,7 +527,7 @@ extension crate.
 Provider-neutral capabilities such as loader `provides`, side, and game version remain in the
 lockfile and may be used by any codec. Wire names remain private.
 
-## 17.6 Option schemas
+## 17.8 Option schemas
 
 Pack options are data supplied by the codec, rendered by CLI/Desktop, and validated by
 `msbe-pack` before the codec runs. Clients do not gain one property or command-line flag per
@@ -346,10 +569,11 @@ format-provided XAML. Constraints use a small reviewed vocabulary such as `requi
 
 Every export persists:
 
-- codec ID and codec schema version;
+- codec ID, digest, and schema version;
 - normalized option values, including defaults;
 - selected preset, if any;
 - MSBE version and lockfile schema;
+- the observations the plan relied on and when each was taken;
 - warnings acknowledged by the user.
 
 This makes an export invocation reproducible and lets the CLI print the exact equivalent of a
@@ -361,7 +585,7 @@ Desktop selection.
 
 | Key               | Values                                       | Meaning                                                              |
 | ----------------- | -------------------------------------------- | -------------------------------------------------------------------- |
-| `purpose`         | `distribute`, `private-transfer`, `backup`   | Determines redistribution policy and warning posture.                |
+| `purpose`         | `distribute`, `private-transfer`             | Redistribution policy and warning posture; backups are snapshots.   |
 | `reproducibility` | `strict`, `allow-user-action`, `best-effort` | Controls whether unresolved exact content fails export.              |
 | `blob-mode`       | `thin`, `portable`, `complete`               | Default embedded-blob selection; codecs may restrict it.             |
 | `on-forbidden`    | `error`, `external-requirement`              | Never permits embedding; chooses failure or an explicit requirement. |
@@ -380,13 +604,14 @@ Schemas may define presets as named complete option maps:
   otherwise.
 - **Portable**: include pack-owned configs and legally embeddable unsourceable content; reference
   exact provider files.
-- **Offline backup**: include every legally embeddable required blob.
+- **Offline**: include every legally embeddable required blob. A complete personal backup is an
+  instance snapshot (§17.10), not a preset.
 - **Public distribution**: fail on unknown or prohibited redistribution and minimize embedded
   third-party content.
 
 Presets are convenience only. The normalized field map is authoritative.
 
-## 17.7 Native `.msbepack` format
+## 17.9 Native `.msbepack` format
 
 `.msbepack` is MSBE's provider-neutral, content-addressed bundle. It is a deterministic ZIP64
 container in schema 1. ZIP is framing, not semantics; readers validate every path and digest and
@@ -404,6 +629,7 @@ example.msbepack
   metadata/
     notices/                    optional licenses/notices selected for distribution
     export-options.toml         normalized codec options
+    observations.toml           observations the export relied on, with dates
   signatures/                   reserved; absent in schema 1
 ```
 
@@ -425,6 +651,11 @@ referenced = 237
 lock_schema = 1
 plan_id = "minecraft"
 plan_version = "0.2.0"
+plan_digest = "sha256:..."
+
+[compatibility.fingerprint]
+edition = "..."
+identifying = { "..." = "sha256:..." }
 ```
 
 No creation timestamp is written in deterministic mode. Entry ordering is lexical, path
@@ -443,7 +674,11 @@ same resolved profile because it preserves:
 - exact provider provenance;
 - components;
 - every deployment path and digest;
-- explicit file role/source metadata added by the lockfile schema revision.
+- explicit file role/source metadata added by the lockfile schema revision;
+- profile layers and the layer that introduced each entry;
+- the installation fingerprint and every environment input;
+- derivation identities;
+- installer answers.
 
 The lockfile remains independently usable outside the archive.
 
@@ -456,30 +691,47 @@ schema = 1
 
 [[requirement]]
 digest = "sha256:..."
-kind = "provider"
-provider = "modrinth"
-project = "..."
-version = "..."
 hashes = { sha512 = "..." }
+
+  [[requirement.source]]
+  kind = "provider"
+  provider = "modrinth"
+  package = "..."
+  version = "..."
+
+  [[requirement.source]]
+  kind = "direct"
+  urls = ["https://..."]
 
 [[requirement]]
 digest = "sha256:..."
-kind = "user-action"
-provider = "nexus"
-reference = "..."
-reason = "Free-account download requires browser confirmation"
+
+  [[requirement.source]]
+  kind = "user-action"
+  provider = "nexus"
+  reference = "..."
+  reason = "Free-account download requires browser confirmation"
+
+[[environment]]
+root = "game"
+path = "versions/1.5.2/1.5.2.jar"
+digest = "sha256:..."
 ```
+
+Sources are alternatives for the same bytes, in preference order (§17.4). Environment entries are
+never satisfied by a download.
 
 A thin bundle may contain no blobs. A portable bundle normally embeds configs, local files, and
 other exact content with no stable source. A complete bundle attempts to embed all required
 blobs that policy allows.
 
-Native import first verifies embedded blobs, then resolves omitted requirements through provider
-adapters, then derives deterministic outputs, and finally checks that every deployment digest in
-the lockfile is available. A mismatch is an integrity failure, never an opportunity to rewrite
+Native import first verifies the installation fingerprint and environment inputs, then embedded
+blobs, then resolves omitted requirements through each requirement's sources in order, then
+derives deterministic outputs, and finally checks that every deployment digest in the lockfile is
+available. A mismatch is an integrity failure, never an opportunity to rewrite
 the lockfile.
 
-## 17.8 Blob inclusion and redistribution
+## 17.10 Blob inclusion and redistribution
 
 “Cannot be sourced from a provider” and “may be redistributed” are different facts.
 
@@ -501,8 +753,8 @@ The decision table is:
 | no           | no/unknown        | Public export fails; private export requires explicit policy and still cannot override a provider prohibition. |
 
 Pack-owned configs are authored by the pack creator and default to embeddable. Local mods have
-unknown distribution rights by default. They may be included in a private transfer/backup after
-an explicit acknowledgement, but public distribution requires affirmative license or provider
+unknown distribution rights by default. They may be included in a private transfer after an
+explicit acknowledgement and are always included in a snapshot, but public distribution requires affirmative license or provider
 policy metadata. A provider's distribution prohibition is not user-overridable.
 
 Derived blobs may be omitted only when every input is available and the derivation is declared
@@ -512,46 +764,85 @@ deterministic under the pinned plan version. Otherwise they are treated as unsou
 new release. It does not mean MSBE ignores distribution rules. If strict reproduction cannot be
 packaged legally, export fails with the exact blocking files and available alternatives.
 
-## 17.9 Export planning and execution
+Environment inputs (§17.5) are never embedded and never acquired. Every export emits them as
+environment requirements. They do not block strict export, because import verifies them against
+the recipient's installation before doing anything else.
+
+### Instance snapshots
+
+A backup is not an export. Hosts remove files regularly, and a backup that must omit whatever a
+provider forbids redistributing fails exactly when it is needed. An instance snapshot is therefore
+a separate operation, not a codec:
+
+- it contains the profile, its layers, the lockfile, the observation cache, and every store blob
+  the lockfile references, regardless of distribution terms;
+- it is written only to a user-chosen local path and marked non-distributable in its manifest;
+- `pack export` never produces one and `pack import` never accepts one;
+- restore verifies every blob digest and writes only MSBE state; deployment remains a separate,
+  previewed step.
+
+MSBE cannot stop a user from copying a snapshot. That is why a snapshot has no pack-format
+identity: nothing in MSBE presents one as shareable.
+
+## 17.11 Export planning and execution
 
 Export is always two-phase:
 
 1. Load or derive the canonical lockfile.
-2. Classify every required digest by role, source, derivability, and distribution decision.
-3. Select a codec from the requested ID or output extension.
-4. Fetch its descriptor and option schema.
-5. Normalize and validate options.
-6. Ask the codec for a `PackExportPlan`.
-7. Merge codec requirements with the neutral blob-inclusion plan.
-8. Present files, references, embedded bytes, estimated size, warnings, and blockers.
-9. On confirmation, stream to a temporary output while hashing.
-10. Finalize the codec, verify its declared manifest, and atomically rename the output.
+2. Refresh the observations the plan needs, recording when each was taken.
+3. Classify every required digest by role, layer, source, derivability, and distribution decision.
+4. Select a codec from the requested ID or output extension.
+5. Fetch its descriptor and option schema.
+6. Normalize and validate options.
+7. Ask the codec for a `PackExportPlan`.
+8. Merge codec requirements with the neutral blob-inclusion plan.
+9. Store the merged plan in the daemon under a plan ID and plan digest, then present files,
+   references, environment inputs, embedded bytes, estimated size, warnings, blockers, and
+   observation ages.
+10. On confirmation of that plan ID and digest, run export as a job: ask the codec for its layout,
+    stream entries to a temporary output while hashing, verify the declared manifest, and
+    atomically rename the output.
 
-`PackExportPlan` contains no open files or callbacks and is serializable over RPC. Desktop preview
-and CLI `--dry-run` therefore show the exact operation that execution uses.
+`PackExportPlan` contains no open files or callbacks and is serializable, so Desktop preview and
+CLI `--dry-run` show the exact operation that execution uses.
+
+Clients receive plans to display, never to submit. Execute takes the plan ID and digest, and the
+daemon runs its own stored copy. A plan is invalidated when its lockfile, options, codec, or
+relied-on observations change; executing an invalidated plan fails with `StalePlan`. A client
+therefore cannot add a forbidden file to `embedded` or alter `codec_state` between preview and
+execution.
 
 The daemon owns execution because it owns lockfiles, CAS access, provider policy, and serialized
 mutation. Clients choose options and output destinations only.
 
-## 17.10 Import planning and execution
+## 17.12 Import planning and execution
 
 Import follows the inverse flow:
 
-1. Probe every permitted codec using bounded reads.
-2. Refuse ambiguous matches and report the candidate codec IDs.
-3. Parse with the selected codec into `PackImportPlan`.
-4. Resolve target compatibility against a selected instance/profile or create-profile request.
-5. Send provider requirements through the normal resolver and policy gate.
-6. Queue browser/user-action requirements without pretending they are failures.
-7. Verify and ingest embedded blobs into CAS.
-8. Require every locked digest to be present or reproducible.
-9. Create a profile only after the complete plan validates.
-10. Preview deployment separately; import never writes the game directory.
+1. Open the input through the host, enforcing §17.15, and probe every permitted codec.
+2. Refuse ambiguous matches, where more than one codec reports the highest confidence, and report
+   the candidate codec IDs.
+3. Parse with the selected codec into `PackImportPlan` and store it under a plan ID and digest.
+4. Resolve target compatibility against a selected instance/profile, a create-profile request,
+   or the existing pack layer being updated.
+5. Verify the installation fingerprint and environment inputs.
+6. Send each requirement's sources through the normal resolver and policy gate, in preference
+   order.
+7. Queue browser/user-action requirements without pretending they are failures.
+8. Verify and ingest embedded blobs into CAS.
+9. Require every locked digest to be present or reproducible.
+10. Only after the complete plan validates, create the profile, or replace the pack layer and
+    reapply the `changes` layer, reporting every `LayerConflict`.
+11. Preview deployment separately; import never writes the game directory.
+
+Import execution is a job ([03](03-architecture.md)). Acquisition reports progress, installer
+questions without recorded answers arrive as job questions, and cancellation leaves no partial
+profile.
 
 External pack manifests that do not pin exact versions or hashes produce an ordinary resolution
 request, not a false lockfile. Native `.msbepack` import preserves its lockfile exactly.
 
-## 17.11 CLI, RPC, and Desktop surfaces
+## 17.13 CLI, RPC, and Desktop surfaces
 
 The generic CLI surface is:
 
@@ -559,9 +850,16 @@ The generic CLI surface is:
 msbe pack formats [--direction import|export] [--game GAME]
 msbe pack options FORMAT [--preset PRESET]
 msbe pack import INSTANCE INPUT [--format FORMAT] [--options FILE] [-p PROFILE] [--dry-run]
+msbe pack update INSTANCE INPUT [--format FORMAT] [-p PROFILE] [--dry-run]
 msbe pack export INSTANCE OUTPUT --format FORMAT [--options FILE] [-p PROFILE] [--dry-run]
+msbe pack capture INSTANCE [-p PROFILE] [--dry-run]
 msbe pack validate INSTANCE [-p PROFILE]
+msbe snapshot create INSTANCE OUTPUT
+msbe snapshot restore INPUT [--dry-run]
 ```
+
+`pack update` replaces a profile's pack layer with another version of the same pack and reapplies
+its `changes` layer (§17.5).
 
 `FORMAT` is a codec ID such as `modrinth-mrpack` or `msbe-native`; aliases and extensions are
 resolved by descriptors. The CLI does not gain `--minecraft-version`, `--fabric-loader`, or
@@ -572,17 +870,30 @@ RPC adds descriptor, schema, preview, and execute methods rather than tunneling 
 ```text
 pack.codec.list
 pack.codec.options
-pack.import.preview
-pack.import.execute
-pack.export.preview
-pack.export.execute
+pack.import.preview     -> { plan_id, plan_digest, plan }
+pack.update.preview     -> { plan_id, plan_digest, plan }
+pack.export.preview     -> { plan_id, plan_digest, plan }
+pack.capture.preview    -> { plan_id, plan_digest, plan }
+pack.import.execute     { plan_id, plan_digest }            # job
+pack.update.execute     { plan_id, plan_digest }            # job
+pack.export.execute     { plan_id, plan_digest }            # job
+pack.capture.execute    { plan_id, plan_digest }            # job
+snapshot.create         { instance, output }                # job
+snapshot.restore        { input }                           # job
 ```
 
-Desktop renders `PackOptionSchema` with native controls, provides presets, and shows an export
-preview grouped into provider references, user actions, embedded configs, embedded local content,
-derived content, and policy blockers. It never contains a Modrinth-specific ViewModel.
+Execute and snapshot methods run only through `job.start` ([03](03-architecture.md)). They report
+progress, surface installer questions, and cancel without leaving a partial profile or output. The
+daemon currently serves one request at a time, so a synchronous import would block every client
+for its full length.
 
-## 17.12 Error model
+Desktop renders `PackOptionSchema` with native controls, provides presets, and shows an export
+preview grouped into provider references, user actions, environment inputs, embedded configs,
+embedded local content, derived content, and policy blockers, with the age of every observation
+the plan relied on. Pack update lists each `changes` operation that no longer applies. Desktop
+never contains a Modrinth-specific ViewModel.
+
+## 17.14 Error model
 
 Pack failures are typed and stable:
 
@@ -601,17 +912,44 @@ Pack failures are typed and stable:
 - `DistributionUnknown`
 - `UserActionRequired`
 - `IntegrityMismatch`
+- `LimitExceeded`
+- `EnvironmentMismatch`
+- `DerivationMismatch`
+- `LayerConflict`
+- `StalePlan`
+- `UntrustedExtension`
 - `CodecFailure`
 
 Errors name the codec and affected package/path/digest. Raw parser or provider error text is
 retained as diagnostic detail but is not the public contract.
 
-## 17.13 Security limits
+## 17.15 Security limits
 
-Every codec obeys shared limits before format-specific parsing:
+The host enforces these limits while opening an input, before any codec code runs (§17.4). A codec
+never sees an entry the host rejected and cannot raise a limit itself.
 
-- bounded manifest bytes, archive entries, total expanded bytes, nesting depth, and compression
-  ratio;
+| Limit                                          | Default | Status                                                         |
+| ---------------------------------------------- | ------- | -------------------------------------------------------------- |
+| Entries per input                              | 100,000 | Implemented: `msbe_archive::Limits::max_entries`               |
+| Expanded bytes per entry                       | 4 GiB   | Implemented: `Limits::max_file_bytes`                          |
+| Expanded bytes per input                       | 16 GiB  | Implemented: `Limits::max_total_bytes`                         |
+| Compression ratio, entries over 1 MiB          | 1,000:1 | Implemented: `Limits::max_ratio`                               |
+| Manifest ceiling per entry read by a codec     | 16 MiB  | Implemented per format in `msbe-pack`; becomes host-wide in A2 |
+| Download without a declared size               | 2 GiB   | Implemented: `msbe_provider_api::DOWNLOAD_LIMIT`               |
+| Archive nesting opened by the host             | 0       | Proposed                                                       |
+| Path length                                    | 1 KiB   | Proposed                                                       |
+| Path components                                | 64      | Proposed                                                       |
+
+A codec descriptor may declare higher entry and expanded-byte ceilings for its format, up to hard
+maximums defined as host constants; complete bundles of large Bethesda profiles legitimately exceed
+16 GiB. The registry validates declared ceilings at load time. Pack content, options, and clients
+never raise a limit, and the ratio, nesting, and path rules have no override.
+
+The host never opens an archive nested inside an input. A nested archive is an ordinary blob, and a
+plan step that later extracts it applies these limits again.
+
+Every input and output also obeys these rules:
+
 - no absolute paths, `..`, backslashes, drive letters, alternate data streams, symlinks, devices,
   or duplicate normalized paths;
 - create-new temporary outputs and atomic final rename;
@@ -626,7 +964,7 @@ Every codec obeys shared limits before format-specific parsing:
 Native bundles do not trust their lockfile merely because MSBE wrote the format. Every embedded
 blob is hashed and every referenced digest is resolved independently.
 
-## 17.14 Migration from the current implementation
+## 17.16 Migration from the current implementation
 
 Migration is incremental, but the end state is non-negotiable.
 
@@ -663,12 +1001,30 @@ The following matches were reviewed and are **not** boundary violations:
 
 This audit is a baseline, not an allowlist. New provider, game, loader, endpoint, or external
 format literals in generic production code require either relocation to an extension or an
-explicit architecture review. Phase D adds an automated guard after the current violations have
+explicit architecture review. Phase E adds an automated guard after the current violations have
 been removed.
+
+### Contract audit (2026-09-12)
+
+The implemented Phase A contracts were reviewed against §17.4 through §17.6. These gaps are not
+boundary violations, but each would be migrated again if an external format moved onto the
+current contract:
+
+| Location                                           | Gap                                                                                                                                                                                                  | Resolved by                                             |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| `msbe-provider-api::codec::PackCodec`              | `probe` and `plan_import` take `&mut dyn ReadSeek` and `export` writes a `WriteSeek`, so each codec parses and writes its own container. Host limits and determinism cannot be enforced centrally, directory inputs are impossible, and the contract cannot be hosted in WASM. | `PackInput` and `PackLayout` (§17.4).                   |
+| `msbe-provider-api::codec::PackRequirement`        | One source per requirement, no digest, and no installer answers.                                                                                                                                     | Per-digest requirements with ordered sources (§17.4).   |
+| `msbe-provider-api::codec::PackExportPlan`         | Serializable with an editable `embedded` list and opaque `codec_state`, and nothing binds a preview to its execution.                                                                                 | Daemon-held plan IDs and digests (§17.11).              |
+| `msbe-core::instance::LockedFileClassification`    | Stores `currently_acquirable` and a live `DistributionDecision` inside the lockfile.                                                                                                                 | Facts and observations (§17.5).                         |
+| `msbe-core::instance::BlobSource`                  | No variant for installation-owned inputs, so jarmod bases classify as `Unknown`; `Derived` records inputs but not the transform.                                                                     | `Environment` and `TransformId` (§17.5).                |
+| `msbe-core::instance::LockedPlan`, `LockedTarget`  | The plan is pinned by version string only; the target pins `game_version` but no installation fingerprint.                                                                                           | Plan digest and fingerprint (§17.5).                    |
+| `msbe-core::instance::LockedModule`, `Profile`     | No layer attribution and no installer answers.                                                                                                                                                       | Profile lineage and installer answers (§17.5).          |
+| `msbe-daemon::handle`                              | Serves one request at a time with no job model.                                                                                                                                                      | Jobs ([03](03-architecture.md)), Phase D.               |
+| `[deploy] mutable` paths                           | `verify` reports runtime changes, but nothing can adopt them into the profile.                                                                                                                       | Capture (§17.5).                                        |
 
 ### Phase A - neutral contracts
 
-Phase A is implemented. The native codec remains intentionally unregistered until Phase C, and
+Phase A is implemented. The native codec remains intentionally unregistered until Phase D, and
 the existing external formats remain on their temporary paths until Phase B.
 
 1. [x] Add `PackCodec`, descriptors, plans, option schemas, file roles, source classifications, and
@@ -678,10 +1034,29 @@ the existing external formats remain on their temporary paths until Phase B.
 3. [x] Extend the lockfile schema with explicit file role/source data needed for blob planning.
 4. [x] Add native codec conformance fixtures and deterministic archive tests.
 
+### Phase A2 - reproducibility contract revision
+
+Phase A2 revises the Phase A contracts before any external format moves onto them, so Phase B
+migrates each format once.
+
+1. Replace `ReadSeek`/`WriteSeek` codec I/O with host-owned `PackInput` and `PackLayout`, and move
+   container reading, writing, limits, and determinism into the host.
+2. Make `PackRequirement` per-digest with ordered sources and installer answers; add `PackOrigin`
+   and environment requirements to `PackImportPlan`.
+3. Revise the lockfile schema: plan digest, installation fingerprint, `BlobSource::Environment`,
+   `TransformId`, installer answers, and layer attribution. Remove `currently_acquirable` and the
+   live distribution decision.
+4. Add the dated observation cache and record relied-on observations in export plans.
+5. Read the previous lockfile schema conservatively: a profile without layers becomes one
+   `changes` layer, a missing fingerprint is detected and recorded at the next lock with a
+   warning, and a derived blob without a transform identity is unsourceable until relocked.
+6. Extend native codec conformance fixtures to layered profiles, environment inputs, and derived
+   outputs.
+
 ### Phase B - move existing formats
 
-1. Move Modrinth wire structs and `.mrpack` ZIP code from `msbe-pack` into
-   `msbe-provider-modrinth`.
+1. Move Modrinth wire structs and `.mrpack` manifest handling from `msbe-pack` into
+   `msbe-provider-modrinth` on the Phase A2 contract. ZIP reading and writing stay in the host.
 2. Move Minecraft/loader dependency mapping from `msbe-cli` into Modrinth codec-owned mapping.
 3. Remove CurseForge wire structs from generic code; reintroduce them only with the reviewed
    CurseForge adapter and codec.
@@ -699,14 +1074,18 @@ the existing external formats remain on their temporary paths until Phase B.
    for documented protocol, update, authentication, or policy semantics the runtime cannot model.
 5. Require every native provider registration to state its exception reason and run the same
    neutral-record, transport, acquisition, and policy conformance suite.
+6. Load plans, provider programs, and native registrations through the shared extension envelope
+   (§17.6), and pin extension digests wherever they affect a lockfile.
 
 ### Phase D - native bundles and clients
 
-1. Register `msbe-native` through the local/native extension.
+1. Create `msbe-provider-local` and register `msbe-native` through it.
 2. Add thin, portable, complete, and public-distribution presets.
-3. Add typed daemon pack RPC.
-4. Render codec schemas and export previews in Desktop.
-5. Keep the current command-run bridge only as a compatibility path until typed RPC ships.
+3. Add the daemon job model and typed pack RPC with daemon-held plan IDs and digests.
+4. Add pack update over profile layers, with `LayerConflict` reporting.
+5. Add capture and instance snapshots.
+6. Render codec schemas, export previews, observation ages, and layer conflicts in Desktop.
+7. Keep the current command-run bridge only as a compatibility path until typed RPC ships.
 
 ### Phase E - compatibility and removal
 
@@ -717,10 +1096,19 @@ the existing external formats remain on their temporary paths until Phase B.
 4. Add CI guards forbidding provider/game/format literals in anything but provider-specific crates
    outside fixtures and user-facing neutral examples.
 
+### Phase F - sandboxed codecs
+
+1. Host `PackCodec` in the WASM runtime with `PackInput` as its only import and no network,
+   filesystem, clock, or randomness.
+2. Load WASM codecs through the extension envelope and run the conformance suite native codecs
+   run.
+3. Deliver new third-party formats as WASM codecs. A new native codec requires a documented
+   exception, as a native provider does.
+
 Until Phase B is complete, the existing implementation is explicitly temporary and must not be
 copied for another format.
 
-## 17.15 Acceptance criteria
+## 17.17 Acceptance criteria
 
 The architecture is complete when:
 
@@ -734,4 +1122,38 @@ The architecture is complete when:
 - public export cannot embed content with forbidden or unknown distribution rights;
 - strict export fails with actionable blockers when exact reproduction is impossible;
 - native import verifies every blob and reaches the original deployment digest map;
-- no generic client or core crate branches on a provider, game, loader, or external format ID.
+- no generic client or core crate branches on a provider, game, loader, or external format ID;
+- codecs never open or write containers, and host limits reject oversized, over-ratio, or unsafe
+  inputs before any codec code runs;
+- resolving the same intent against the same inputs on different days produces a byte-identical
+  lockfile;
+- updating an imported pack preserves `changes` operations and reports every one that no longer
+  applies;
+- native import on a different installation fails with `EnvironmentMismatch` before acquisition,
+  and succeeds on a matching one;
+- every derived blob names its transform, and an export omits one only when that transform is
+  deterministic and all of its inputs are reproducible;
+- installer answers survive export and import, so replaying an install asks no questions;
+- an execute request cannot run any plan other than the one previewed;
+- a snapshot restores every blob the lockfile references, including content that no export may
+  embed.
+
+## 17.18 Deliberate limits
+
+The architecture has four behavioral extension kinds: plans, provider programs, pack codecs, and
+WASM step extensions, each with a documented native exception path. Component bundles and data
+files share the envelope (§17.6) but carry no behavior. New requirements fit one of these. The
+following are out of scope on purpose:
+
+- **No fifth extension kind.** A proposal that seems to need one is first checked against the
+  existing four; most turn out to be a plan step, a provider-program vocabulary term, or a codec.
+- **No merger of codecs and provider programs.** Acquisition and format translation remain
+  separate capabilities with separate registrations (§17.3), even when one provider supplies both.
+- **No general schema language for options.** The option-schema vocabulary stays closed (§17.8).
+  A format that needs richer validation performs it in `plan_export` and reports `InvalidOptions`.
+- **No codec-decided topology.** Plans route files; codecs translate records (§17.1).
+- **No codec-owned containers** outside the documented native exception (§17.4).
+- **No executable behavior from TOML.** An unknown or uncompiled manifest never activates a parser,
+  runtime, or codec (§17.3).
+- **No policy weakening** through options, pack content, or snapshots presented as packs (§17.10).
+- **No time-varying data in lockfiles** (§17.5).
