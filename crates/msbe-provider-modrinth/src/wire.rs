@@ -63,15 +63,20 @@ impl Version {
             .loaders
             .iter()
             .any(|loader| loader_ids.contains(&loader.as_str()));
-        let version_matches = target.loader_version.as_ref().is_none_or(|wanted| {
-            let declared: Vec<&String> = loader_ids
+        let version_matches = target.loader_version.as_deref().is_none_or(|wanted| {
+            let declared: Vec<&str> = loader_ids
                 .iter()
                 .filter_map(|loader| self.loader_versions.get(*loader))
                 .flatten()
+                .map(String::as_str)
                 .collect();
-            declared.is_empty() || declared.contains(&wanted)
+            declared.is_empty() || declared.into_iter().any(|version| version == wanted)
         });
-        self.game_versions.contains(&target.game_version) && loader_matches && version_matches
+        self.game_versions
+            .iter()
+            .any(|version| version == target.game_version.as_str())
+            && loader_matches
+            && version_matches
     }
 
     /// The version as the rest of MSBE sees it.
@@ -201,6 +206,8 @@ pub(crate) struct SearchHit {
     pub(crate) title: String,
     #[serde(default)]
     pub(crate) description: String,
+    #[serde(default)]
+    pub(crate) icon_url: Option<String>,
     #[serde(default)]
     pub(crate) downloads: u64,
     #[serde(default)]

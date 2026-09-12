@@ -4,9 +4,10 @@
              x:Class="MSBE.Desktop.Views.Shell.CommandBarView"
              x:DataType="vm:MainViewModel">
     <Border Classes="shell-header">
-        <Grid ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="16">
+        <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto" ColumnSpacing="12">
             <TextBlock Classes="brand" Text="MSBE" />
-            <Menu Grid.Column="1" Background="Transparent">
+            <Menu Grid.Column="1"
+                  Background="Transparent">
                 <MenuItem Header="File">
                     <MenuItem Header="Refresh instances" Command="{Binding RefreshInstancesCommand}" InputGesture="Ctrl+R" />
                     <Separator />
@@ -20,8 +21,38 @@
                     <MenuItem Header="Settings" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Settings}" InputGesture="Ctrl+," />
                 </MenuItem>
             </Menu>
-            <TextBlock Grid.Column="2" Classes="header-context" Text="{Binding ActiveWorkspaceTitle}" />
-            <Button Grid.Column="3" Classes="command-button" Content="Command" Command="{Binding ToggleCliCommand}" ToolTip.Tip="Open command line (Ctrl+Shift+P)" />
+            <Border x:Name="TitleBarDragRegion"
+                    Grid.Column="2"
+                    Background="Transparent">
+                <TextBlock Classes="header-context"
+                           HorizontalAlignment="Center"
+                           Text="{Binding ActiveWorkspaceTitle}" />
+            </Border>
+            <Button Grid.Column="3"
+                    Classes="command-button"
+                    Content="Command"
+                    Command="{Binding ToggleCliCommand}"
+                    ToolTip.Tip="Open command line (Ctrl+Shift+P)" />
+            <StackPanel Grid.Column="4" Margin="4,0,0,0" Orientation="Horizontal">
+                <Button x:Name="MinimizeButton"
+                        Classes="caption-button"
+                        AutomationProperties.Name="Minimize window"
+                        ToolTip.Tip="Minimize">
+                    <LucideIcon Kind="Minus" Size="15" StrokeWidth="1.8" />
+                </Button>
+                <Button x:Name="MaximizeButton"
+                        Classes="caption-button"
+                        AutomationProperties.Name="Maximize or restore window"
+                        ToolTip.Tip="Maximize or restore">
+                    <LucideIcon Kind="Maximize2" Size="14" StrokeWidth="1.8" />
+                </Button>
+                <Button x:Name="CloseButton"
+                        Classes="caption-button close"
+                        AutomationProperties.Name="Close window"
+                        ToolTip.Tip="Close">
+                    <LucideIcon Kind="X" Size="16" StrokeWidth="1.8" />
+                </Button>
+            </StackPanel>
         </Grid>
     </Border>
 </UserControl>

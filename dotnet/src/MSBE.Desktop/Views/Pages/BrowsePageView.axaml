@@ -1,5 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:asyncImageLoader="clr-namespace:AsyncImageLoader;assembly=AsyncImageLoader.Avalonia"
              xmlns:vm="using:MSBE.Desktop.ViewModels"
              x:Class="MSBE.Desktop.Views.Pages.BrowsePageView"
              x:DataType="vm:MainViewModel">
@@ -22,7 +23,12 @@
                     <KeyBinding Gesture="Enter" Command="{Binding SearchBrowseCommand}" />
                 </TextBox.KeyBindings>
             </TextBox>
-            <Button Grid.Column="1" Classes="primary-button" Content="Search" Command="{Binding SearchBrowseCommand}" />
+            <Button Grid.Column="1" Classes="primary-button" Command="{Binding SearchBrowseCommand}">
+                <StackPanel Orientation="Horizontal" Spacing="7">
+                    <LucideIcon Kind="Search" Size="16" StrokeWidth="2" />
+                    <TextBlock Text="Search" />
+                </StackPanel>
+            </Button>
         </Grid>
 
         <Grid Grid.Row="2" RowDefinitions="Auto,*" RowSpacing="8">
@@ -35,13 +41,23 @@
                 <ListBox Classes="browse-list" ItemsSource="{Binding BrowseResults}" SelectedItem="{Binding SelectedBrowseResult}">
                     <ListBox.ItemTemplate>
                         <DataTemplate x:DataType="vm:BrowseResultItem">
-                            <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="3">
-                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
-                                    <TextBlock FontWeight="SemiBold" Text="{Binding Title}" TextTrimming="CharacterEllipsis" />
-                                    <TextBlock Grid.Column="1" Classes="caption" Text="{Binding DownloadSummary}" />
+                            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="11">
+                                <Border Classes="mod-search-icon" Width="36" Height="36" ClipToBounds="True" ToolTip.Tip="{Binding Title}">
+                                    <Grid>
+                                        <LucideIcon Kind="PackageSearch" Size="18" StrokeWidth="1.8" />
+                                        <Image asyncImageLoader:ImageLoader.Source="{Binding IconSource}"
+                                               RenderOptions.BitmapInterpolationMode="HighQuality"
+                                               Stretch="UniformToFill" />
+                                    </Grid>
+                                </Border>
+                                <Grid Grid.Column="1" RowDefinitions="Auto,Auto,Auto" RowSpacing="3">
+                                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                                        <TextBlock FontWeight="SemiBold" Text="{Binding Title}" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Grid.Column="1" Classes="caption" Text="{Binding DownloadSummary}" />
+                                    </Grid>
+                                    <TextBlock Grid.Row="1" Classes="caption" Text="{Binding Description}" TextWrapping="Wrap" MaxLines="2" />
+                                    <TextBlock Grid.Row="2" Classes="provider-label" Text="{Binding Provider}" />
                                 </Grid>
-                                <TextBlock Grid.Row="1" Classes="caption" Text="{Binding Description}" TextWrapping="Wrap" MaxLines="2" />
-                                <TextBlock Grid.Row="2" Classes="provider-label" Text="{Binding Provider}" />
                             </Grid>
                         </DataTemplate>
                     </ListBox.ItemTemplate>

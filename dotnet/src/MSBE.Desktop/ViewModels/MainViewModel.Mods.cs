@@ -76,9 +76,11 @@ internal sealed partial class MainViewModel
 
     partial void OnSelectedProfileChanged(string? value)
     {
+        this.ClearBrowseResultsForTargetChange();
         if (value is null || this.SelectedInstance is null)
         {
             this.Mods.Clear();
+            this.ClearProfileTarget();
             this.OnPropertyChanged(nameof(this.IsModsEmpty));
             return;
         }
@@ -94,6 +96,7 @@ internal sealed partial class MainViewModel
         this.Mods.Clear();
         this.SelectedMod = null;
         this.ModsError = string.Empty;
+        this.ClearProfileTarget();
         this.OnPropertyChanged(nameof(this.IsModsEmpty));
     }
 
@@ -166,6 +169,7 @@ internal sealed partial class MainViewModel
                 return;
             }
 
+            this.LoadProfileTarget(document.RootElement);
             JsonElement mods = document.RootElement.GetProperty("mods");
             var seen = new HashSet<string>(StringComparer.Ordinal);
             if (document.RootElement.TryGetProperty("order", out JsonElement order))
@@ -198,5 +202,36 @@ internal sealed partial class MainViewModel
             this.IsModsLoading = false;
             this.OnPropertyChanged(nameof(this.IsModsEmpty));
         }
+    }
+
+    private void LoadProfileTarget(JsonElement profile)
+    {
+        if (!profile.TryGetProperty("target", out JsonElement target) || target.ValueKind != JsonValueKind.Object)
+        {
+            this.ClearProfileTarget();
+            return;
+        }
+
+        this.SelectedProfileLoader = target.GetProperty("loader").GetString() ?? string.Empty;
+        this.SelectedProfileLoaderVersion = target.TryGetProperty("loader_version", out JsonElement loaderVersion) && loaderVersion.ValueKind == JsonValueKind.String
+            ? loaderVersion.GetString() ?? string.Empty
+            : string.Empty;
+        string side = target.GetProperty("side").GetString() ?? "client";
+        this.SelectedProfileSide = string.Equals(side, "server", StringComparison.OrdinalIgnoreCase) ? "Server" : "Client";
+    }
+
+    private void ClearProfileTarget()
+    {
+        this.SelectedProfileLoader = string.Empty;
+        this.SelectedProfileLoaderVersion = string.Empty;
+        this.SelectedProfileSide = "Client";
+    }
+
+    private void ClearBrowseResultsForTargetChange()
+    {
+        this.BrowseResults.Clear();
+        this.SelectedBrowseResult = null;
+        this.BrowseError = string.Empty;
+        this.OnPropertyChanged(nameof(this.IsBrowseEmpty));
     }
 }

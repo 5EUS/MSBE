@@ -65,10 +65,10 @@
                   <TextBlock Classes="caption" Text="{Binding Mods.Count, StringFormat={}{0} in this profile}" />
                 </StackPanel>
                 <TextBlock Grid.Column="1" Classes="detail-label" VerticalAlignment="Center" Text="PROFILE" />
-                <ComboBox Grid.Column="2"
-                          MinWidth="140"
-                          ItemsSource="{Binding Profiles}"
-                          SelectedItem="{Binding SelectedProfile}" />
+                <StackPanel Grid.Column="2" MinWidth="160" Spacing="2">
+                  <ComboBox ItemsSource="{Binding Profiles}" SelectedItem="{Binding SelectedProfile}" />
+                  <TextBlock Classes="caption" Text="{Binding SelectedProfileTargetSummary}" />
+                </StackPanel>
                 <Button Grid.Column="3"
                         Classes="secondary-button"
                         Content="Profiles"
@@ -102,11 +102,8 @@
                   <ListBox.ItemTemplate>
                     <DataTemplate x:DataType="vm:ModListItem">
                       <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
-                        <Border Classes="mod-monogram" Width="34" Height="34">
-                          <TextBlock HorizontalAlignment="Center"
-                                     VerticalAlignment="Center"
-                                     FontWeight="SemiBold"
-                                     Text="{Binding Monogram}" />
+                        <Border Classes="mod-icon" Width="34" Height="34" ToolTip.Tip="Installed mod">
+                          <LucideIcon Kind="PackageOpen" Size="18" StrokeWidth="1.8" />
                         </Border>
                         <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
                           <TextBlock FontWeight="SemiBold" Text="{Binding Name}" />

@@ -4,6 +4,6 @@
              RequestedThemeVariant="Dark">
   <Application.Styles>
     <FluentTheme />
-    <StyleInclude Source="avares://MSBE.Desktop/Styles/AppStyles.axaml" />
+    <StyleInclude Source="avares://MSBE/Styles/AppStyles.axaml" />
   </Application.Styles>
 </Application>

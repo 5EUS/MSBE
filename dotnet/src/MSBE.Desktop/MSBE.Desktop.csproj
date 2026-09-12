@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
+    <AssemblyName>MSBE</AssemblyName>
     <ApplicationManifest Condition="'$(RuntimeIdentifier)' == '' or $(RuntimeIdentifier.StartsWith('win'))">app.manifest</ApplicationManifest>
 
     <!--
@@ -16,6 +17,9 @@
     -->
     <InvariantGlobalization>false</InvariantGlobalization>
     <RuntimeIdentifiers>linux-x64;linux-arm64;win-x64;win-arm64;osx-x64;osx-arm64</RuntimeIdentifiers>
+    <DaemonExecutableName>msbe-daemon</DaemonExecutableName>
+    <DaemonExecutableName Condition="$(RuntimeIdentifier.StartsWith('win'))">msbe-daemon.exe</DaemonExecutableName>
+    <DaemonSourcePath>$(MSBuildProjectDirectory)/../../../target/release/$(DaemonExecutableName)</DaemonSourcePath>
   </PropertyGroup>
 
   <ItemGroup>
@@ -24,6 +28,10 @@
 
   <ItemGroup>
     <AvaloniaResource Include="Assets\**" />
+    <Content Include="..\..\..\plans\**\*"
+             Link="plans\%(RecursiveDir)%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>
@@ -35,7 +43,9 @@
     <PackageReference Include="Avalonia.Desktop" />
     <PackageReference Include="Avalonia.Themes.Fluent" />
     <PackageReference Include="Avalonia.Fonts.Inter" />
+    <PackageReference Include="AsyncImageLoader.Avalonia" />
     <PackageReference Include="CommunityToolkit.Mvvm" />
+    <PackageReference Include="Lucide.Avalonia" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="AvaloniaUI.DiagnosticsSupport">
@@ -43,4 +53,12 @@
       <PrivateAssets Condition="'$(Configuration)' != 'Debug'">All</PrivateAssets>
     </PackageReference>
   </ItemGroup>
+
+  <Target Name="BuildDaemonForPublish" BeforeTargets="Publish">
+    <Exec Command="cargo build --release --package msbe-daemon --bin msbe-daemon"
+          WorkingDirectory="$(MSBuildProjectDirectory)/../../.." />
+    <Copy SourceFiles="$(DaemonSourcePath)"
+          DestinationFolder="$(PublishDir)"
+          SkipUnchangedFiles="true" />
+  </Target>
 </Project>

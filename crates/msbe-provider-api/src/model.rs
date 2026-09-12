@@ -25,6 +25,9 @@ pub struct SearchResult {
     pub title: String,
     /// A short provider-supplied summary.
     pub description: String,
+    /// A provider-supplied project icon URL, when available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon_url: Option<String>,
     /// Provider-reported popularity, when available.
     pub downloads: u64,
 }

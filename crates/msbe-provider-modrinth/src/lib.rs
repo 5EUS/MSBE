@@ -128,6 +128,7 @@ impl Search for Modrinth {
                 reference: hit.slug,
                 title: hit.title,
                 description: hit.description,
+                icon_url: hit.icon_url,
                 downloads: hit.downloads,
             })
             .collect())
@@ -332,6 +333,7 @@ mod tests {
             json!({
                 "hits": [{ "project_id": "AANobbMI", "slug": "sodium", "title": "Sodium",
                            "description": "A rendering engine", "downloads": 42,
+                           "icon_url": "https://cdn.modrinth.com/data/AANobbMI/icon.png",
                            "client_side": "required", "server_side": "required", "author": "ignored" }],
                 "offset": 0, "limit": 5, "total_hits": 1
             }),
@@ -345,6 +347,10 @@ mod tests {
         assert_eq!(
             (hit.provider.as_str(), hit.reference.as_str()),
             (ID, "sodium")
+        );
+        assert_eq!(
+            hit.icon_url.as_deref(),
+            Some("https://cdn.modrinth.com/data/AANobbMI/icon.png")
         );
 
         let requests = http.requests.borrow();

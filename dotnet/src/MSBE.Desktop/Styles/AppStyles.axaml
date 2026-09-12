@@ -38,26 +38,56 @@
     <Setter Property="Background" Value="#0E1014" />
     <Setter Property="BorderBrush" Value="#242832" />
     <Setter Property="BorderThickness" Value="0,0,0,1" />
-    <Setter Property="Padding" Value="14,8" />
+    <Setter Property="Height" Value="36" />
+    <Setter Property="Padding" Value="12,0,0,0" />
   </Style>
 
   <Style Selector="TextBlock.brand">
     <Setter Property="Foreground" Value="#F0F2F5" />
-    <Setter Property="FontSize" Value="19" />
+    <Setter Property="FontSize" Value="15" />
     <Setter Property="FontWeight" Value="Bold" />
+    <Setter Property="VerticalAlignment" Value="Center" />
   </Style>
 
   <Style Selector="TextBlock.header-context">
-    <Setter Property="Foreground" Value="#AEB4C0" />
+    <Setter Property="Foreground" Value="#8D94A3" />
     <Setter Property="VerticalAlignment" Value="Center" />
-    <Setter Property="FontSize" Value="15" />
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="FontWeight" Value="SemiBold" />
   </Style>
 
   <Style Selector="Button.command-button">
-    <Setter Property="Background" Value="#285C78" />
-    <Setter Property="Foreground" Value="#F7FAFC" />
+    <Setter Property="Background" Value="#20242C" />
+    <Setter Property="Foreground" Value="#D8DCE4" />
+    <Setter Property="BorderBrush" Value="#343A46" />
+    <Setter Property="BorderThickness" Value="1" />
     <Setter Property="FontWeight" Value="SemiBold" />
-    <Setter Property="CornerRadius" Value="6" />
+    <Setter Property="FontSize" Value="11" />
+    <Setter Property="CornerRadius" Value="4" />
+    <Setter Property="MinHeight" Value="26" />
+    <Setter Property="Padding" Value="10,3" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+
+  <Style Selector="Button.caption-button">
+    <Setter Property="Width" Value="46" />
+    <Setter Property="Height" Value="35" />
+    <Setter Property="Padding" Value="0" />
+    <Setter Property="CornerRadius" Value="0" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="Foreground" Value="#B8BEC9" />
+    <Setter Property="HorizontalContentAlignment" Value="Center" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+  </Style>
+
+  <Style Selector="Button.caption-button:pointerover">
+    <Setter Property="Background" Value="#292E38" />
+    <Setter Property="Foreground" Value="#F3F4F6" />
+  </Style>
+
+  <Style Selector="Button.caption-button.close:pointerover">
+    <Setter Property="Background" Value="#C42B3A" />
+    <Setter Property="Foreground" Value="#FFFFFF" />
   </Style>
 
   <Style Selector="Button.primary-button">
@@ -108,6 +138,7 @@
 
   <Style Selector="Border.shell-header MenuItem">
     <Setter Property="Foreground" Value="#C9CED8" />
+    <Setter Property="Padding" Value="8,5" />
   </Style>
 
   <Style Selector="Border.sidebar TextBox">
@@ -197,9 +228,28 @@
     <Setter Property="Background" Value="#20242C" />
   </Style>
 
-  <Style Selector="Border.mod-monogram">
+  <Style Selector="Border.mod-icon">
     <Setter Property="Background" Value="#263640" />
     <Setter Property="CornerRadius" Value="5" />
+    <Setter Property="HorizontalAlignment" Value="Center" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+
+  <Style Selector="Border.mod-icon LucideIcon">
+    <Setter Property="Foreground" Value="#9FC9BA" />
+    <Setter Property="HorizontalAlignment" Value="Center" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+
+  <Style Selector="Border.mod-search-icon">
+    <Setter Property="Background" Value="#263640" />
+    <Setter Property="CornerRadius" Value="5" />
+  </Style>
+
+  <Style Selector="Border.mod-search-icon LucideIcon">
+    <Setter Property="Foreground" Value="#9FC9BA" />
+    <Setter Property="HorizontalAlignment" Value="Center" />
+    <Setter Property="VerticalAlignment" Value="Center" />
   </Style>
 
   <Style Selector="ListBox.preview-list">

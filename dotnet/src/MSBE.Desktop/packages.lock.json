@@ -2,6 +2,15 @@
   "version": 2,
   "dependencies": {
     "net10.0": {
+      "AsyncImageLoader.Avalonia": {
+        "type": "Direct",
+        "requested": "[3.8.0, )",
+        "resolved": "3.8.0",
+        "contentHash": "5cFMhM7MUD7w3rH+n5pWyVR82loEFuFqANQ/EDDRg0lRKc91PoSq/4vro/ixW/ZQ1TYnXAD6jXRoTjcce2fbUg==",
+        "dependencies": {
+          "Avalonia": "12.0.0"
+        }
+      },
       "Avalonia": {
         "type": "Direct",
         "requested": "[12.1.1, )",
@@ -60,6 +69,15 @@
         "requested": "[8.4.2, )",
         "resolved": "8.4.2",
         "contentHash": "WadCzGEc2U+3e20avRLng4qNtt4zoOGWrdUISqJWrHe3/FSnrYjuM5Sb4yQb09LhkBXrrI4Zt3dLKgRMbItsrg=="
+      },
+      "Lucide.Avalonia": {
+        "type": "Direct",
+        "requested": "[0.2.21, )",
+        "resolved": "0.2.21",
+        "contentHash": "dMzNVK1afj8JwmtpLqRXmxXTyv39c7aGhU/BZAToPkS4JwtIrmzdfLeMmE92G19uECvJ6YpLAJH3SAQaauST6g==",
+        "dependencies": {
+          "Avalonia": "11.3.17"
+        }
       },
       "Meziantou.Analyzer": {
         "type": "Direct",

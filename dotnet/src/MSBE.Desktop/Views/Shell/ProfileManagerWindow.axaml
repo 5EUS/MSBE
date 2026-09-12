@@ -5,8 +5,8 @@
         x:DataType="vm:MainViewModel"
         Title="Manage profiles"
         Background="#121419"
-        Width="720" Height="520"
-        MinWidth="600" MinHeight="440"
+        Width="760" Height="640"
+        MinWidth="640" MinHeight="520"
         CanResize="True">
     <Grid Margin="22" RowDefinitions="Auto,Auto,*,Auto" RowSpacing="18">
         <StackPanel Spacing="4">
@@ -24,33 +24,57 @@
                 <ListBox Grid.Row="1" Classes="profile-list" ItemsSource="{Binding Profiles}" SelectedItem="{Binding SelectedProfile}" />
             </Grid>
 
-            <StackPanel Grid.Column="1" Spacing="14">
-                <StackPanel Spacing="5">
-                    <TextBlock Classes="field-label" Text="NEW PROFILE NAME" />
-                    <TextBox Text="{Binding NewProfileName}" PlaceholderText="testing" />
+            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
+                <StackPanel Spacing="14">
+                    <StackPanel Spacing="5">
+                        <TextBlock Classes="field-label" Text="NEW PROFILE NAME" />
+                        <TextBox Text="{Binding NewProfileName}" PlaceholderText="testing" />
+                    </StackPanel>
+                    <StackPanel Spacing="5">
+                        <TextBlock Classes="field-label" Text="COPY FROM" />
+                        <ComboBox ItemsSource="{Binding Profiles}" SelectedItem="{Binding NewProfileSource}" PlaceholderText="Start empty" />
+                        <TextBlock Classes="caption" Text="Clear the selection to create an empty profile." />
+                    </StackPanel>
+                    <Button Classes="primary-button"
+                            HorizontalAlignment="Stretch"
+                            Content="Create profile"
+                            IsEnabled="{Binding !IsProfileMutationBusy}"
+                            Command="{Binding CreateProfileCommand}" />
+                    <Border Height="1" Background="#303540" Margin="0,5" />
+                    <StackPanel Spacing="5">
+                        <TextBlock Classes="field-label" Text="SELECTED PROFILE" />
+                        <TextBlock FontWeight="SemiBold" Text="{Binding SelectedProfile}" />
+                        <TextBlock Classes="caption" IsVisible="{Binding IsSelectedProfileDeployed}" Text="This profile is deployed and cannot be deleted." TextWrapping="Wrap" />
+                    </StackPanel>
+                    <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="10" RowSpacing="8">
+                        <StackPanel Spacing="5">
+                            <TextBlock Classes="field-label" Text="MOD LOADER" />
+                            <TextBox Text="{Binding SelectedProfileLoader}" PlaceholderText="fabric" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Spacing="5">
+                            <TextBlock Classes="field-label" Text="LOADER VERSION" />
+                            <TextBox Text="{Binding SelectedProfileLoaderVersion}" PlaceholderText="Optional" />
+                        </StackPanel>
+                        <StackPanel Grid.Row="1" Grid.ColumnSpan="2" Spacing="5">
+                            <TextBlock Classes="field-label" Text="GAME SIDE" />
+                            <ComboBox ItemsSource="{Binding InstanceSides}" SelectedItem="{Binding SelectedProfileSide}" />
+                        </StackPanel>
+                        <Button Grid.Row="2"
+                                Grid.ColumnSpan="2"
+                                Classes="secondary-button"
+                                HorizontalAlignment="Stretch"
+                                Content="Save compatibility target"
+                                IsEnabled="{Binding !IsProfileMutationBusy}"
+                                Command="{Binding SaveProfileTargetCommand}" />
+                    </Grid>
+                    <TextBlock Classes="caption" Text="Browse results and installs use this profile-specific compatibility target." TextWrapping="Wrap" />
+                    <Button Classes="danger-button"
+                            HorizontalAlignment="Stretch"
+                            Content="Delete selected profile"
+                            IsEnabled="{Binding CanRemoveSelectedProfile}"
+                            Command="{Binding RemoveSelectedProfileCommand}" />
                 </StackPanel>
-                <StackPanel Spacing="5">
-                    <TextBlock Classes="field-label" Text="COPY FROM" />
-                    <ComboBox ItemsSource="{Binding Profiles}" SelectedItem="{Binding NewProfileSource}" PlaceholderText="Start empty" />
-                    <TextBlock Classes="caption" Text="Clear the selection to create an empty profile." />
-                </StackPanel>
-                <Button Classes="primary-button"
-                        HorizontalAlignment="Stretch"
-                        Content="Create profile"
-                        IsEnabled="{Binding !IsProfileMutationBusy}"
-                        Command="{Binding CreateProfileCommand}" />
-                <Border Height="1" Background="#303540" Margin="0,5" />
-                <StackPanel Spacing="5">
-                    <TextBlock Classes="field-label" Text="SELECTED PROFILE" />
-                    <TextBlock FontWeight="SemiBold" Text="{Binding SelectedProfile}" />
-                    <TextBlock Classes="caption" IsVisible="{Binding IsSelectedProfileDeployed}" Text="This profile is deployed and cannot be deleted." TextWrapping="Wrap" />
-                </StackPanel>
-                <Button Classes="danger-button"
-                        HorizontalAlignment="Stretch"
-                        Content="Delete selected profile"
-                        IsEnabled="{Binding CanRemoveSelectedProfile}"
-                        Command="{Binding RemoveSelectedProfileCommand}" />
-            </StackPanel>
+            </ScrollViewer>
         </Grid>
 
         <Grid Grid.Row="3" ColumnDefinitions="*,Auto" ColumnSpacing="8">

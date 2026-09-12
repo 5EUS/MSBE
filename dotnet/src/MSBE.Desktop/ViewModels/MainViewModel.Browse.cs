@@ -72,11 +72,21 @@ internal sealed partial class MainViewModel
             using JsonDocument document = JsonDocument.Parse(result.StandardOutput);
             foreach (JsonElement hit in document.RootElement.EnumerateArray())
             {
+                string? iconUrl = null;
+                if (hit.TryGetProperty("icon_url", out JsonElement icon) &&
+                    icon.ValueKind == JsonValueKind.String &&
+                    Uri.TryCreate(icon.GetString(), UriKind.Absolute, out Uri? iconUri) &&
+                    string.Equals(iconUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+                {
+                    iconUrl = iconUri.AbsoluteUri;
+                }
+
                 this.BrowseResults.Add(new BrowseResultItem(
                     hit.GetProperty("provider").GetString() ?? string.Empty,
                     hit.GetProperty("slug").GetString() ?? string.Empty,
                     hit.GetProperty("title").GetString() ?? string.Empty,
                     hit.GetProperty("description").GetString() ?? string.Empty,
+                    iconUrl,
                     hit.GetProperty("downloads").GetUInt64()));
             }
         }

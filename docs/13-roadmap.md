@@ -230,7 +230,8 @@ distributable pack manifest. Accessibility and i18n included, not deferred.
 
 **Current checkpoint (approximately 30%)**: the desktop connects to the local daemon;
 registers and browses instances; creates, clones, selects, and removes profiles; and
-shows profile-ordered mods. Users can add local files, URLs, and provider references,
+shows profile-ordered mods. Profile-specific loader, loader version, and side targets are
+visible and editable, and changing them invalidates stale provider results. Users can add local files, URLs, and provider references,
 remove selected mods, search compatible providers, include required dependencies, and
 install a result into the selected profile. Deployment has a native review of ordered
 filesystem operations, unchanged and locally kept counts, the exclusion report, explicit

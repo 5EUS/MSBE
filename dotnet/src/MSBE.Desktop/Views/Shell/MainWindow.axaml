@@ -6,6 +6,10 @@
         x:Class="MSBE.Desktop.Views.Shell.MainWindow"
         x:DataType="vm:MainViewModel"
         Title="{Binding Title}"
+        Background="#0E1014"
+        ExtendClientAreaToDecorationsHint="True"
+        ExtendClientAreaTitleBarHeightHint="36"
+        WindowDecorations="None"
         Width="1100" Height="720"
         MinWidth="640" MinHeight="480">
   <Window.KeyBindings>

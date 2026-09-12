@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Diagnostics;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
@@ -8,6 +9,7 @@ namespace MSBE.Client;
 /// <summary>Connects to the local MSBE daemon over its Unix domain socket.</summary>
 public sealed class UnixSocketMsbeClient : IMsbeClient
 {
+    private static readonly SemaphoreSlim DaemonStartupLock = new(1, 1);
     private readonly string socketPath;
     private long nextRequestId;
 
@@ -67,6 +69,31 @@ public sealed class UnixSocketMsbeClient : IMsbeClient
         return Path.Combine(runtimeDirectory, "msbe.sock");
     }
 
+    private static void StartDaemon(string socketPath)
+    {
+        string executableName = OperatingSystem.IsWindows() ? "msbe-daemon.exe" : "msbe-daemon";
+        string executablePath = Path.Combine(AppContext.BaseDirectory, executableName);
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = executablePath,
+            WorkingDirectory = AppContext.BaseDirectory,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        startInfo.ArgumentList.Add("--socket");
+        startInfo.ArgumentList.Add(socketPath);
+
+        try
+        {
+            using Process process = Process.Start(startInfo)
+                ?? throw new IOException($"Cannot start {executablePath}.");
+        }
+        catch (System.ComponentModel.Win32Exception exception)
+        {
+            throw new IOException($"Cannot start {executablePath}.", exception);
+        }
+    }
+
     private static JsonElement GetResult(JsonElement response)
     {
         if (response.TryGetProperty("result", out JsonElement result))
@@ -120,8 +147,7 @@ public sealed class UnixSocketMsbeClient : IMsbeClient
 
     private async Task<JsonDocument> SendAsync(string method, IReadOnlyList<string>? arguments, CancellationToken cancellationToken)
     {
-        using Socket socket = new(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
-        await socket.ConnectAsync(new UnixDomainSocketEndPoint(this.socketPath), cancellationToken).ConfigureAwait(false);
+        using Socket socket = await this.ConnectAsync(cancellationToken).ConfigureAwait(false);
         var stream = new NetworkStream(socket, ownsSocket: false);
         await using (stream.ConfigureAwait(false))
         {
@@ -135,6 +161,68 @@ public sealed class UnixSocketMsbeClient : IMsbeClient
             string response = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false)
                 ?? throw new IOException("The daemon closed the connection before replying.");
             return JsonDocument.Parse(response);
+        }
+    }
+
+    private async Task<Socket> ConnectAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await this.OpenSocketAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (SocketException)
+        {
+            await this.EnsureDaemonStartedAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        for (int attempt = 0; attempt < 100; attempt++)
+        {
+            try
+            {
+                return await this.OpenSocketAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (SocketException) when (attempt < 99)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(20), cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        throw new IOException($"Cannot connect to msbe-daemon at {this.socketPath}.");
+    }
+
+    private async Task EnsureDaemonStartedAsync(CancellationToken cancellationToken)
+    {
+        await DaemonStartupLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            try
+            {
+                using Socket socket = await this.OpenSocketAsync(cancellationToken).ConfigureAwait(false);
+                return;
+            }
+            catch (SocketException)
+            {
+                StartDaemon(this.socketPath);
+            }
+        }
+        finally
+        {
+            DaemonStartupLock.Release();
+        }
+    }
+
+    private async Task<Socket> OpenSocketAsync(CancellationToken cancellationToken)
+    {
+        Socket socket = new(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+        try
+        {
+            await socket.ConnectAsync(new UnixDomainSocketEndPoint(this.socketPath), cancellationToken).ConfigureAwait(false);
+            return socket;
+        }
+        catch
+        {
+            socket.Dispose();
+            throw;
         }
     }
 }

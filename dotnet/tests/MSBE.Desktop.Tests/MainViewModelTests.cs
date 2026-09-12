@@ -116,7 +116,7 @@ public sealed class MainViewModelTests
     {
         const string StatusJson = """{"name":"alpha","root":"/games/alpha","plan_id":"minecraft","plan_version":"1","loader":"fabric","game_version":"1.21.1","deployed_profile":"default","deployed_files":2}""";
         const string ProfilesJson = """{"profiles":["testing","default"],"deployed":"default"}""";
-        const string ModsJson = """{"order":["iris"],"components":{},"mods":{"iris":{"origin":"iris.jar","provider":{"provider":"modrinth","project":"iris","version":"v1","version_number":"1.8.0","hashes":{}},"files":[{"source":"iris.jar","blob":"sha256:01"}]},"sodium":{"origin":"sodium.jar","files":[{"source":"sodium.jar","blob":"sha256:02"}]}}}""";
+        const string ModsJson = """{"target":{"loader":"fabric","loader_version":"0.16.10","side":"client"},"order":["iris"],"components":{},"mods":{"iris":{"origin":"iris.jar","provider":{"provider":"modrinth","project":"iris","version":"v1","version_number":"1.8.0","hashes":{}},"files":[{"source":"iris.jar","blob":"sha256:01"}]},"sodium":{"origin":"sodium.jar","files":[{"source":"sodium.jar","blob":"sha256:02"}]}}}""";
         var client = new TestClient(arguments =>
         {
             if (arguments.Contains("status", StringComparer.Ordinal))
@@ -140,6 +140,7 @@ public sealed class MainViewModelTests
         Assert.Equal("modrinth", vm.Mods[0].Source);
         Assert.Equal("1.8.0", vm.Mods[0].Version);
         Assert.Equal("Local file", vm.Mods[1].Source);
+        Assert.Equal("fabric 0.16.10 · Client", vm.SelectedProfileTargetSummary);
         Assert.False(vm.IsModsEmpty);
     }
 
@@ -202,7 +203,7 @@ public sealed class MainViewModelTests
         const string StatusJson = """{"name":"alpha","root":"/games/alpha","plan_id":"minecraft","plan_version":"1","loader":"fabric","game_version":"1.21.1","deployed_profile":"default","deployed_files":2}""";
         const string ProfilesJson = """{"profiles":["default"],"deployed":"default"}""";
         const string ModsJson = """{"order":[],"components":{},"mods":{}}""";
-        const string SearchJson = """[{"provider":"modrinth","project":"AANobbMI","slug":"sodium","title":"Sodium","description":"Rendering optimization","downloads":12000000}]""";
+        const string SearchJson = """[{"provider":"modrinth","project":"AANobbMI","slug":"sodium","title":"Sodium","description":"Rendering optimization","icon_url":"https://cdn.modrinth.com/data/AANobbMI/icon.png","downloads":12000000}]""";
         List<IReadOnlyList<string>> calls = [];
         var client = new TestClient(arguments =>
         {
@@ -236,6 +237,7 @@ public sealed class MainViewModelTests
         await vm.AddBrowseResultCommand.ExecuteAsync(parameter: null);
 
         Assert.Equal("Sodium", vm.SelectedBrowseResult.Title);
+        Assert.Equal("https://cdn.modrinth.com/data/AANobbMI/icon.png", vm.SelectedBrowseResult.IconSource);
         Assert.Contains(calls, arguments => arguments.SequenceEqual(
             ["--format", "json", "search", "alpha", "rendering", "--profile", "default", "--limit", "30"],
             StringComparer.Ordinal));
@@ -282,6 +284,48 @@ public sealed class MainViewModelTests
             StringComparer.Ordinal));
         Assert.Equal("testing", vm.SelectedProfile);
         Assert.False(vm.HasProfileMutationError);
+    }
+
+    /// <summary>Profile compatibility changes invalidate search results and use the structured target command.</summary>
+    /// <returns>A task representing the test.</returns>
+    [Fact]
+    public async Task SaveProfileTargetRefreshesCompatibilityContext()
+    {
+        const string StatusJson = """{"name":"alpha","root":"/games/alpha","plan_id":"minecraft","plan_version":"1","loader":"fabric","game_version":"1.21.1","deployed_profile":"default","deployed_files":2}""";
+        const string ProfilesJson = """{"profiles":["default"],"deployed":"default"}""";
+        const string ProfileJson = """{"target":{"loader":"neoforge","loader_version":"21.1.200","side":"server"},"order":[],"components":{},"mods":{}}""";
+        List<IReadOnlyList<string>> calls = [];
+        var client = new TestClient(arguments =>
+        {
+            calls.Add(arguments);
+            if (arguments.Contains("status", StringComparer.Ordinal))
+            {
+                return new CommandResult(0, StatusJson, string.Empty);
+            }
+
+            if (arguments.Contains("list", StringComparer.Ordinal))
+            {
+                return new CommandResult(0, ProfilesJson, string.Empty);
+            }
+
+            return arguments.Contains("set-target", StringComparer.Ordinal)
+                ? new CommandResult(0, "{\"loader\":\"neoforge\",\"loader_version\":\"21.1.200\",\"side\":\"server\"}", string.Empty)
+                : new CommandResult(0, ProfileJson, string.Empty);
+        });
+        MainViewModel vm = new(client) { SelectedInstance = "alpha" };
+        vm.BrowseResults.Add(new BrowseResultItem("modrinth", "create", "Create", "Aesthetic technology", null, 1));
+        vm.SelectedProfileLoader = "neoforge";
+        vm.SelectedProfileLoaderVersion = "21.1.200";
+        vm.SelectedProfileSide = "Server";
+
+        await vm.SaveProfileTargetCommand.ExecuteAsync(parameter: null);
+
+        Assert.Contains(calls, arguments => arguments.SequenceEqual(
+            ["--format", "json", "profile", "set-target", "alpha", "default", "--loader", "neoforge", "--side", "server", "--loader-version", "21.1.200"],
+            StringComparer.Ordinal));
+        Assert.Empty(vm.BrowseResults);
+        Assert.Equal("neoforge 21.1.200 · Server", vm.SelectedProfileTargetSummary);
+        Assert.Equal("Updated compatibility for default.", vm.StatusMessage);
     }
 
     /// <summary>Source add, selected removal, and rollback use their structured daemon commands.</summary>

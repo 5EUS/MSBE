@@ -903,7 +903,9 @@ fn profile_command(
         }
         ProfileCommand::Show { instance, name } => {
             let opened = open(home, instance, console)?;
-            let profile = opened.profile(&Name::new(name)?)?;
+            let name = Name::new(name)?;
+            let mut profile = opened.profile(&name)?;
+            profile.target = Some(opened.profile_target(&name)?);
             console.emit(&profile, |out, profile| {
                 if profile.mods.is_empty() {
                     return writeln!(out, "No mods.");
