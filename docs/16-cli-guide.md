@@ -196,9 +196,12 @@ component are not implemented.
   --root "$HOME/Games/No Man's Sky" \
   --plan plans/nomanssky/plan.toml \
   --loader none
-"$MSBE" add nms "$HOME/Downloads/example.pak"
+"$MSBE" add nms "$HOME/Downloads/example-mod.zip"
 "$MSBE" deploy nms
 ```
+
+Text documentation and AMUMSS status files are quarantined and reported in the deployment
+preview, rather than copied into the game's mod directory.
 
 ## 6. Implemented command reference
 

@@ -178,15 +178,22 @@ models that are structurally unlike the modern one.
 cleanly, and the plan schema needed no new step kinds to express them. If it did need
 new steps, that is the finding and it is cheap to act on now.
 
-## M4 — Second game: No Man's Sky, local archives only (1–2 weeks)
+## M4 — Second game: No Man's Sky, local archives only (1–2 weeks) — **implemented**
 
 **This milestone is a measurement, not a feature.** Everything learned across M1–M3
 claims to be game-agnostic; NMS is where that claim gets tested by someone writing a plan
 for an unrelated game with no core changes.
 
 Scope deliberately excludes acquisition: mods come from local zips and direct URLs. Pure
-install topology — extract, hygiene filter, place `.pak` files, lexical ordering, optional
-pak-check component.
+install topology — extract, hygiene filter, preserve each mod source tree beneath
+`GAMEDATA/MODS`, optional pak-check component.
+
+**Result (2026-09-11):** the first-party plan deployed a real local collection of No Man's
+Sky archives on Linux without changes to `msbe-core`. In addition to generated `.pak` files,
+the collection contained AMUMSS Lua, EXML, MBIN, and asset source trees, which the plan
+preserves under `GAMEDATA/MODS`. Documentation and AMUMSS status text are quarantined in the
+content store and reported in deployment previews. Full game-launch validation and pak-check
+support remain open.
 
 **Done when**: the NMS plan is written and tested _without modifying `msbe-core`_. If it
 takes more than two weeks, or if core had to change, the eight axes are wrong and the
