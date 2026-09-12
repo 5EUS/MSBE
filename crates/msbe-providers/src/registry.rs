@@ -1,20 +1,42 @@
 //! The fail-closed mapping from provider manifests to reviewed adapters.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use msbe_provider_api::{
-    Adapter, AdapterError, Catalog, HttpClient, ManifestError, Overlay, OverlayError, PackCodec,
-    PackCodecDescriptor, PackCodecError, PackInput, Provider, Registration, Target,
+    Adapter, AdapterError, Catalog, ExtensionCapability, ExtensionEnvelope, ExtensionProvide,
+    HostApiRange, HttpClient, ManifestError, Overlay, OverlayError, PackCodec,
+    PackCodecDescriptor, PackCodecError, PackInput, ProgramError, Provider, ProviderProgram,
+    ProviderProgramEnvelope, Registration, SigningKey, Target, VerifyingKey,
     model::{Request, SearchResult},
     resolve::{Adapters, ResolveError},
 };
 use thiserror::Error;
 
+use crate::runtime;
+
 /// The adapters MSBE ships. A new provider is a crate beside these and one line here.
-pub const BUILTIN: &[Registration] = &[
-    msbe_provider_direct::REGISTRATION,
-    msbe_provider_modrinth::REGISTRATION,
-];
+pub const BUILTIN: &[Registration] = &[msbe_provider_modrinth::REGISTRATION];
+
+const DIRECT_PROGRAM: &str = r#"
+runtime = "direct-url-v1"
+
+[provider]
+schema = 1
+id = "url"
+name = "Direct URL"
+
+[provider.source]
+type = "https_url"
+
+[provider.acquisition]
+type = "direct_https"
+
+[provider.policy]
+requires_auth = false
+respects_distribution_flag = false
+tos_url = ""
+ack_required = false
+"#;
 
 /// A user-entered source, routed to its provider and parsed by that provider's adapter.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,6 +45,17 @@ pub struct Routed {
     pub provider: String,
     /// What the source asks the provider for.
     pub request: Request,
+}
+
+/// Trust inputs supplied by the registry root for declarative provider programs.
+#[derive(Debug, Clone, Default)]
+pub struct ProgramTrust {
+    /// Signer identities and Ed25519 verifying keys allowed to introduce programs.
+    pub trusted_keys: BTreeMap<String, VerifyingKey>,
+    /// Signer identities no longer permitted to introduce programs.
+    pub revoked_signers: BTreeSet<String>,
+    /// Content digests that are no longer permitted.
+    pub revoked_digests: BTreeSet<String>,
 }
 
 /// Validated provider manifests, the adapters that serve them, and the overlay those adapters
@@ -49,7 +82,14 @@ impl Providers {
     /// Returns [`RegistryError`] if a built-in manifest or overlay entry is invalid. This
     /// indicates a build error in MSBE rather than user-provided input.
     pub fn builtins() -> Result<Self, RegistryError> {
-        Self::new(BUILTIN, &[])
+        let direct = builtin_direct_program()?;
+        let trust = ProgramTrust {
+            trusted_keys: [("msbe-builtin".to_owned(), builtin_signing_key().verifying_key())]
+                .into(),
+            revoked_signers: BTreeSet::new(),
+            revoked_digests: BTreeSet::new(),
+        };
+        Self::new_with_programs(BUILTIN, &[], &[&direct], &trust)
     }
 
     /// Registers `registrations`, plus `manifests` no compiled adapter serves, such as ones a
@@ -61,10 +101,45 @@ impl Providers {
     /// Returns [`RegistryError`] if a manifest or overlay entry is invalid, or a registration
     /// builds an adapter for a provider other than its manifest's.
     pub fn new(registrations: &[Registration], manifests: &[&str]) -> Result<Self, RegistryError> {
+        Self::new_with_programs(registrations, manifests, &[], &ProgramTrust::default())
+    }
+
+    /// Registers reviewed adapters and trusted declarative provider programs.
+    ///
+    /// Programs are structurally validated, then checked against the caller-supplied signer
+    /// allowlist and revocation set before their reviewed runtime is selected.
+    pub fn new_with_programs(
+        registrations: &[Registration],
+        manifests: &[&str],
+        program_documents: &[&str],
+        trust: &ProgramTrust,
+    ) -> Result<Self, RegistryError> {
+        let programs: Vec<ProviderProgramEnvelope> = program_documents
+            .iter()
+            .map(|document| ProviderProgramEnvelope::from_toml(document))
+            .collect::<Result<_, _>>()?;
+        for envelope in &programs {
+            if trust.revoked_signers.contains(&envelope.0.signer) {
+                return Err(RegistryError::RevokedProgramSigner(envelope.0.signer.clone()));
+            }
+            if trust.revoked_digests.contains(&envelope.0.package_digest) {
+                return Err(RegistryError::RevokedProgram(envelope.0.package_digest.clone()));
+            }
+            envelope.verify(&trust.trusted_keys)?;
+        }
+        let program_manifests: Vec<String> = programs
+            .iter()
+            .map(|envelope| {
+                toml::to_string(&envelope.0.payload.provider).map_err(|error| {
+                    RegistryError::Program(ProgramError::Canonical(error.to_string()))
+                })
+            })
+            .collect::<Result<_, _>>()?;
         let documents: Vec<&str> = registrations
             .iter()
             .map(|registration| registration.manifest)
             .chain(manifests.iter().copied())
+            .chain(program_manifests.iter().map(String::as_str))
             .collect();
         let catalog = Catalog::from_toml(&documents)?;
         let mut adapters = BTreeMap::new();
@@ -73,6 +148,11 @@ impl Providers {
         let mut media_types = BTreeMap::new();
         let mut overlay = Vec::new();
         for registration in registrations {
+            if registration.exception_reason.trim().is_empty() {
+                return Err(RegistryError::MissingNativeException(
+                    registration.id.to_owned(),
+                ));
+            }
             let provider = catalog.provider(registration.id)?;
             let adapter = (registration.build)(provider)?;
             if adapter.id() != provider.id {
@@ -121,6 +201,20 @@ impl Providers {
                 );
             }
             overlay.extend_from_slice(registration.overlay);
+        }
+        for envelope in programs {
+            let provider = catalog.provider(&envelope.0.payload.provider.id)?;
+            let adapter = runtime::build(envelope.0.payload)
+                .map_err(|error| RegistryError::ProgramRuntime(error.to_string()))?;
+            if adapter.id() != provider.id {
+                return Err(RegistryError::MismatchedAdapter {
+                    manifest: provider.id.clone(),
+                    adapter: adapter.id().to_owned(),
+                });
+            }
+            if adapters.insert(provider.id.clone(), adapter).is_some() {
+                return Err(RegistryError::DuplicateProgramAdapter(provider.id.clone()));
+            }
         }
         Ok(Self {
             catalog,
@@ -264,6 +358,38 @@ impl Providers {
     }
 }
 
+fn builtin_direct_program() -> Result<String, RegistryError> {
+    let program: ProviderProgram = toml::from_str(DIRECT_PROGRAM)
+        .map_err(|error| RegistryError::Program(ProgramError::Parse(error.to_string())))?;
+    let mut envelope = ExtensionEnvelope {
+        schema: 1,
+        package_digest: ProviderProgramEnvelope::digest_for(&program)?,
+        id: "msbe-direct-url".to_owned(),
+        version: env!("CARGO_PKG_VERSION").to_owned(),
+        provides: vec![ExtensionProvide::ProviderProgramV1],
+        host_api: HostApiRange {
+            minimum: 1,
+            maximum: 1,
+        },
+        capabilities: vec![ExtensionCapability::Network],
+        signer: "msbe-builtin".to_owned(),
+        signature: "00".repeat(64),
+        payload: program,
+    };
+    envelope
+        .sign(&builtin_signing_key())
+        .map_err(ProgramError::from)?;
+    toml::to_string(&ProviderProgramEnvelope(envelope))
+        .map_err(|error| RegistryError::Program(ProgramError::Canonical(error.to_string())))
+}
+
+fn builtin_signing_key() -> SigningKey {
+    SigningKey::from_bytes(&[
+        90, 80, 20, 229, 17, 66, 33, 121, 94, 153, 27, 192, 63, 18, 74, 155, 222, 39, 50,
+        195, 70, 164, 31, 88, 6, 183, 11, 245, 128, 219, 44, 101,
+    ])
+}
+
 impl Adapters for Providers {
     fn lookup(&self, provider: &str) -> Result<&dyn Adapter, ResolveError> {
         self.adapter(provider)
@@ -307,6 +433,24 @@ fn register_hint(
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum RegistryError {
+    /// A native extension did not state why a reviewed runtime cannot serve it.
+    #[error("native provider {0:?} must state an exception reason")]
+    MissingNativeException(String),
+    /// A declarative program failed schema or digest validation.
+    #[error(transparent)]
+    Program(#[from] ProgramError),
+    /// A program signer is not trusted by this registry root.
+    #[error("provider program signer {0:?} is revoked")]
+    RevokedProgramSigner(String),
+    /// A program digest is revoked by this registry root.
+    #[error("provider program digest {0:?} is revoked")]
+    RevokedProgram(String),
+    /// A reviewed runtime could not be constructed from a valid program.
+    #[error("provider program runtime failed: {0}")]
+    ProgramRuntime(String),
+    /// A native registration and a program both attempted to serve one provider.
+    #[error("provider {0:?} is served by both a native registration and a program")]
+    DuplicateProgramAdapter(String),
     /// A manifest is invalid, or no manifest recognizes a source or names a provider.
     #[error(transparent)]
     Manifest(#[from] ManifestError),
@@ -396,13 +540,14 @@ mod tests {
         Adapter, AdapterError, ContainerKind, HttpClient, HttpError, PackCodec,
         PackCodecDescriptor, PackCodecError, PackCodecRegistration, PackDirections, PackEntry,
         PackExportContext, PackExportPlan, PackImportContext, PackImportPlan, PackInput,
-        PackLayout, PackOptionSchema, PackOptions, PackProbe, PackageId, Provider, Registration,
-        SupportSet, Target, model::Request,
+        PackLayout, PackOptionSchema, PackOptions, PackProbe, PackageId, ProgramError, Provider,
+        ProviderProgram,
+        ExtensionCapability, ExtensionEnvelope, ExtensionProvide, HostApiRange,
+        ProviderProgramEnvelope, Registration, SigningKey, SupportSet, Target, model::Request,
     };
-    use msbe_provider_direct::DirectError;
     use serde_json::json;
 
-    use super::{Providers, RegistryError, Routed};
+    use super::{ProgramTrust, Providers, RegistryError, Routed};
 
     struct SearchHttp;
 
@@ -602,6 +747,36 @@ mod tests {
             overlay: &[],
             build: build_example,
             pack_codecs: codecs,
+            exception_reason: "Test adapter.",
+        }
+    }
+
+    fn program(body: &str) -> String {
+        let payload = body.replacen("[program]", "", 1).replace("[program.", "[");
+        let program: ProviderProgram = toml::from_str(&payload).unwrap();
+        let mut envelope = ExtensionEnvelope {
+            schema: 1,
+            package_digest: ProviderProgramEnvelope::digest_for(&program).unwrap(),
+            id: "test-provider".to_owned(),
+            version: "1.0.0".to_owned(),
+            provides: vec![ExtensionProvide::ProviderProgramV1],
+            host_api: HostApiRange { minimum: 1, maximum: 1 },
+            capabilities: vec![ExtensionCapability::Network],
+            signer: "test-root".to_owned(),
+            signature: "00".repeat(64),
+            payload: program,
+        };
+        envelope.sign(&test_signing_key()).unwrap();
+        toml::to_string(&ProviderProgramEnvelope(envelope)).unwrap()
+    }
+
+    fn test_signing_key() -> SigningKey { SigningKey::from_bytes(&[7; 32]) }
+
+    fn trust() -> ProgramTrust {
+        ProgramTrust {
+            trusted_keys: [("test-root".to_owned(), test_signing_key().verifying_key())].into(),
+            revoked_signers: Default::default(),
+            revoked_digests: Default::default(),
         }
     }
 
@@ -670,6 +845,138 @@ mod tests {
     }
 
     #[test]
+    fn native_registrations_must_explain_their_exception() {
+        let mut registration = registration(&[]);
+        registration.exception_reason = " ";
+        assert!(matches!(
+            Providers::new(&[registration], &[]),
+            Err(RegistryError::MissingNativeException(id)) if id == "example"
+        ));
+    }
+
+    #[test]
+    fn programs_fail_closed_for_unknown_signers_and_revocations() {
+        let document = program(
+            r#"
+            [program]
+            runtime = "direct-url-v1"
+            [program.provider]
+            schema = 1
+            id = "program-url"
+            name = "Program URL"
+            [program.provider.source]
+            type = "https_url"
+            [program.provider.acquisition]
+            type = "direct_https"
+            [program.provider.policy]
+            requires_auth = false
+            respects_distribution_flag = false
+            tos_url = ""
+            ack_required = false
+        "#,
+        );
+        assert!(matches!(
+            Providers::new_with_programs(&[], &[], &[&document], &ProgramTrust::default()),
+            Err(RegistryError::Program(ProgramError::Envelope(_)))
+        ));
+        let digest = ProviderProgramEnvelope::from_toml(&document)
+            .unwrap()
+            .0.package_digest;
+        let mut revoked = trust();
+        revoked.revoked_digests.insert(digest);
+        assert!(matches!(
+            Providers::new_with_programs(&[], &[], &[&document], &revoked),
+            Err(RegistryError::RevokedProgram(_))
+        ));
+    }
+
+    #[test]
+    fn trusted_direct_program_routes_and_parses_a_pinned_url() -> Result<(), RegistryError> {
+        let document = program(
+            r#"
+            [program]
+            runtime = "direct-url-v1"
+            [program.provider]
+            schema = 1
+            id = "program-url"
+            name = "Program URL"
+            [program.provider.source]
+            type = "https_url"
+            [program.provider.acquisition]
+            type = "direct_https"
+            [program.provider.policy]
+            requires_auth = false
+            respects_distribution_flag = false
+            tos_url = ""
+            ack_required = false
+        "#,
+        );
+        let providers = Providers::new_with_programs(&[], &[], &[&document], &trust())?;
+        let routed = providers.request(&format!(
+            "https://example.test/mod.jar#sha256={}",
+            "a".repeat(64)
+        ))?;
+        assert_eq!(routed.provider, "program-url");
+        assert!(matches!(routed.request, Request::File(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn trusted_catalog_program_maps_a_bounded_search_fixture() -> Result<(), RegistryError> {
+        let document = program(
+            r#"
+            [program]
+            runtime = "catalog-v1"
+            capabilities = ["search"]
+            [program.provider]
+            schema = 1
+            id = "catalog"
+            name = "Catalog"
+            [program.provider.source]
+            type = "prefixed"
+            prefix = "catalog:"
+            [program.provider.metadata]
+            api_base = "https://api.example.test"
+            [program.provider.acquisition]
+            type = "direct_https"
+            [program.provider.policy]
+            requires_auth = false
+            respects_distribution_flag = false
+            tos_url = ""
+            ack_required = false
+            [program.routes]
+            search = "/search"
+            project = "/project/{reference}"
+            releases = "/project/{project}/releases"
+            [program.mappings]
+            search_items = "/hits"
+            [program.mappings.project]
+            id = "/project_id"
+            title = "/title"
+            slug = "/slug"
+            description = "/description"
+            downloads = "/downloads"
+            [program.mappings.release]
+            id = "/id"
+            number = "/number"
+            published = "/published"
+            files = "/files"
+        "#,
+        );
+        let providers = Providers::new_with_programs(&[], &[], &[&document], &trust())?;
+        let target = Target {
+            loader: "fabric".to_owned(),
+            provides: Vec::new(),
+            loader_version: None,
+            game_version: "1.0".to_owned(),
+            side: Side::Client,
+        };
+        let hits = providers.search("catalog", &SearchHttp, "test", &target, 5)?;
+        assert_eq!(hits[0].title, "Sodium");
+        Ok(())
+    }
+
+    #[test]
     fn codecs_are_validated_looked_up_and_detected() -> Result<(), RegistryError> {
         let providers = Providers::new(&[registration(&[ALPHA])], &[])?;
         assert_eq!(
@@ -731,10 +1038,9 @@ mod tests {
     fn plain_http_reaches_the_direct_adapter_security_error() {
         let providers = Providers::builtins().unwrap();
         match providers.request("http://example.test/mod.jar") {
-            Err(RegistryError::Adapter(AdapterError::Specific(error))) => assert!(matches!(
-                error.downcast_ref::<DirectError>(),
-                Some(DirectError::Insecure(_))
-            )),
+            Err(RegistryError::Adapter(AdapterError::Specific(error))) => {
+                assert!(error.to_string().contains("InsecureUrl"));
+            }
             other => panic!("expected the direct adapter's refusal, got {other:?}"),
         }
     }

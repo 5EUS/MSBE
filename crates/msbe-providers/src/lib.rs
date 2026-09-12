@@ -8,5 +8,6 @@
 //! See `docs/06-providers-and-policy.md`.
 
 mod registry;
+mod runtime;
 
-pub use registry::{BUILTIN, Providers, RegistryError, Routed};
+pub use registry::{BUILTIN, ProgramTrust, Providers, RegistryError, Routed};

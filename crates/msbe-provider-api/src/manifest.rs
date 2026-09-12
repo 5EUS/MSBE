@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// The only provider manifest schema version understood by this release.
@@ -103,7 +103,7 @@ impl<'catalog, 'raw> Source<'catalog, 'raw> {
 }
 
 /// A declarative description of one provider.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Provider {
     /// The manifest schema version.
@@ -161,7 +161,7 @@ impl Provider {
 }
 
 /// A source-recognition rule selected from a closed set.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SourceMatcher {
     /// A provider-specific prefix such as `modrinth:`.
@@ -213,7 +213,7 @@ impl SourceMatcher {
 }
 
 /// A provider metadata endpoint.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Metadata {
     /// The HTTPS API base URL.
@@ -221,7 +221,7 @@ pub struct Metadata {
 }
 
 /// The closed acquisition primitive declared by a provider.
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Acquisition {
     /// MSBE can fetch HTTPS artifacts after a reviewed adapter supplies their URLs and hashes.
@@ -229,7 +229,7 @@ pub enum Acquisition {
 }
 
 /// Policy data declared with a provider definition.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Policy {
     /// Whether the provider requires user authentication.

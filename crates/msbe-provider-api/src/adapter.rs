@@ -31,6 +31,8 @@ pub struct Registration {
     pub build: Build,
     /// Pack formats implemented by this reviewed extension.
     pub pack_codecs: &'static [PackCodecRegistration],
+    /// Why this provider requires reviewed native protocol code instead of a program runtime.
+    pub exception_reason: &'static str,
 }
 
 /// A reviewed provider adapter.

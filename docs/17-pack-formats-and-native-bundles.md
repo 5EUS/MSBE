@@ -1068,16 +1068,23 @@ reviewed codec registry.
 
 ### Phase C - declarative provider runtimes
 
-1. Define the signed provider-program schema and its closed vocabularies for source recognition,
+Phase C provider-program execution is implemented. `direct-url-v1` runs as a signed declarative
+program; Modrinth remains a reviewed native exception because its bulk update and release
+protocol semantics are not yet representable by `catalog-v1`. The shared envelope is active for
+provider programs; applying it to plans, native registrations, codecs, and lockfile pins remains
+the next extension-identity migration.
+
+1. [x] Define the signed provider-program schema and its closed vocabularies for source recognition,
    routes, typed record mappings, compatibility, dependency relations, acquisition, and policy.
-2. Implement bounded `catalog-v1` and direct-URL runtimes plus fixture-based conformance tests.
-3. Load trusted provider programs through `msbe-providers`; report signer, schema, and runtime
-   through the daemon without exposing provider wire details to clients.
-4. Convert the declarative subset of existing providers to programs. Retain native adapters only
+2. [x] Implement bounded `catalog-v1` and direct-URL runtimes plus fixture-based conformance tests.
+3. [x] Load trusted provider programs through `msbe-providers`, enforcing signer-key trust,
+  revocation, payload digests, Ed25519 signatures, supported host API ranges, and closed runtime
+  capabilities. Daemon descriptor reporting follows the typed provider RPC work in Phase D.
+4. [x] Convert the declarative subset of existing providers to programs. Retain native adapters only
    for documented protocol, update, authentication, or policy semantics the runtime cannot model.
-5. Require every native provider registration to state its exception reason and run the same
+5. [x] Require every native provider registration to state its exception reason and run the same
    neutral-record, transport, acquisition, and policy conformance suite.
-6. Load plans, provider programs, and native registrations through the shared extension envelope
+6. [ ] Load plans, provider programs, and native registrations through the shared extension envelope
    (§17.6), and pin extension digests wherever they affect a lockfile.
 
 ### Phase D - native bundles and clients

@@ -16,6 +16,7 @@ publish.workspace      = true
 workspace = true
 
 [dependencies]
+ed25519-dalek = "2.2.0"
 msbe-core            = { version = "0.0.0", path = "../msbe-core" }
 msbe-fsops           = { version = "0.0.0", path = "../msbe-fsops" }
 msbe-plan-schema     = { version = "0.0.0", path = "../msbe-plan-schema" }

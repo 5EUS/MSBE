@@ -98,6 +98,19 @@ document interpreted by a reviewed, fail-closed runtime. The program is the defa
 provider. It declares only a composition of closed vocabulary items; it never supplies code,
 scripts, regular expressions, arbitrary HTTP templates, or response transformations.
 
+## 6.4 Provider programs
+
+Provider programs have a strict envelope with a schema version, signer identity, and SHA-256
+digest of their canonical payload. The registry accepts a program only when its signer is in the
+configured trust allowlist and its digest is not revoked. Unknown fields, unsupported runtimes,
+digest mismatches, untrusted signers, and revoked programs fail closed before an adapter exists.
+
+The runtime vocabulary is closed: `direct-url-v1` parses HTTPS URLs and optional SHA-256/SHA-512
+fragments; `catalog-v1` can use fixed endpoint-relative routes and bounded JSON pointers to map
+search, project, and release data into the neutral provider model. It cannot form arbitrary URLs,
+run scripts, or select a transport. Native registrations must state a non-empty exception reason;
+they remain reserved for protocol semantics the reviewed declarative vocabulary cannot represent.
+
 ```toml
 [runtime]
 type = "catalog-v1"

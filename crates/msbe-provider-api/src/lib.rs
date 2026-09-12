@@ -20,8 +20,10 @@ mod adapter;
 mod artifact;
 mod codec;
 mod endpoint;
+pub mod envelope;
 mod hashing;
 mod http;
+pub mod program;
 pub mod manifest;
 pub mod model;
 pub mod overlay;
@@ -39,14 +41,17 @@ pub use codec::{
     EnvironmentRequirement, ImportedTarget, LayoutEntry, Observation, Observations, PackChoice,
     PackCodec, PackCodecDescriptor, PackCodecError, PackCodecRegistration, PackDirections,
     PackEntry, PackExportContext, PackExportPlan, PackFile, PackFileRole, PackImportContext,
-    PackImportPlan, PackInput, PackLayout, PackOptionConstraint, PackOptionField, PackOptionKind,
-    PackOptionSchema, PackOptionValue, PackOptions, PackOrigin, PackPreset, PackProbe,
-    PackRequirement, PackWarning, PathMode, RequirementSource, SupportSet,
+    PackImportPlan, PackLayout, PackOptionConstraint, PackOptionField, PackOptionKind,
+    PackOptionSchema, PackOptionValue, PackOptions, PackPreset, PackProbe, PackRequirement,
+    PackWarning, PackInput, PackOrigin, PathMode, RequirementSource, SupportSet,
 };
 pub use endpoint::{EndpointError, JsonEndpoint};
+pub use envelope::{EnvelopeError, ExtensionCapability, ExtensionEnvelope, ExtensionProvide, HostApiRange};
 pub use hashing::hex;
 pub use http::{HttpClient, HttpError};
 pub use manifest::{Catalog, ManifestError, Provider, Source};
+pub use program::{Capability, DependencyMapping, FileMapping, Mappings, ObjectMapping, ProgramError, ProviderProgram, ProviderProgramEnvelope, ReleaseMapping, Routes, RuntimeKind};
+pub use ed25519_dalek::{SigningKey, VerifyingKey};
 pub use msbe_core::{instance::Provenance, solver::PackageId};
 pub use overlay::{Overlay, OverlayError};
 pub use target::{Availability, Target};

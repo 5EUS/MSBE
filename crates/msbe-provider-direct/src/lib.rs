@@ -24,6 +24,7 @@ pub const REGISTRATION: Registration = Registration {
     overlay: &[],
     build: |_| Ok(Box::new(Direct)),
     pack_codecs: &[],
+    exception_reason: "Legacy native adapter retained while the declarative direct-url runtime is introduced.",
 };
 
 /// The direct URL adapter.

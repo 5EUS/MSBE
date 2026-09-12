@@ -50,6 +50,7 @@ pub const REGISTRATION: Registration = Registration {
         id: "modrinth-mrpack",
         build: build_pack_codec,
     }],
+    exception_reason: "Modrinth uses reviewed bulk update and release protocol semantics not expressible by catalog-v1.",
 };
 
 fn build_pack_codec() -> Result<Box<dyn PackCodec>, PackCodecError> {
