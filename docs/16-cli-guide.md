@@ -186,9 +186,10 @@ plan preserve runtime changes rather than being overwritten or removed.
 
 ## 5. Current No Man's Sky workflow
 
-The local-only No Man's Sky plan accepts local `.pak` files and archives containing them.
-It extracts eligible files and deploys them flat to `GAMEDATA/MODS`; acquisition and the
-optional pak-check component are not implemented.
+The local-only No Man's Sky plan accepts local files and archives, preserving each
+non-hygiene source path beneath `GAMEDATA/MODS`. This supports generated `.pak` files and
+AMUMSS Lua, EXML, MBIN, and asset source trees. Acquisition and the optional pak-check
+component are not implemented.
 
 ```sh
 "$MSBE" instance add nms \

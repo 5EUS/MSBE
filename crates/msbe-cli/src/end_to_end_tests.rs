@@ -1026,7 +1026,7 @@ fn paper_routes_plugins_to_the_server_plugin_directory() {
 }
 
 #[test]
-fn no_mans_sky_plan_deploys_local_pak_archives_without_core_changes() {
+fn no_mans_sky_plan_preserves_local_mod_source_trees_without_core_changes() {
     let mut world = World::new();
     world.plan = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plans/nomanssky/plan.toml");
     world.add_instance_with_loader("none", None);
@@ -1034,17 +1034,29 @@ fn no_mans_sky_plan_deploys_local_pak_archives_without_core_changes() {
         "nms-mod.zip",
         &[
             ("release/EXAMPLE.pak", b"nms mod"),
-            ("release/readme.txt", b"not deployable"),
+            ("release/Example.lua", b"NMS_MOD_DEFINITION_CONTAINER = {}"),
+            ("release/readme.txt", b"not a mod input"),
         ],
     );
 
     world.json(&["add", "mc", archive.as_str()]);
     world.json(&["deploy", "mc"]);
-    let pak = world.game.join("GAMEDATA/MODS/EXAMPLE.pak");
+    let pak = world.game.join("GAMEDATA/MODS/release/EXAMPLE.pak");
     assert_eq!(fs::read(&pak).unwrap(), b"nms mod");
+    assert_eq!(
+        fs::read(world.game.join("GAMEDATA/MODS/release/Example.lua")).unwrap(),
+        b"NMS_MOD_DEFINITION_CONTAINER = {}"
+    );
+    assert!(!world.game.join("GAMEDATA/MODS/release/readme.txt").exists());
 
     world.json(&["purge", "mc"]);
     assert!(!pak.exists());
+    assert!(
+        !world
+            .game
+            .join("GAMEDATA/MODS/release/Example.lua")
+            .exists()
+    );
 }
 
 #[test]

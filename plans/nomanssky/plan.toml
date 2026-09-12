@@ -1,9 +1,9 @@
 # No Man's Sky.
 #
-# Local archives and files only: eligible .pak files are placed flat into
-# GAMEDATA/MODS. AMUMSS Lua source scripts are retained and reported, but cannot be
-# deployed: they must be compiled into .pak files outside MSBE. Acquisition and the
-# optional pak-check component are deferred.
+# Local archives and files only: each mod input is placed beneath GAMEDATA/MODS with its
+# source path intact. This includes generated .pak files and AMUMSS Lua, EXML, MBIN, and
+# asset source trees. Documentation and AMUMSS status text stay in the store but are not
+# deployed. Acquisition and the optional pak-check component are deferred.
 
 schema  = 1
 id      = "nomanssky"
@@ -20,14 +20,12 @@ targets   = [{ name = "mods", path = "GAMEDATA/MODS" }]
 type = "extract"
 
   [steps.with]
-  allow      = ["**/*.pak"]
-  quarantine = ["**/*.lua"]
   hygiene    = "default"
+  quarantine = ["**/*.txt", "**/*.md", "**/*.markdown"]
 
 [[steps]]
 type = "place"
 
   [steps.with]
   into    = "@loader.targets.mods"
-  include = ["**/*.pak"]
-  flatten = true
+  flatten = false
