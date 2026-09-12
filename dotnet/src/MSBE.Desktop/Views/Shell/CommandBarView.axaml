@@ -14,10 +14,10 @@
                 </MenuItem>
                 <MenuItem Header="View">
                     <MenuItem Header="Toggle library" Command="{Binding ToggleSidebarCommand}" InputGesture="Ctrl+B" />
-                    <MenuItem Header="Instances" Command="{Binding NavigateCommand}" CommandParameter="Instances" />
-                    <MenuItem Header="Games" Command="{Binding NavigateCommand}" CommandParameter="Games" />
-                    <MenuItem Header="Providers" Command="{Binding NavigateCommand}" CommandParameter="Providers" />
-                    <MenuItem Header="Settings" Command="{Binding NavigateCommand}" CommandParameter="Settings" InputGesture="Ctrl+," />
+                    <MenuItem Header="Instances" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Instances}" />
+                    <MenuItem Header="Games" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Games}" />
+                    <MenuItem Header="Providers" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Providers}" />
+                    <MenuItem Header="Settings" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Settings}" InputGesture="Ctrl+," />
                 </MenuItem>
             </Menu>
             <TextBlock Grid.Column="2" Classes="header-context" Text="{Binding ActiveWorkspaceTitle}" />

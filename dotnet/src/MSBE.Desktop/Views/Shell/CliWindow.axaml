@@ -4,12 +4,13 @@
         x:Class="MSBE.Desktop.Views.Shell.CliWindow"
         x:DataType="vm:MainViewModel"
         Title="MSBE Command Line"
+        Background="#121419"
         Width="720" Height="480"
         MinWidth="480" MinHeight="320">
     <Window.KeyBindings>
         <KeyBinding Gesture="Enter" Command="{Binding SubmitCliCommand}" />
     </Window.KeyBindings>
-    <Grid Margin="16" RowDefinitions="*,Auto" RowSpacing="12">
+    <Grid Margin="14" RowDefinitions="*,Auto" RowSpacing="10">
         <TextBox Classes="cli-output" Text="{Binding CliTranscript}" IsReadOnly="True" TextWrapping="Wrap" AcceptsReturn="True" />
         <Grid Grid.Row="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
             <TextBox PlaceholderText="msbe status" Text="{Binding CliInput}" />

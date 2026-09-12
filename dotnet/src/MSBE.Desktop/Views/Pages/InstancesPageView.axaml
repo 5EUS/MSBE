@@ -3,7 +3,7 @@
              xmlns:vm="using:MSBE.Desktop.ViewModels"
              x:Class="MSBE.Desktop.Views.Pages.InstancesPageView"
              x:DataType="vm:MainViewModel">
-  <StackPanel Margin="24" Spacing="12">
+  <StackPanel Margin="8" Spacing="10">
     <TextBlock Classes="sectionHeading" Text="Instances" />
     <TextBlock Classes="caption"
                TextWrapping="Wrap"

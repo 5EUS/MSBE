@@ -12,7 +12,7 @@
     <KeyBinding Gesture="Ctrl+B" Command="{Binding ToggleSidebarCommand}" />
     <KeyBinding Gesture="Ctrl+Shift+P" Command="{Binding ToggleCliCommand}" />
     <KeyBinding Gesture="Ctrl+R" Command="{Binding DetectInstancesCommand}" />
-    <KeyBinding Gesture="Ctrl+," Command="{Binding NavigateCommand}" CommandParameter="Settings" />
+    <KeyBinding Gesture="Ctrl+," Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Settings}" />
   </Window.KeyBindings>
   <Grid RowDefinitions="Auto,*,Auto">
     <shell:CommandBarView />

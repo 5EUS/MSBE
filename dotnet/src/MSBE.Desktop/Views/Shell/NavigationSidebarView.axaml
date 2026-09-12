@@ -3,22 +3,24 @@
              xmlns:vm="using:MSBE.Desktop.ViewModels"
              x:Class="MSBE.Desktop.Views.Shell.NavigationSidebarView"
              x:DataType="vm:MainViewModel">
-    <Border Classes="sidebar" Width="260" IsVisible="{Binding IsSidebarExpanded}">
-        <Grid RowDefinitions="Auto,Auto,Auto,*,Auto" RowSpacing="12">
-            <TextBlock Classes="sidebar-label" Text="WORKSPACE" />
-            <StackPanel Grid.Row="1" Spacing="2">
-                <Button Classes="nav-button" Content="Instances" Command="{Binding NavigateCommand}" CommandParameter="Instances" />
-                <Button Classes="nav-button" Content="Games" Command="{Binding NavigateCommand}" CommandParameter="Games" />
-                <Button Classes="nav-button" Content="Providers" Command="{Binding NavigateCommand}" CommandParameter="Providers" />
-                <Button Classes="nav-button" Content="Settings" Command="{Binding NavigateCommand}" CommandParameter="Settings" />
+    <Border Classes="sidebar" Width="228" IsVisible="{Binding IsSidebarExpanded}">
+        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <StackPanel Spacing="10">
+                <TextBlock Classes="sidebar-label" Text="WORKSPACE" />
+                <StackPanel Spacing="2">
+                    <Button Classes="nav-button" Content="Instances" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Instances}" />
+                    <Button Classes="nav-button" Content="Games" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Games}" />
+                    <Button Classes="nav-button" Content="Providers" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Providers}" />
+                    <Button Classes="nav-button" Content="Settings" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Settings}" />
+                </StackPanel>
+                <TextBlock Classes="sidebar-label" Text="LIBRARY" />
+                <StackPanel Spacing="6">
+                    <TextBox HorizontalAlignment="Stretch" PlaceholderText="Search instances" Text="{Binding InstanceSearchText}" />
+                    <ComboBox HorizontalAlignment="Stretch" ItemsSource="{Binding InstanceSorts}" SelectedItem="{Binding InstanceSort}" />
+                    <ListBox HorizontalAlignment="Stretch" MaxHeight="280" ItemsSource="{Binding Instances}" SelectedItem="{Binding SelectedInstance}" />
+                </StackPanel>
+                <TextBlock Classes="caption" Text="Custom groups are stored per user." TextWrapping="Wrap" />
             </StackPanel>
-            <TextBlock Grid.Row="2" Classes="sidebar-label" Text="LIBRARY" />
-            <StackPanel Grid.Row="3" Spacing="8">
-                <TextBox PlaceholderText="Search instances" Text="{Binding InstanceSearchText}" />
-                <ComboBox ItemsSource="{Binding InstanceSorts}" SelectedItem="{Binding InstanceSort}" />
-                <ListBox ItemsSource="{Binding Instances}" SelectedItem="{Binding SelectedInstance}" />
-            </StackPanel>
-            <TextBlock Grid.Row="4" Classes="caption" Text="Custom groups are stored per user." TextWrapping="Wrap" />
-        </Grid>
+        </ScrollViewer>
     </Border>
 </UserControl>
