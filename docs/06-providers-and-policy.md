@@ -246,7 +246,9 @@ routes every imported requirement back through the normal adapter and policy gat
 Format-specific archive paths, project/file IDs, game and loader wire names, environment flags,
 and redistribution semantics stay in the extension crate. A provider may implement an adapter
 without a codec, a codec without network acquisition, or both. The CLI, daemon, core and Desktop
-discover codec descriptors and option schemas and do not name formats themselves.
+discover codec descriptors and option schemas and do not name formats themselves. A codec may be
+native or sandboxed WebAssembly behind the same contract; Modrinth's `.mrpack` codec is sandboxed
+([18 §18.3](18-wasm-extensions.md)).
 
 The native `.msbepack` codec is provider-neutral and embeds a canonical lockfile plus a selected
 set of CAS blobs. Blob sourceability and permission to redistribute are evaluated independently:

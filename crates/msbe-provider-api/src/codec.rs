@@ -32,6 +32,31 @@ pub struct PackCodecRegistration {
     pub build: BuildPackCodec,
 }
 
+/// A pack codec a provider ships with MSBE as a WebAssembly module.
+///
+/// The module runs in the same sandbox as an installed codec. It is trusted as part of the build
+/// that embeds it, pinned like a native extension, and may name only its registration's provider.
+#[derive(Clone, Copy)]
+pub struct WasmPackCodecRegistration {
+    /// Stable codec identifier, which the module's descriptor must declare.
+    pub id: &'static str,
+    /// The codec's version.
+    pub version: &'static str,
+    /// The compiled `wasm32-unknown-unknown` module.
+    pub module: &'static [u8],
+}
+
+impl fmt::Debug for WasmPackCodecRegistration {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WasmPackCodecRegistration")
+            .field("id", &self.id)
+            .field("version", &self.version)
+            .field("module_bytes", &self.module.len())
+            .finish()
+    }
+}
+
 /// Container framing selected by the host.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

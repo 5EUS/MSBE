@@ -12,6 +12,7 @@ use msbe_provider_api::{
     HostApiRange, HttpClient, ManifestError, Overlay, OverlayError, PackCodec, PackCodecDescriptor,
     PackCodecError, PackCodecRegistration, PackInput, ProgramError, Provider, ProviderProgram,
     ProviderProgramEnvelope, Registration, SigningKey, Target, VerifyingKey,
+    WasmPackCodecRegistration,
     model::{Request, SearchResult},
     resolve::{Adapters, ResolveError},
 };
@@ -21,6 +22,8 @@ use thiserror::Error;
 use crate::{ExtensionTrust, installed, runtime};
 
 const NATIVE_HOST_API_VERSION: u32 = 1;
+/// The signer every extension compiled into or embedded in this build is pinned with.
+const BUILD_SIGNER: &str = "msbe-build";
 
 /// The adapters MSBE ships. A new provider is a crate beside these and one line here.
 pub const BUILTIN: &[Registration] = &[
@@ -115,6 +118,52 @@ impl Providers {
                 });
             }
         }
+        self.admit_wasm_codec(codec)
+    }
+
+    /// Adds a WebAssembly codec that `provider`'s registration ships in this build. Like a native
+    /// codec, it may name only that provider, and it is pinned as part of the build.
+    fn register_shipped_codec(
+        &mut self,
+        provider: &str,
+        shipped: &WasmPackCodecRegistration,
+    ) -> Result<(), RegistryError> {
+        let codec = WasmPackCodec::load(shipped.module)?;
+        let descriptor = codec.descriptor();
+        if descriptor.id != shipped.id {
+            return Err(RegistryError::MismatchedCodec {
+                registration: shipped.id.to_owned(),
+                descriptor: descriptor.id.clone(),
+            });
+        }
+        if descriptor
+            .provider
+            .as_deref()
+            .is_some_and(|claimed| claimed != provider)
+        {
+            return Err(RegistryError::MismatchedCodecProvider {
+                codec: descriptor.id.clone(),
+                registration: provider.to_owned(),
+                descriptor: descriptor.provider.clone(),
+            });
+        }
+        let pin = ExtensionPin {
+            id: shipped.id.to_owned(),
+            version: shipped.version.to_owned(),
+            digest: Digest::of_bytes(shipped.module),
+            host_api_minimum: NATIVE_HOST_API_VERSION,
+            host_api_maximum: NATIVE_HOST_API_VERSION,
+            signer: BUILD_SIGNER.to_owned(),
+        };
+        self.admit_wasm_codec(codec)?;
+        self.extensions.push(pin);
+        Ok(())
+    }
+
+    /// Adds a loaded WebAssembly codec under the provider its descriptor names, once its ID and
+    /// detection hints are free.
+    fn admit_wasm_codec(&mut self, codec: WasmPackCodec) -> Result<(), RegistryError> {
+        let descriptor = codec.descriptor();
         self.codecs.claim(descriptor)?;
         let (id, provider) = (descriptor.id.clone(), descriptor.provider.clone());
         self.codecs.codecs.insert(
@@ -274,13 +323,19 @@ impl Providers {
                 return Err(RegistryError::DuplicateProgramAdapter(provider.id.clone()));
             }
         }
-        Ok(Self {
+        let mut providers = Self {
             catalog,
             adapters,
             codecs,
             extensions,
             overlay: Overlay::from_toml(&overlay)?,
-        })
+        };
+        for registration in registrations {
+            for shipped in registration.wasm_pack_codecs {
+                providers.register_shipped_codec(registration.id, shipped)?;
+            }
+        }
+        Ok(providers)
     }
 
     /// The overlay entries every registered adapter ships.
@@ -1043,6 +1098,7 @@ mod tests {
             overlay: &[],
             build: build_example,
             pack_codecs: codecs,
+            wasm_pack_codecs: &[],
             exception_reason: "Test adapter.",
         }
     }

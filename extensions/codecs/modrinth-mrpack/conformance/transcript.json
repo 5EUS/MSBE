@@ -1,0 +1,637 @@
+[
+  {
+    "name": "probe-recognizes-a-version-1-index",
+    "operation": "probe",
+    "result": {
+      "ok": {
+        "confidence": 100,
+        "reason": "Modrinth pack index"
+      }
+    }
+  },
+  {
+    "name": "probe-reports-a-future-format-at-zero-confidence",
+    "operation": "probe",
+    "result": {
+      "ok": {
+        "confidence": 0,
+        "reason": "Modrinth pack index"
+      }
+    }
+  },
+  {
+    "name": "probe-ignores-a-zip-without-an-index",
+    "operation": "probe",
+    "result": {
+      "ok": {
+        "confidence": 0,
+        "reason": null
+      }
+    }
+  },
+  {
+    "name": "probe-ignores-a-directory-holding-an-index",
+    "operation": "probe",
+    "result": {
+      "ok": {
+        "confidence": 0,
+        "reason": null
+      }
+    }
+  },
+  {
+    "name": "probe-fails-on-a-malformed-index",
+    "operation": "probe",
+    "result": {
+      "error": {
+        "kind": "codec",
+        "message": "pack codec failed: EOF while parsing a value at line 1 column 17"
+      }
+    }
+  },
+  {
+    "name": "probe-fails-on-an-unsafe-path",
+    "operation": "probe",
+    "result": {
+      "error": {
+        "kind": "codec",
+        "message": "pack codec failed: invalid relative path \"../escape.jar\": parent component at line 1 column 61"
+      }
+    }
+  },
+  {
+    "name": "import-for-a-client-keeps-client-files",
+    "operation": "import",
+    "result": {
+      "ok": {
+        "codec": "modrinth-mrpack",
+        "embedded": [],
+        "origin": {
+          "codec": "modrinth-mrpack",
+          "digest": "host-owned",
+          "pack": null,
+          "version": "2.3.0"
+        },
+        "requirements": [
+          {
+            "answers": {},
+            "destination": "mods/required.jar",
+            "digest": null,
+            "hashes": {
+              "sha1": "aa",
+              "sha512": "bb"
+            },
+            "side": "required",
+            "sources": [
+              {
+                "kind": "direct",
+                "urls": [
+                  "https://cdn.example.test/required.jar",
+                  "https://mirror.example.test/required.jar"
+                ]
+              }
+            ]
+          },
+          {
+            "answers": {},
+            "destination": "mods/client-only.jar",
+            "digest": null,
+            "hashes": {
+              "sha512": "cc"
+            },
+            "side": "required",
+            "sources": [
+              {
+                "kind": "direct",
+                "urls": [
+                  "https://cdn.example.test/client-only.jar"
+                ]
+              }
+            ]
+          },
+          {
+            "answers": {},
+            "destination": "resourcepacks/optional.zip",
+            "digest": null,
+            "hashes": {
+              "sha512": "dd"
+            },
+            "side": "optional",
+            "sources": [
+              {
+                "kind": "direct",
+                "urls": [
+                  "https://cdn.example.test/optional.zip"
+                ]
+              }
+            ]
+          }
+        ],
+        "target": {
+          "game": null,
+          "game_version": null,
+          "loader": null,
+          "loader_version": null
+        },
+        "title": "Example Pack",
+        "warnings": []
+      }
+    }
+  },
+  {
+    "name": "import-for-a-server-keeps-server-files",
+    "operation": "import",
+    "result": {
+      "ok": {
+        "codec": "modrinth-mrpack",
+        "embedded": [],
+        "origin": {
+          "codec": "modrinth-mrpack",
+          "digest": "host-owned",
+          "pack": null,
+          "version": "1.0.0"
+        },
+        "requirements": [
+          {
+            "answers": {},
+            "destination": "mods/server-only.jar",
+            "digest": null,
+            "hashes": {
+              "sha512": "ee"
+            },
+            "side": "required",
+            "sources": [
+              {
+                "kind": "direct",
+                "urls": [
+                  "https://cdn.example.test/server-only.jar"
+                ]
+              }
+            ]
+          },
+          {
+            "answers": {},
+            "destination": "mods/optional.jar",
+            "digest": null,
+            "hashes": {
+              "sha512": "ff"
+            },
+            "side": "optional",
+            "sources": [
+              {
+                "kind": "direct",
+                "urls": [
+                  "https://cdn.example.test/optional.jar"
+                ]
+              }
+            ]
+          }
+        ],
+        "target": {
+          "game": null,
+          "game_version": null,
+          "loader": null,
+          "loader_version": null
+        },
+        "title": null,
+        "warnings": []
+      }
+    }
+  },
+  {
+    "name": "import-without-a-target-requires-every-file",
+    "operation": "import",
+    "result": {
+      "ok": {
+        "codec": "modrinth-mrpack",
+        "embedded": [],
+        "origin": {
+          "codec": "modrinth-mrpack",
+          "digest": "host-owned",
+          "pack": null,
+          "version": "1.0.0"
+        },
+        "requirements": [
+          {
+            "answers": {},
+            "destination": "mods/client-only.jar",
+            "digest": null,
+            "hashes": {
+              "sha512": "cc"
+            },
+            "side": "required",
+            "sources": [
+              {
+                "kind": "direct",
+                "urls": [
+                  "https://cdn.example.test/client-only.jar"
+                ]
+              }
+            ]
+          }
+        ],
+        "target": {
+          "game": null,
+          "game_version": null,
+          "loader": null,
+          "loader_version": null
+        },
+        "title": null,
+        "warnings": []
+      }
+    }
+  },
+  {
+    "name": "import-defaults-a-missing-environment-and-version",
+    "operation": "import",
+    "result": {
+      "ok": {
+        "codec": "modrinth-mrpack",
+        "embedded": [],
+        "origin": {
+          "codec": "modrinth-mrpack",
+          "digest": "host-owned",
+          "pack": null,
+          "version": "1.0.0"
+        },
+        "requirements": [
+          {
+            "answers": {},
+            "destination": "mods/plain.jar",
+            "digest": null,
+            "hashes": {
+              "sha1": "22",
+              "sha512": "11"
+            },
+            "side": "required",
+            "sources": [
+              {
+                "kind": "direct",
+                "urls": [
+                  "https://cdn.example.test/plain.jar"
+                ]
+              }
+            ]
+          }
+        ],
+        "target": {
+          "game": null,
+          "game_version": null,
+          "loader": null,
+          "loader_version": null
+        },
+        "title": null,
+        "warnings": []
+      }
+    }
+  },
+  {
+    "name": "import-refuses-a-future-format",
+    "operation": "import",
+    "result": {
+      "error": {
+        "kind": "codec",
+        "message": "pack codec failed: unsupported Modrinth pack format version 2"
+      }
+    }
+  },
+  {
+    "name": "import-refuses-an-absolute-path",
+    "operation": "import",
+    "result": {
+      "error": {
+        "kind": "codec",
+        "message": "pack codec failed: invalid relative path \"/absolute.jar\": absolute path at line 1 column 93"
+      }
+    }
+  },
+  {
+    "name": "import-refuses-an-unknown-environment",
+    "operation": "import",
+    "result": {
+      "error": {
+        "kind": "codec",
+        "message": "pack codec failed: data did not match any variant of untagged enum EnvironmentRequirement at line 1 column 86"
+      }
+    }
+  },
+  {
+    "name": "import-refuses-a-directory",
+    "operation": "import",
+    "result": {
+      "error": {
+        "kind": "format_mismatch",
+        "message": "input does not match the pack codec"
+      }
+    }
+  },
+  {
+    "name": "import-refuses-a-zip-without-an-index",
+    "operation": "import",
+    "result": {
+      "error": {
+        "kind": "format_mismatch",
+        "message": "input does not match the pack codec"
+      }
+    }
+  },
+  {
+    "layout": {
+      "ok": {
+        "container": "zip",
+        "entries": [
+          {
+            "content": {
+              "kind": "inline",
+              "text": "{\n  \"formatVersion\": 1,\n  \"game\": \"minecraft\",\n  \"versionId\": \"1.0.0\",\n  \"files\": [\n    {\n      \"path\": \"mods/referenced.jar\",\n      \"hashes\": {\n        \"sha1\": \"def\",\n        \"sha512\": \"abc\"\n      },\n      \"env\": {\n        \"client\": \"required\",\n        \"server\": \"required\"\n      },\n      \"downloads\": [\n        \"https://cdn.example.test/referenced.jar\",\n        \"https://mirror.example.test/referenced.jar\"\n      ]\n    }\n  ],\n  \"dependencies\": {\n    \"fabric-loader\": \"0.16.10\",\n    \"minecraft\": \"1.21.1\"\n  }\n}"
+            },
+            "path": "modrinth.index.json"
+          },
+          {
+            "content": {
+              "kind": "blob",
+              "value": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "path": "overrides/config/a.toml"
+          },
+          {
+            "content": {
+              "kind": "blob",
+              "value": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "path": "overrides/config/copy.toml"
+          }
+        ]
+      }
+    },
+    "name": "export-references-downloads-and-embeds-permitted-files",
+    "operation": "export",
+    "plan": {
+      "ok": {
+        "codec": "modrinth-mrpack",
+        "codec_state": {
+          "dependencies": {
+            "fabric-loader": "0.16.10",
+            "minecraft": "1.21.1"
+          },
+          "files": [
+            {
+              "downloads": [
+                "https://cdn.example.test/referenced.jar",
+                "https://mirror.example.test/referenced.jar"
+              ],
+              "hashes": {
+                "sha1": "def",
+                "sha512": "abc"
+              },
+              "path": "mods/referenced.jar"
+            }
+          ],
+          "name": null
+        },
+        "embedded": [
+          {
+            "deployed": true,
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "distribution": {
+              "decision": "unknown"
+            },
+            "layer": "changes",
+            "path": "config/a.toml",
+            "role": "pack_owned_config",
+            "source": {
+              "kind": "pack_owned"
+            }
+          },
+          {
+            "deployed": true,
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "distribution": {
+              "decision": "unknown"
+            },
+            "layer": "changes",
+            "path": "config/copy.toml",
+            "role": "pack_owned_config",
+            "source": {
+              "kind": "pack_owned"
+            }
+          }
+        ],
+        "environment": [],
+        "options": {
+          "compression": {
+            "type": "choice",
+            "value": "deflate"
+          }
+        },
+        "requirements": [
+          {
+            "answers": {},
+            "destination": "mods/referenced.jar",
+            "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "hashes": {
+              "sha1": "def",
+              "sha512": "abc"
+            },
+            "side": "required",
+            "sources": [
+              {
+                "kind": "direct",
+                "urls": [
+                  "http://insecure.example.test/referenced.jar",
+                  "https://cdn.example.test/referenced.jar"
+                ]
+              },
+              {
+                "kind": "user_action",
+                "provider": "example",
+                "reason": "Download it manually.",
+                "reference": "referenced"
+              },
+              {
+                "kind": "direct",
+                "urls": [
+                  "https://mirror.example.test/referenced.jar"
+                ]
+              }
+            ]
+          }
+        ],
+        "warnings": []
+      }
+    }
+  },
+  {
+    "layout": {
+      "ok": {
+        "container": "zip",
+        "entries": [
+          {
+            "content": {
+              "kind": "inline",
+              "text": "{\n  \"formatVersion\": 1,\n  \"game\": \"minecraft\",\n  \"versionId\": \"1.0.0\",\n  \"files\": [],\n  \"dependencies\": {\n    \"minecraft\": \"1.20.1\"\n  }\n}"
+            },
+            "path": "modrinth.index.json"
+          }
+        ]
+      }
+    },
+    "name": "export-names-the-quilt-loader-and-omits-an-unknown-loader-version",
+    "operation": "export",
+    "plan": {
+      "ok": {
+        "codec": "modrinth-mrpack",
+        "codec_state": {
+          "dependencies": {
+            "minecraft": "1.20.1"
+          },
+          "files": [],
+          "name": null
+        },
+        "embedded": [],
+        "environment": [],
+        "options": {},
+        "requirements": [],
+        "warnings": []
+      }
+    }
+  },
+  {
+    "layout": {
+      "ok": {
+        "container": "zip",
+        "entries": [
+          {
+            "content": {
+              "kind": "inline",
+              "text": "{\n  \"formatVersion\": 1,\n  \"game\": \"minecraft\",\n  \"versionId\": \"1.0.0\",\n  \"files\": [],\n  \"dependencies\": {\n    \"minecraft\": \"1.21.1\",\n    \"neoforge\": \"21.1.77\"\n  }\n}"
+            },
+            "path": "modrinth.index.json"
+          }
+        ]
+      }
+    },
+    "name": "export-names-other-loaders-as-they-are",
+    "operation": "export",
+    "plan": {
+      "ok": {
+        "codec": "modrinth-mrpack",
+        "codec_state": {
+          "dependencies": {
+            "minecraft": "1.21.1",
+            "neoforge": "21.1.77"
+          },
+          "files": [],
+          "name": null
+        },
+        "embedded": [],
+        "environment": [],
+        "options": {},
+        "requirements": [],
+        "warnings": []
+      }
+    }
+  },
+  {
+    "layout": {
+      "ok": {
+        "container": "zip",
+        "entries": [
+          {
+            "content": {
+              "kind": "inline",
+              "text": "{\n  \"formatVersion\": 1,\n  \"game\": \"minecraft\",\n  \"versionId\": \"1.0.0\",\n  \"files\": [],\n  \"dependencies\": {\n    \"fabric-loader\": \"0.16.10\",\n    \"minecraft\": \"1.21.1\"\n  }\n}"
+            },
+            "path": "modrinth.index.json"
+          },
+          {
+            "content": {
+              "kind": "blob",
+              "value": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            "path": "overrides/mods/local.jar"
+          }
+        ]
+      }
+    },
+    "name": "export-embeds-a-permitted-reference-it-cannot-index",
+    "operation": "export",
+    "plan": {
+      "ok": {
+        "codec": "modrinth-mrpack",
+        "codec_state": {
+          "dependencies": {
+            "fabric-loader": "0.16.10",
+            "minecraft": "1.21.1"
+          },
+          "files": [],
+          "name": null
+        },
+        "embedded": [
+          {
+            "deployed": true,
+            "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "distribution": {
+              "decision": "allowed"
+            },
+            "layer": "changes",
+            "path": "mods/local.jar",
+            "role": "local_artifact",
+            "source": {
+              "kind": "local"
+            }
+          }
+        ],
+        "environment": [],
+        "options": {},
+        "requirements": [],
+        "warnings": [
+          {
+            "code": "embedded-reference",
+            "message": "pack content is not reproducible: mods/local.jar has no direct HTTPS download a Modrinth index can reference; embed it with blob-mode complete; it is embedded as an override instead"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "export-refuses-an-unpermitted-reference-it-cannot-index",
+    "operation": "export",
+    "plan": {
+      "error": {
+        "kind": "unreproducible",
+        "message": "pack content is not reproducible: mods/manual.jar has no direct HTTPS download a Modrinth index can reference; embed it with blob-mode complete"
+      }
+    }
+  },
+  {
+    "name": "export-refuses-a-reference-without-a-destination",
+    "operation": "export",
+    "plan": {
+      "error": {
+        "kind": "unreproducible",
+        "message": "pack content is not reproducible: a referenced file has no deployment path"
+      }
+    }
+  },
+  {
+    "name": "export-refuses-a-target-without-a-game-version",
+    "operation": "export",
+    "plan": {
+      "error": {
+        "kind": "unsupported_target",
+        "message": "pack codec does not support plan \"minecraft\" with loader \"fabric\""
+      }
+    }
+  },
+  {
+    "name": "export-refuses-installation-owned-inputs",
+    "operation": "export",
+    "plan": {
+      "error": {
+        "kind": "unreproducible",
+        "message": "pack content is not reproducible: Modrinth packs cannot declare installation-owned inputs"
+      }
+    }
+  }
+]

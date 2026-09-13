@@ -7,12 +7,12 @@
 //! Everything Modrinth-specific lives in this crate: its manifest and the overlay entries MSBE
 //! ships about its projects, its JSON records and their translation into
 //! `msbe_provider_api::model`, and the release-channel update policy with the bulk hash lookups
-//! that implement it.
+//! that implement it. The `.mrpack` pack format is not native code: it is the sandboxed codec built
+//! from `extensions/codecs/modrinth-mrpack`, whose module this crate embeds and registers.
 
 #[cfg(feature = "test")]
 pub mod cli_test_support;
 mod client;
-mod codec;
 mod reference;
 #[cfg(test)]
 mod resolution_tests;
@@ -23,9 +23,8 @@ mod wire;
 
 use msbe_core::instance::NativeExtensionIdentity;
 use msbe_provider_api::{
-    Adapter, AdapterError, HttpClient, ManifestError, PackCodec, PackCodecError,
-    PackCodecRegistration, PackageId, Provenance, Provider, Registration, Releases, Search, Target,
-    UpdateCheck, Updates,
+    Adapter, AdapterError, HttpClient, ManifestError, PackageId, Provenance, Provider,
+    Registration, Releases, Search, Target, UpdateCheck, Updates, WasmPackCodecRegistration,
     model::{Project, Release, Request, SearchResult},
 };
 use thiserror::Error;
@@ -46,11 +45,6 @@ const IDENTITY: NativeExtensionIdentity = NativeExtensionIdentity {
     signer: "msbe-build",
 };
 
-const CODEC_IDENTITY: NativeExtensionIdentity = NativeExtensionIdentity {
-    id: "modrinth-mrpack",
-    ..IDENTITY
-};
-
 /// How Modrinth joins MSBE.
 pub const REGISTRATION: Registration = Registration {
     id: ID,
@@ -61,21 +55,15 @@ pub const REGISTRATION: Registration = Registration {
         include_str!("../overlays/qvIfYCYJ.toml"),
     ],
     build,
-    pack_codecs: &[PackCodecRegistration {
+    pack_codecs: &[],
+    wasm_pack_codecs: &[WasmPackCodecRegistration {
         id: "modrinth-mrpack",
-        identity: CODEC_IDENTITY,
-        build: build_pack_codec,
+        // The version of extensions/codecs/modrinth-mrpack.
+        version: "1.0.0",
+        module: include_bytes!("../codecs/modrinth-mrpack.wasm"),
     }],
     exception_reason: "Modrinth uses reviewed bulk update and release protocol semantics not expressible by catalog-v1.",
 };
-
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "codec builders implement the fallible registration function pointer"
-)]
-fn build_pack_codec() -> Result<Box<dyn PackCodec>, PackCodecError> {
-    Ok(Box::new(codec::ModrinthCodec::new()))
-}
 
 fn build(provider: &Provider) -> Result<Box<dyn Adapter>, ManifestError> {
     let api_base = provider

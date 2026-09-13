@@ -1,0 +1,30 @@
+# Modrinth's .mrpack format as a sandboxed codec. It is built for wasm32-unknown-unknown by
+# scripts/development/build-wasm-extensions.sh, outside the main workspace, and the module is
+# embedded by msbe-provider-modrinth, which registers it.
+[package]
+name         = "msbe-codec-modrinth-mrpack"
+description  = "Modrinth's .mrpack pack format, served from MSBE's WebAssembly sandbox."
+version      = "1.0.0"
+edition      = "2024"
+rust-version = "1.91"
+license      = "MPL-2.0"
+publish      = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+msbe-codec-guest = { path = "../../../crates/msbe-codec-guest" }
+serde            = { version = "1.0.229", features = ["derive"] }
+serde_json       = "1.0.151"
+
+[profile.release]
+opt-level     = "z"
+lto           = true
+codegen-units = 1
+panic         = "abort"
+strip         = true
+debug         = false
+
+# Its own workspace: it targets wasm32 and is not part of the host build.
+[workspace]

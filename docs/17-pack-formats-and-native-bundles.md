@@ -67,7 +67,7 @@ The target repository layout is:
 crates/
   msbe-core/                  profiles, lockfiles, resolution, provenance, CAS references
   msbe-provider-api/          provider-program contracts plus neutral pack-codec contracts
-  msbe-provider-modrinth/     native Modrinth exception and .mrpack codec
+  msbe-provider-modrinth/     native Modrinth exception; embeds the sandboxed .mrpack codec
   msbe-provider-local/        local acquisition and native .msbepack codec registration
   msbe-providers/             runtime registry, trusted provider programs, codecs, policy gate
   msbe-pack/                  codec selection, neutral import/export planning, option validation
@@ -1184,14 +1184,15 @@ lockfiles or removed APIs.
 
 ### Phase F - sandboxed codecs
 
-Item 1 is implemented. Item 2 is partly implemented: the CLI and daemon load signed codecs installed
-under `<home>/extensions` against a local trust root, including codecs bound to a provider its signer
-is granted ([18 §18.3](18-wasm-extensions.md)); running the native conformance suite against WASM
-codecs remains.
+Items 1 and 2 are implemented. The CLI and daemon load signed codecs installed under
+`<home>/extensions` against a local trust root, including codecs bound to a provider its signer is
+granted. Every codec, native or sandboxed, runs the shared conformance suite, and Modrinth's `.mrpack`
+codec now ships as a sandboxed codec that reproduces the native codec's golden transcript
+([18 §18.3](18-wasm-extensions.md)).
 
 1. [x] Host `PackCodec` in the WASM runtime with `PackInput` as its only import and no network,
    filesystem, clock, or randomness.
-2. [~] Load WASM codecs through the extension envelope and run the conformance suite native codecs
+2. [x] Load WASM codecs through the extension envelope and run the conformance suite native codecs
    run.
 3. Deliver new third-party formats as WASM codecs. A new native codec requires a documented
    exception, as a native provider does.

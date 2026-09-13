@@ -1,0 +1,409 @@
+{
+  "cases": [
+    {
+      "operation": "probe",
+      "name": "probe-recognizes-a-version-1-index",
+      "input": { "entries": { "modrinth.index.json": { "formatVersion": 1, "files": [] } } }
+    },
+    {
+      "operation": "probe",
+      "name": "probe-reports-a-future-format-at-zero-confidence",
+      "input": { "entries": { "modrinth.index.json": { "formatVersion": 2 } } }
+    },
+    {
+      "operation": "probe",
+      "name": "probe-ignores-a-zip-without-an-index",
+      "input": { "entries": { "manifest.json": { "minecraft": { "version": "1.21.1" } } } }
+    },
+    {
+      "operation": "probe",
+      "name": "probe-ignores-a-directory-holding-an-index",
+      "input": {
+        "container": "directory",
+        "entries": { "modrinth.index.json": { "formatVersion": 1 } }
+      }
+    },
+    {
+      "operation": "probe",
+      "name": "probe-fails-on-a-malformed-index",
+      "input": { "entries": { "modrinth.index.json": "{\"formatVersion\":" } }
+    },
+    {
+      "operation": "probe",
+      "name": "probe-fails-on-an-unsafe-path",
+      "input": {
+        "entries": {
+          "modrinth.index.json": {
+            "formatVersion": 1,
+            "files": [{ "path": "../escape.jar", "downloads": [], "hashes": {} }]
+          }
+        }
+      }
+    },
+    {
+      "operation": "import",
+      "name": "import-for-a-client-keeps-client-files",
+      "input": {
+        "entries": {
+          "modrinth.index.json": {
+            "formatVersion": 1,
+            "game": "minecraft",
+            "name": "Example Pack",
+            "versionId": "2.3.0",
+            "summary": "Unknown fields are ignored.",
+            "files": [
+              {
+                "path": "mods/required.jar",
+                "downloads": ["https://cdn.example.test/required.jar", "https://mirror.example.test/required.jar"],
+                "hashes": { "sha1": "aa", "sha512": "bb" },
+                "fileSize": 10,
+                "env": { "client": "required", "server": "required" }
+              },
+              {
+                "path": "mods/client-only.jar",
+                "downloads": ["https://cdn.example.test/client-only.jar"],
+                "hashes": { "sha512": "cc" },
+                "env": { "client": "required", "server": "unsupported" }
+              },
+              {
+                "path": "resourcepacks/optional.zip",
+                "downloads": ["https://cdn.example.test/optional.zip"],
+                "hashes": { "sha512": "dd" },
+                "env": { "client": "optional", "server": "optional" }
+              },
+              {
+                "path": "mods/server-only.jar",
+                "downloads": ["https://cdn.example.test/server-only.jar"],
+                "hashes": { "sha512": "ee" },
+                "env": { "client": false, "server": true }
+              }
+            ],
+            "dependencies": { "minecraft": "1.21.1", "fabric-loader": "0.16.10" }
+          },
+          "overrides/config/example.toml": "enabled = true\n"
+        }
+      },
+      "game": "minecraft",
+      "target": { "game_version": "1.21.1", "loader": "fabric", "loader_version": "0.16.10", "side": "client" }
+    },
+    {
+      "operation": "import",
+      "name": "import-for-a-server-keeps-server-files",
+      "input": {
+        "entries": {
+          "modrinth.index.json": {
+            "formatVersion": 1,
+            "files": [
+              {
+                "path": "mods/client-only.jar",
+                "downloads": ["https://cdn.example.test/client-only.jar"],
+                "hashes": { "sha512": "cc" },
+                "env": { "client": "required", "server": "unsupported" }
+              },
+              {
+                "path": "mods/server-only.jar",
+                "downloads": ["https://cdn.example.test/server-only.jar"],
+                "hashes": { "sha512": "ee" },
+                "env": { "client": false, "server": true }
+              },
+              {
+                "path": "mods/optional.jar",
+                "downloads": ["https://cdn.example.test/optional.jar"],
+                "hashes": { "sha512": "ff" },
+                "env": { "client": "unsupported", "server": "optional" }
+              }
+            ]
+          }
+        }
+      },
+      "game": "minecraft",
+      "target": { "game_version": "1.21.1", "loader": "fabric", "loader_version": null, "side": "server" }
+    },
+    {
+      "operation": "import",
+      "name": "import-without-a-target-requires-every-file",
+      "input": {
+        "entries": {
+          "modrinth.index.json": {
+            "formatVersion": 1,
+            "files": [
+              {
+                "path": "mods/client-only.jar",
+                "downloads": ["https://cdn.example.test/client-only.jar"],
+                "hashes": { "sha512": "cc" },
+                "env": { "client": "required", "server": "unsupported" }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "operation": "import",
+      "name": "import-defaults-a-missing-environment-and-version",
+      "input": {
+        "entries": {
+          "modrinth.index.json": {
+            "formatVersion": 1,
+            "files": [
+              {
+                "path": "mods/./plain.jar",
+                "downloads": ["https://cdn.example.test/plain.jar"],
+                "hashes": { "sha512": "11", "sha1": "22" }
+              }
+            ]
+          }
+        }
+      },
+      "target": { "game_version": "1.21.1", "loader": "quilt", "loader_version": null, "side": "client" }
+    },
+    {
+      "operation": "import",
+      "name": "import-refuses-a-future-format",
+      "input": { "entries": { "modrinth.index.json": { "formatVersion": 2, "files": [] } } }
+    },
+    {
+      "operation": "import",
+      "name": "import-refuses-an-absolute-path",
+      "input": {
+        "entries": {
+          "modrinth.index.json": {
+            "formatVersion": 1,
+            "files": [{ "path": "/absolute.jar", "downloads": ["https://cdn.example.test/a.jar"], "hashes": {} }]
+          }
+        }
+      }
+    },
+    {
+      "operation": "import",
+      "name": "import-refuses-an-unknown-environment",
+      "input": {
+        "entries": {
+          "modrinth.index.json": {
+            "formatVersion": 1,
+            "files": [
+              {
+                "path": "mods/a.jar",
+                "downloads": ["https://cdn.example.test/a.jar"],
+                "hashes": {},
+                "env": { "client": "sometimes" }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "operation": "import",
+      "name": "import-refuses-a-directory",
+      "input": { "container": "directory", "entries": { "modrinth.index.json": { "formatVersion": 1 } } }
+    },
+    {
+      "operation": "import",
+      "name": "import-refuses-a-zip-without-an-index",
+      "input": { "entries": { "manifest.json": {} } }
+    },
+    {
+      "operation": "export",
+      "name": "export-references-downloads-and-embeds-permitted-files",
+      "lockfile": {
+        "schema": 2,
+        "plan": { "id": "minecraft", "version": "0.2.0" },
+        "target": { "game_version": "1.21.1", "loader": "fabric", "loader_version": "0.16.10", "side": "client" },
+        "mods": {},
+        "deployment": {}
+      },
+      "files": [
+        {
+          "path": "config/a.toml",
+          "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "role": "pack_owned_config",
+          "layer": "changes",
+          "deployed": true,
+          "source": { "kind": "pack_owned" },
+          "distribution": { "decision": "unknown" }
+        },
+        {
+          "path": "config/copy.toml",
+          "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "role": "pack_owned_config",
+          "layer": "changes",
+          "deployed": true,
+          "source": { "kind": "pack_owned" },
+          "distribution": { "decision": "unknown" }
+        },
+        {
+          "path": "config/staged.toml",
+          "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "role": "pack_owned_config",
+          "layer": "changes",
+          "deployed": false,
+          "source": { "kind": "pack_owned" },
+          "distribution": { "decision": "unknown" }
+        },
+        {
+          "path": "mods/local.jar",
+          "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "role": "local_artifact",
+          "layer": "changes",
+          "deployed": true,
+          "source": { "kind": "local" },
+          "distribution": { "decision": "allowed" }
+        }
+      ],
+      "inclusion": {
+        "embed": ["sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+        "permitted": [
+          "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        ],
+        "requirements": [
+          {
+            "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "hashes": { "sha512": "abc", "sha1": "def" },
+            "destination": "mods/referenced.jar",
+            "side": "required",
+            "sources": [
+              { "kind": "direct", "urls": ["http://insecure.example.test/referenced.jar", "https://cdn.example.test/referenced.jar"] },
+              { "kind": "user_action", "provider": "example", "reference": "referenced", "reason": "Download it manually." },
+              { "kind": "direct", "urls": ["https://mirror.example.test/referenced.jar"] }
+            ]
+          }
+        ]
+      },
+      "options": { "compression": { "type": "choice", "value": "deflate" } }
+    },
+    {
+      "operation": "export",
+      "name": "export-names-the-quilt-loader-and-omits-an-unknown-loader-version",
+      "lockfile": {
+        "schema": 2,
+        "plan": { "id": "minecraft", "version": "0.2.0" },
+        "target": { "game_version": "1.20.1", "loader": "quilt", "loader_version": null, "side": "client" },
+        "mods": {},
+        "deployment": {}
+      }
+    },
+    {
+      "operation": "export",
+      "name": "export-names-other-loaders-as-they-are",
+      "lockfile": {
+        "schema": 2,
+        "plan": { "id": "minecraft", "version": "0.2.0" },
+        "target": { "game_version": "1.21.1", "loader": "neoforge", "loader_version": "21.1.77", "side": "server" },
+        "mods": {},
+        "deployment": {}
+      }
+    },
+    {
+      "operation": "export",
+      "name": "export-embeds-a-permitted-reference-it-cannot-index",
+      "lockfile": {
+        "schema": 2,
+        "plan": { "id": "minecraft", "version": "0.2.0" },
+        "target": { "game_version": "1.21.1", "loader": "fabric", "loader_version": "0.16.10", "side": "client" },
+        "mods": {},
+        "deployment": {}
+      },
+      "files": [
+        {
+          "path": "mods/local.jar",
+          "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "role": "local_artifact",
+          "layer": "changes",
+          "deployed": true,
+          "source": { "kind": "local" },
+          "distribution": { "decision": "allowed" }
+        }
+      ],
+      "inclusion": {
+        "permitted": ["sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
+        "requirements": [
+          {
+            "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "hashes": { "sha512": "123" },
+            "destination": "mods/local.jar",
+            "side": "required",
+            "sources": [{ "kind": "direct", "urls": ["http://insecure.example.test/local.jar"] }]
+          }
+        ]
+      }
+    },
+    {
+      "operation": "export",
+      "name": "export-refuses-an-unpermitted-reference-it-cannot-index",
+      "lockfile": {
+        "schema": 2,
+        "plan": { "id": "minecraft", "version": "0.2.0" },
+        "target": { "game_version": "1.21.1", "loader": "fabric", "loader_version": "0.16.10", "side": "client" },
+        "mods": {},
+        "deployment": {}
+      },
+      "inclusion": {
+        "requirements": [
+          {
+            "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "hashes": {},
+            "destination": "mods/manual.jar",
+            "side": "required",
+            "sources": [{ "kind": "user_action", "provider": "example", "reference": "manual", "reason": "Download it manually." }]
+          }
+        ]
+      }
+    },
+    {
+      "operation": "export",
+      "name": "export-refuses-a-reference-without-a-destination",
+      "lockfile": {
+        "schema": 2,
+        "plan": { "id": "minecraft", "version": "0.2.0" },
+        "target": { "game_version": "1.21.1", "loader": "fabric", "loader_version": "0.16.10", "side": "client" },
+        "mods": {},
+        "deployment": {}
+      },
+      "inclusion": {
+        "permitted": ["sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
+        "requirements": [
+          {
+            "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "hashes": {},
+            "destination": null,
+            "side": "required",
+            "sources": [{ "kind": "direct", "urls": ["https://cdn.example.test/nowhere.jar"] }]
+          }
+        ]
+      }
+    },
+    {
+      "operation": "export",
+      "name": "export-refuses-a-target-without-a-game-version",
+      "lockfile": {
+        "schema": 2,
+        "plan": { "id": "minecraft", "version": "0.2.0" },
+        "target": { "game_version": null, "loader": "fabric", "loader_version": "0.16.10", "side": "client" },
+        "mods": {},
+        "deployment": {}
+      }
+    },
+    {
+      "operation": "export",
+      "name": "export-refuses-installation-owned-inputs",
+      "lockfile": {
+        "schema": 2,
+        "plan": { "id": "minecraft", "version": "0.2.0" },
+        "target": { "game_version": "1.21.1", "loader": "fabric", "loader_version": "0.16.10", "side": "client" },
+        "mods": {},
+        "deployment": {}
+      },
+      "inclusion": {
+        "environment": [
+          {
+            "root": "game",
+            "path": "bin/game.exe",
+            "digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+          }
+        ]
+      }
+    }
+  ]
+}

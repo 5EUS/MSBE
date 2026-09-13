@@ -7,7 +7,8 @@ use thiserror::Error;
 
 use crate::{
     AcquiredArtifact, AcquisitionError, ArtifactDescriptor, DOWNLOAD_LIMIT, EndpointError,
-    HttpClient, HttpError, ManifestError, PackCodecRegistration, Provider, Target, acquire,
+    HttpClient, HttpError, ManifestError, PackCodecRegistration, Provider, Target,
+    WasmPackCodecRegistration, acquire,
     model::{Project, Release, ReleaseFile, Request, SearchResult},
 };
 
@@ -33,6 +34,8 @@ pub struct Registration {
     pub build: Build,
     /// Pack formats implemented by this reviewed extension.
     pub pack_codecs: &'static [PackCodecRegistration],
+    /// Pack formats this extension ships as sandboxed WebAssembly modules.
+    pub wasm_pack_codecs: &'static [WasmPackCodecRegistration],
     /// Why this provider requires reviewed native protocol code instead of a program runtime.
     pub exception_reason: &'static str,
 }

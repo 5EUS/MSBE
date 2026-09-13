@@ -15,6 +15,10 @@ publish.workspace      = true
 [lints]
 workspace = true
 
+[features]
+# The conformance suite every pack codec runs, for the crates that test codecs.
+conformance = []
+
 [dependencies]
 ed25519-dalek = "2.2.0"
 msbe-core            = { version = "0.0.0", path = "../msbe-core" }

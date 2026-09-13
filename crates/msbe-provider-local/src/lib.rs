@@ -44,6 +44,7 @@ pub const REGISTRATION: Registration = Registration {
         identity: CODEC_IDENTITY,
         build: build_native_codec,
     }],
+    wasm_pack_codecs: &[],
     exception_reason: "Local content is ingested by the host from user-selected paths and has no remote protocol; the native bundle codec is reviewed host-format code.",
 };
 

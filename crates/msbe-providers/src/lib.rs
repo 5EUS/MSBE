@@ -7,6 +7,8 @@
 //!
 //! See `docs/06-providers-and-policy.md`.
 
+#[cfg(test)]
+mod conformance_tests;
 mod installed;
 mod registry;
 mod runtime;

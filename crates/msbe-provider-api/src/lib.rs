@@ -19,6 +19,8 @@ mod acquisition;
 pub mod adapter;
 mod artifact;
 mod codec;
+#[cfg(feature = "conformance")]
+pub mod conformance;
 mod endpoint;
 pub mod envelope;
 mod hashing;
@@ -47,6 +49,7 @@ pub use codec::{
     PackImportPlan, PackInclusion, PackInput, PackLayout, PackOptionConstraint, PackOptionField,
     PackOptionKind, PackOptionSchema, PackOptionValue, PackOptions, PackOrigin, PackPreset,
     PackProbe, PackRequirement, PackWarning, PathMode, RequirementSource, SupportSet,
+    WasmPackCodecRegistration,
 };
 pub use ed25519_dalek::{SigningKey, VerifyingKey};
 pub use endpoint::{EndpointError, JsonEndpoint};

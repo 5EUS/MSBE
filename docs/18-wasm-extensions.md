@@ -246,6 +246,18 @@ from the sandbox. Its exports are `msbe_abi_version`, `msbe_alloc`, `msbe_descri
 `msbe_input.entries`, `msbe_input.read` and `msbe_input.take`, which serve the host-owned
 `PackInput`. A codec never sees the network, the store, or a container it did not receive.
 
+Each call runs in a fresh instance on its own thread, while the thread that owns the pack answers
+its reads, so a codec reads only the entries it asks for: probing an archive never reads its blobs.
+
+| Limit per call   | Default        |
+| ---------------- | -------------- |
+| Fuel             | 10,000,000,000 |
+| Linear memory    | 512 MiB        |
+| Pack bytes read  | 64 MiB         |
+
+A codec's failure keeps its kind. An `unreproducible` or `unsupported_target` error from the sandbox
+reaches the user, and sets the exit code, exactly as the same native error would.
+
 A codec is a signed extension envelope that provides exactly `pack-codec-v1`, requests no
 capabilities, and supports host API 1. The CLI and daemon load every codec installed in MSBE's data
 directory:
@@ -288,6 +300,22 @@ needs the provider to be registered and its signer to be granted that provider. 
 any check refuses them all, with an error naming its envelope: nothing runs with trust the user did
 not intend. Installed codecs are not native build pins, so installing one never changes which native
 bundles a build accepts.
+
+**Shipped codecs.** MSBE ships Modrinth's `.mrpack` codec as a sandboxed codec. Its source is
+`extensions/codecs/modrinth-mrpack`. `scripts/development/build-wasm-extensions.sh` builds it into
+`crates/msbe-provider-modrinth/codecs/`, and the provider's registration embeds the module through
+`wasm_pack_codecs`. A shipped codec is trusted as part of the build rather than through `trust.toml`,
+may name only its registration's provider, and is pinned like a native extension, by the SHA-256 of
+its module. Each module is compiled once per process.
+
+**Conformance.** Every codec, native or sandboxed, passes `msbe_provider_api::conformance`'s
+invariants: a valid descriptor, zero confidence rather than an error for a pack in no format, and
+refusing to lay out another codec's export plan. A format also keeps cases and a golden transcript
+beside its source, in `conformance/cases.json` and `conformance/transcript.json`, and every
+implementation of the format must reproduce the transcript byte for byte. The `.mrpack` transcript was
+recorded from the native codec before that codec was removed, so the sandboxed codec is known to
+import, export and fail exactly as it did. After a deliberate change, record the new transcript with
+`MSBE_BLESS=1 cargo test -p msbe-providers conformance` and review its diff.
 
 Implement `msbe_codec_guest::Codec` and export it with `export_codec!`. `extensions/codecs/pack-list`
 is the reference: a ZIP manifest format with pinned downloads and bundled files, imported and
