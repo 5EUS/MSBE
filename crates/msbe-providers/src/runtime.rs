@@ -335,12 +335,11 @@ impl Catalog<'_> {
             }
             _ => true,
         };
-        Ok(game_versions
+        Ok(target.game_version.as_ref().is_none_or(|wanted| {
+            game_versions.is_empty() || game_versions.iter().any(|version| version == wanted)
+        }) && loaders
             .iter()
-            .any(|version| version == &target.game_version)
-            && loaders
-                .iter()
-                .any(|loader| loader_ids.contains(&loader.as_str()))
+            .any(|loader| loader_ids.contains(&loader.as_str()))
             && version_matches)
     }
 
@@ -451,7 +450,7 @@ impl Catalog<'_> {
                     (fields.loaders.clone(), Value::from(loaders.clone())),
                     (
                         fields.game_versions.clone(),
-                        Value::from(vec![target.game_version.as_str()]),
+                        Value::from(target.game_version.clone()),
                     ),
                     (fields.channels.clone(), Value::from(channels)),
                 ]),
@@ -520,8 +519,10 @@ fn facet_groups(facets: &Facets, target: &Target) -> String {
                             .loader_ids()
                             .map(|loader| template.replace("{loader}", loader))
                             .collect()
+                    } else if let Some(game_version) = &target.game_version {
+                        vec![template.replace("{game_version}", game_version)]
                     } else {
-                        vec![template.replace("{game_version}", &target.game_version)]
+                        Vec::new()
                     }
                 })
                 .collect::<Vec<_>>()
@@ -536,17 +537,22 @@ fn release_parameters(request: &ReleasesRequest, target: &Target) -> Vec<(String
     request
         .query
         .iter()
-        .map(|parameter| {
+        .filter_map(|parameter| {
             let values: Vec<&str> = match parameter.target {
                 Some(TargetFact::Loaders) => target.loader_ids().collect(),
-                Some(TargetFact::GameVersion) => vec![target.game_version.as_str()],
+                Some(TargetFact::GameVersion) => {
+                    target.game_version.iter().map(String::as_str).collect()
+                }
                 None => Vec::new(),
             };
+            if parameter.target.is_some() && values.is_empty() {
+                return None;
+            }
             let value = parameter
                 .literal
                 .clone()
                 .unwrap_or_else(|| serde_json::to_string(&values).unwrap_or_default());
-            (parameter.name.clone(), value)
+            Some((parameter.name.clone(), value))
         })
         .collect()
 }

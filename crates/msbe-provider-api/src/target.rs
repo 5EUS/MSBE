@@ -10,14 +10,16 @@ use serde::{Deserialize, Serialize};
 /// What a mod must be compatible with before it can be selected.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Target {
+    /// The game this target belongs to, such as `minecraft`.
+    pub game: String,
     /// The selected loader id.
     pub loader: String,
     /// Virtual loader APIs satisfied by the selected loader.
     pub provides: Vec<String>,
     /// The selected loader version, when the game or loader exposes one.
     pub loader_version: Option<String>,
-    /// The game version, such as `1.21.1`.
-    pub game_version: String,
+    /// The game version, such as `1.21.1`, when the game exposes one.
+    pub game_version: Option<String>,
     /// Whether this target is a player client or dedicated server.
     pub side: Side,
 }

@@ -2470,16 +2470,12 @@ fn status(home: &Home, instance: &str, console: &mut Console<'_>) -> Result<u8, 
 
 fn target(instance: &Instance, profile: &Name) -> Result<Target, CliError> {
     let profile_target = instance.profile_target(profile)?;
-    let game_version = instance
-        .config()
-        .game_version
-        .clone()
-        .ok_or_else(|| CliError::GameVersionRequired(instance.name().clone()))?;
     Ok(Target {
+        game: instance.plan().id.clone(),
         loader: profile_target.loader.clone(),
         provides: instance.target_provides(&profile_target),
         loader_version: profile_target.loader_version,
-        game_version,
+        game_version: instance.config().game_version.clone(),
         side: profile_target.side,
     })
 }

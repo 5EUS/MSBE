@@ -763,10 +763,11 @@ impl<'a> Fetcher<'a> {
             providers,
             instance,
             target: Target {
+                game: instance.plan().id.clone(),
                 loader: target.loader.clone(),
                 provides: instance.target_provides(target),
                 loader_version: target.loader_version.clone(),
-                game_version: instance.config().game_version.clone().unwrap_or_default(),
+                game_version: instance.config().game_version.clone(),
                 side: target.side,
             },
             connect,
