@@ -39,6 +39,17 @@ impl Catalog {
                     second: provider.id,
                 });
             }
+            if let Some(scheme) = provider.handoff_scheme()
+                && let Some(existing) = providers
+                    .values()
+                    .find(|existing| existing.handoff_scheme() == Some(scheme))
+            {
+                return Err(ManifestError::DuplicateHandoffScheme {
+                    scheme: scheme.to_owned(),
+                    first: existing.id.clone(),
+                    second: provider.id.clone(),
+                });
+            }
             if providers
                 .insert(provider.id.clone(), provider.clone())
                 .is_some()
@@ -47,6 +58,13 @@ impl Catalog {
             }
         }
         Ok(Self { providers })
+    }
+
+    /// The provider whose handoff links use `scheme`, if any does.
+    pub fn handoff_provider(&self, scheme: &str) -> Option<&Provider> {
+        self.providers
+            .values()
+            .find(|provider| provider.handoff_scheme() == Some(scheme))
     }
 
     /// Finds the provider which owns a user-entered source.
@@ -129,6 +147,21 @@ impl Provider {
         self.metadata
             .as_ref()
             .map(|metadata| metadata.api_base.as_str())
+    }
+
+    /// How requests to the metadata endpoint must identify MSBE, when the provider requires it.
+    pub fn identify(&self) -> Option<Identify> {
+        self.metadata
+            .as_ref()
+            .and_then(|metadata| metadata.identify)
+    }
+
+    /// The URI scheme of the links a browser-assisted provider's pages hand over.
+    pub fn handoff_scheme(&self) -> Option<&str> {
+        match &self.acquisition {
+            Acquisition::BrowserAssisted { scheme } => Some(scheme),
+            Acquisition::DirectHttps {} | Acquisition::UserAction {} => None,
+        }
     }
 
     fn validate(&self) -> Result<(), ManifestError> {
@@ -220,6 +253,18 @@ impl SourceMatcher {
 pub struct Metadata {
     /// The HTTPS API base URL.
     pub api_base: String,
+    /// How requests to the API must identify MSBE, beyond its `User-Agent`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identify: Option<Identify>,
+}
+
+/// Identification an API requires of each request. MSBE supplies the values; a manifest only opts
+/// in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Identify {
+    /// `Application-Name` and `Application-Version` headers.
+    ApplicationHeaders,
 }
 
 /// The closed acquisition primitive declared by a provider.
@@ -305,6 +350,16 @@ pub enum ManifestError {
     /// A browser-assisted provider names a scheme that cannot be a handoff link.
     #[error("provider handoff scheme {0:?} must be a lowercase URI scheme other than a web scheme")]
     InvalidHandoffScheme(String),
+    /// Two providers claim the same handoff scheme, so a link could not be routed to one.
+    #[error("providers {first:?} and {second:?} both claim {scheme}:// links")]
+    DuplicateHandoffScheme {
+        /// The scheme.
+        scheme: String,
+        /// The first provider id.
+        first: String,
+        /// The second provider id.
+        second: String,
+    },
     /// Two documents claim the same stable identifier.
     #[error("duplicate provider id {0:?}")]
     DuplicateId(String),
@@ -484,6 +539,35 @@ mod tests {
             Catalog::from_toml(&[&manifest("type = \"user_action\"\nscheme = \"handoff\"")]),
             Err(ManifestError::Parse(_))
         ));
+
+        let assisted = manifest("type = \"browser_assisted\"\nscheme = \"handoff\"");
+        let catalog = Catalog::from_toml(&[&assisted]).unwrap();
+        assert_eq!(
+            catalog
+                .handoff_provider("handoff")
+                .map(|provider| provider.id.as_str()),
+            Some("example")
+        );
+        assert!(catalog.handoff_provider("other").is_none());
+        let second = assisted
+            .replace("id = \"example\"", "id = \"second\"")
+            .replace("prefix = \"example:\"", "prefix = \"second:\"");
+        assert!(matches!(
+            Catalog::from_toml(&[&assisted, &second]),
+            Err(ManifestError::DuplicateHandoffScheme { scheme, .. }) if scheme == "handoff"
+        ));
+        let identified = assisted.replace(
+            "api_base = \"https://api.example.test\"",
+            "api_base = \"https://api.example.test\"\n                identify = \"application-headers\"",
+        );
+        assert_eq!(
+            Catalog::from_toml(&[&identified])
+                .unwrap()
+                .provider("example")
+                .unwrap()
+                .identify(),
+            Some(super::Identify::ApplicationHeaders)
+        );
     }
 
     #[test]

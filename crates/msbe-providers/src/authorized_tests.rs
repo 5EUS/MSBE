@@ -268,6 +268,7 @@ fn search_and_acquire(providers: &Providers) -> Result<Vec<String>, RegistryErro
         },
         name: "mod.zip".to_owned(),
         size: None,
+        limit: None,
         md5: None,
         sha1: None,
         sha256: None,

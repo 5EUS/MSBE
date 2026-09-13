@@ -16,16 +16,22 @@ use std::{
 };
 
 use msbe_provider_api::{
-    AcquiredArtifact, Adapter, AdapterError, ApiHeaders, Header, HttpClient, HttpError,
-    HttpRequest, HttpResponse, ManifestError, Origin, PackageId, Provenance, Provider, Rate,
-    Releases, Search, Target, UpdateCheck, Updates,
-    model::{Project, Release, ReleaseFile, Request, SearchResult},
+    Accounts, AcquiredArtifact, Adapter, AdapterError, ApiHeaders, Handoff, Header, HttpClient,
+    HttpError, HttpRequest, HttpResponse, ManifestError, Origin, PackageId, Provenance, Provider,
+    Rate, Releases, Search, Target, UpdateCheck, Updates,
+    model::{Account, HandoffTicket, Project, Release, ReleaseFile, Request, SearchResult},
     without_query,
 };
 use msbe_secrets::{Credentials, Secret, StoreError};
 use thiserror::Error;
 
 use crate::RegistryError;
+
+/// The headers a provider that requires identification is sent on requests to its API.
+const IDENTITY: [(&str, &str); 2] = [
+    ("application-name", "MSBE"),
+    ("application-version", env!("CARGO_PKG_VERSION")),
+];
 
 /// Where the registry finds a provider's credential when a request needs one.
 pub trait CredentialSource: fmt::Debug + Send + Sync {
@@ -117,6 +123,8 @@ struct Scope {
     /// The origin of the provider's `api_base`, the only one its credential is sent to.
     origin: Option<Origin>,
     headers: ApiHeaders,
+    /// Whether its API requires [`IDENTITY`].
+    identify: bool,
     keys: Arc<Keys>,
 }
 
@@ -144,6 +152,7 @@ impl Authorized {
                 provider: provider.id.clone(),
                 origin,
                 headers,
+                identify: provider.identify().is_some(),
                 keys,
             },
         })
@@ -153,7 +162,26 @@ impl Authorized {
         AuthorizedHttp {
             inner: http,
             scope: &self.scope,
+            candidate: None,
         }
+    }
+
+    /// The account `candidate` belongs to, checked with `candidate` in place of any stored
+    /// credential, so a credential can be checked before it is kept.
+    pub(crate) fn account_with(
+        &self,
+        http: &dyn HttpClient,
+        candidate: &Secret,
+    ) -> Result<Account, AdapterError> {
+        let client = AuthorizedHttp {
+            inner: http,
+            scope: &self.scope,
+            candidate: Some(candidate),
+        };
+        self.adapter
+            .as_accounts()
+            .ok_or_else(|| withdrawn("accounts"))?
+            .account(&client)
     }
 }
 
@@ -176,6 +204,14 @@ impl Adapter for Authorized {
 
     fn as_updates(&self) -> Option<&dyn Updates> {
         self.adapter.as_updates().is_some().then_some(self)
+    }
+
+    fn as_handoff(&self) -> Option<&dyn Handoff> {
+        self.adapter.as_handoff().is_some().then_some(self)
+    }
+
+    fn as_accounts(&self) -> Option<&dyn Accounts> {
+        self.adapter.as_accounts().is_some().then_some(self)
     }
 
     fn api_headers(&self) -> ApiHeaders {
@@ -265,6 +301,41 @@ impl Authorized {
     }
 }
 
+impl Handoff for Authorized {
+    fn scheme(&self) -> &str {
+        self.adapter
+            .as_handoff()
+            .map_or("", |handoff| handoff.scheme())
+    }
+
+    fn parse(&self, uri: &str, now: u64) -> Result<HandoffTicket, AdapterError> {
+        self.adapter
+            .as_handoff()
+            .ok_or_else(|| withdrawn("handoff"))?
+            .parse(uri, now)
+    }
+
+    fn redeem(
+        &self,
+        http: &dyn HttpClient,
+        ticket: &HandoffTicket,
+    ) -> Result<ReleaseFile, AdapterError> {
+        self.adapter
+            .as_handoff()
+            .ok_or_else(|| withdrawn("handoff"))?
+            .redeem(&self.http(http), ticket)
+    }
+}
+
+impl Accounts for Authorized {
+    fn account(&self, http: &dyn HttpClient) -> Result<Account, AdapterError> {
+        self.adapter
+            .as_accounts()
+            .ok_or_else(|| withdrawn("accounts"))?
+            .account(&self.http(http))
+    }
+}
+
 /// The wrapped adapter stopped offering a capability it offered when asked.
 #[derive(Debug, Error)]
 #[error("the adapter no longer offers {0}")]
@@ -279,6 +350,8 @@ fn withdrawn(capability: &'static str) -> AdapterError {
 struct AuthorizedHttp<'a> {
     inner: &'a dyn HttpClient,
     scope: &'a Scope,
+    /// A credential being checked, sent in place of the stored one.
+    candidate: Option<&'a Secret>,
 }
 
 impl HttpClient for AuthorizedHttp<'_> {
@@ -291,15 +364,34 @@ impl HttpClient for AuthorizedHttp<'_> {
         {
             return self.inner.send(request);
         }
-        let secret = scope.credential(request.url)?;
+        let stored;
+        let secret = if let Some(candidate) = self.candidate {
+            Some(candidate)
+        } else {
+            stored = scope.credential(request.url)?;
+            stored.as_deref()
+        };
         let mut scoped = request.clone();
         scoped.quota_headers = scope.headers.quota.as_slice();
+        if scope.identify {
+            // What identifies MSBE is the registry's to fill, never the adapter's.
+            scoped.headers.retain(|header| {
+                !IDENTITY
+                    .iter()
+                    .any(|(name, _)| header.name.eq_ignore_ascii_case(name))
+            });
+            scoped.headers.extend(
+                IDENTITY
+                    .iter()
+                    .map(|(name, value)| Header::new(name, value)),
+            );
+        }
         if let Some(name) = &scope.headers.credential {
             // The credential header is the registry's to fill, never the adapter's.
             scoped
                 .headers
                 .retain(|header| !header.name.eq_ignore_ascii_case(name));
-            if let Some(secret) = &secret {
+            if let Some(secret) = secret {
                 scoped
                     .headers
                     .push(Header::credential(name, secret.expose()));

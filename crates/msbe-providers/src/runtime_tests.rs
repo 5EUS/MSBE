@@ -559,7 +559,11 @@ fn files_msbe_may_not_download_send_the_user_to_their_page() {
                 "type = \"direct_https\"",
                 "type = \"browser_assisted\"\nscheme = \"handoff\"",
             )
-            .replace("distributable = \"/isAvailable\"\n", ""),
+            .replace("distributable = \"/isAvailable\"\n", "")
+            .replace(
+                "[mappings]\n",
+                "[handoff]\nhost = \"game\"\npath = [\"mods\", \"{project}\", \"files\", \"{release}\"]\nredeem = \"/v1/mods/{project}/files/{release}/link\"\n\n[mappings.handoff]\nurls = \"/url\"\n\n[mappings]\n",
+            ),
     );
     let listed = releases(website_only.as_ref(), &http, &target());
     assert!(listed.iter().all(|release| matches!(

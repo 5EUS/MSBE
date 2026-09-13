@@ -706,6 +706,7 @@ mod tests {
                     },
                     name: format!("{project}.jar"),
                     size: None,
+                    limit: None,
                     md5: None,
                     sha1: None,
                     sha256: None,

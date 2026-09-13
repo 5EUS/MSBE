@@ -9,14 +9,14 @@ use std::{
 use msbe_core::{config::Home, instance::ExtensionPin};
 use msbe_fsops::Digest;
 use msbe_provider_api::{
-    Adapter, AdapterError, Catalog, ExtensionEnvelope, HeaderError, HttpClient, ManifestError,
-    Overlay, OverlayError, PackCodec, PackCodecDescriptor, PackCodecError, PackCodecRegistration,
-    PackInput, ProgramError, ProgramRegistration, Provider, ProviderProgram,
+    Adapter, AdapterError, Catalog, ExtensionEnvelope, Handoff, HeaderError, HttpClient,
+    ManifestError, Overlay, OverlayError, PackCodec, PackCodecDescriptor, PackCodecError,
+    PackCodecRegistration, PackInput, ProgramError, ProgramRegistration, Provider, ProviderProgram,
     ProviderProgramEnvelope, Rate, Registration, Target, VerifyingKey, WasmPackCodecRegistration,
-    model::{Request, SearchResult},
+    model::{Account, Request, SearchResult},
     resolve::{Adapters, ResolveError},
 };
-use msbe_secrets::{Access, Credentials, StoreError};
+use msbe_secrets::{Access, Credentials, Secret, StoreError};
 use msbe_wasm_codec::WasmPackCodec;
 use thiserror::Error;
 
@@ -338,6 +338,50 @@ impl Providers {
         self.keys.rate(provider)
     }
 
+    /// The account `candidate` belongs to at `provider`, checked before the credential is kept.
+    /// The provider's terms must be acknowledged; no stored credential is needed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RegistryError`] when the provider is unknown, its terms are not acknowledged, it
+    /// cannot check a credential, or the check fails, as when the provider refuses the credential.
+    pub fn validate_credential(
+        &self,
+        provider: &str,
+        http: &dyn HttpClient,
+        candidate: &Secret,
+    ) -> Result<Account, RegistryError> {
+        self.acknowledged(self.catalog.provider(provider)?)?;
+        let adapter = self
+            .adapters
+            .get(provider)
+            .ok_or_else(|| RegistryError::UnavailableAdapter(provider.to_owned()))?;
+        if adapter.as_accounts().is_none() {
+            return Err(RegistryError::AccountsUnavailable(provider.to_owned()));
+        }
+        Ok(adapter.account_with(http, candidate)?)
+    }
+
+    /// The handoff capability of the provider whose links use `uri`'s scheme, once its policy has
+    /// been checked. Only the scheme is read; the link, which carries a key, is never repeated.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RegistryError`] when no provider claims the scheme, or it is prohibited by policy.
+    pub fn handoff(&self, uri: &str) -> Result<&dyn Handoff, RegistryError> {
+        let scheme = uri
+            .split_once("://")
+            .map(|(scheme, _)| scheme.to_ascii_lowercase())
+            .unwrap_or_default();
+        let provider = self
+            .catalog
+            .handoff_provider(&scheme)
+            .ok_or_else(|| RegistryError::UnknownHandoffScheme(scheme.clone()))?;
+        self.permitted(provider)?
+            .as_handoff()
+            .ok_or(RegistryError::UnknownHandoffScheme(scheme))
+    }
+
     /// The overlay entries every registered adapter ships.
     pub const fn overlay(&self) -> &Overlay {
         &self.overlay
@@ -499,6 +543,16 @@ impl Providers {
     /// Refuses a provider whose terms must be acknowledged, or that needs a credential, until its
     /// [`Access`] records them. Terms come first: signing in to a service means accepting them.
     fn authorize(&self, provider: &Provider) -> Result<(), RegistryError> {
+        self.acknowledged(provider)?;
+        if provider.policy.requires_auth && !self.access.is_authenticated(&provider.id) {
+            return Err(RegistryError::AuthenticationRequired(provider.id.clone()));
+        }
+        Ok(())
+    }
+
+    /// Refuses a provider whose current terms, under its current program, must be acknowledged
+    /// and are not.
+    fn acknowledged(&self, provider: &Provider) -> Result<(), RegistryError> {
         let policy = &provider.policy;
         let program = self.programs.get(&provider.id).map(String::as_str);
         if policy.ack_required
@@ -510,9 +564,6 @@ impl Providers {
                 provider: provider.id.clone(),
                 terms: policy.tos_url.clone(),
             });
-        }
-        if policy.requires_auth && !self.access.is_authenticated(&provider.id) {
-            return Err(RegistryError::AuthenticationRequired(provider.id.clone()));
         }
         Ok(())
     }
@@ -931,6 +982,12 @@ pub enum RegistryError {
     /// A pack codec descriptor, probe or operation failed.
     #[error(transparent)]
     PackCodec(#[from] PackCodecError),
+    /// The provider has no way to check which account a credential belongs to.
+    #[error("provider {0:?} cannot check a credential")]
+    AccountsUnavailable(String),
+    /// No permitted provider handles links with this scheme.
+    #[error("no provider handles {0}:// links")]
+    UnknownHandoffScheme(String),
     /// The adapter does not support search.
     #[error("provider {0:?} does not support search")]
     SearchUnavailable(String),

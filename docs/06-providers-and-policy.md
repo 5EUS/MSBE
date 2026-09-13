@@ -182,7 +182,10 @@ a section without its capability, a route whose placeholders are not exactly the
 at most one `{game}`, an unknown facet placeholder, a parameter with no single value, a catalog
 with no `[games]`, a game or translation that is not a safe identifier, a distribution flag its
 policy does not respect, a file MSBE may not download with no page to send the user to, and
-`releases-v1` over releases in the catalog's own order.
+`releases-v1` over releases in the catalog's own order. It also refuses `[handoff]` without
+`browser_assisted` acquisition or the reverse, a handoff path or redeem route without its
+placeholders exactly once, `requires_auth` without `[auth]`, `[auth]` without
+`[mappings.account]`, and a condition that is not exactly one of `equals` and `in`.
 
 ### Target facts and catalogs that serve many games
 
@@ -267,11 +270,45 @@ network requests.
 The M1 runtime resolves every recognized source through a fail-closed reviewed-adapter registry.
 MSBE ships three provider programs, `url` on `direct-url-v1`, and `modrinth` and `thunderstore` on
 `catalog-v1`, and one native exception, `local`, which ingests files the user selects. Shipped programs are trusted
-as part of the build and pinned in native export lockfiles by their canonical digest. M1 has no credential or
-persisted-acknowledgement workflow, so providers declaring `requires_auth = true` or
-`ack_required = true` are refused with an explicit unsupported-workflow error. This permits
-future runtimes to declare stronger requirements without accidentally weakening policy on older
-clients.
+as part of the build and pinned in native export lockfiles by their canonical digest. A provider
+declaring `ack_required = true` is refused until its current terms, under its current program
+digest, are acknowledged, and one declaring `requires_auth = true` until it has a credential
+([07 §7.5](07-browser-and-secrets.md)).
+
+### Signing in, quotas and handoff links
+
+A catalog that needs a credential, or hands downloads to mod managers as links, says so in closed
+sections. The registry and the runtime do the rest:
+
+- **`[auth]`** names a sign-in `type` from a closed set (`api-key-v1`, a key the user pastes), the
+  `header` the key is sent in, the `key_page` where a user finds it, and a `validate` route whose
+  answer `[mappings.account]` reads: the account's `name`, and `premium` for display only. The
+  header may not be one HTTP already gives a meaning to, such as `authorization`, `cookie`,
+  `content-*` or `proxy-*`. The registry, not the runtime, attaches the credential, and only to
+  requests for the origin of `api_base`. A key can be checked against `validate` before it is
+  kept.
+- **`identify = "application-headers"`** in `[provider.metadata]` sends `Application-Name` and
+  `Application-Version` with each request to the API. MSBE supplies the values.
+- **`[rate_limit] remaining`** names the response headers that report remaining quota. The
+  registry records the last values per provider.
+- **`[handoff]`** is declared exactly when acquisition is `browser_assisted`, and no two providers
+  may claim one scheme. A link `<scheme>://<host>/<path>?<query>` is read against a fixed
+  structure. `host = "game"` maps the host back through `[games]`. `path` lists literal segments
+  plus `{project}` and `{release}`, each once. `query` names the parameters kept, by role (`key`,
+  `expires`), and every other parameter is dropped. The runtime checks, in order: the scheme, the
+  game, the exact path, that the project and release are references, that each declared parameter
+  appears once, and that `expires` is in the future. A refusal never repeats the link. The
+  `redeem` route is sent the kept parameters and answers with download URLs, which
+  `[mappings.handoff] urls` selects. The first is downloaded like any direct file, without the
+  credential. Nothing is published to verify it against, so its SHA-256 and SHA-512 are recorded
+  as provenance.
+
+Catalogs without exact sizes, digests or dependencies fit as well. `[mappings] releases` accepts
+`{ each, when, unless }` to filter the objects listed. A condition is `{ pointer, equals }` or
+`{ pointer, in = [...] }`. `file.size_kib` bounds a download by a size in whole kibibytes without
+checking it as an exact size, and `release.dependencies` may be left unmapped. A Nexus Mods
+program uses all of this; it stays out of the repository until Nexus grants MSBE API access
+(§6.6).
 
 ### Declarative provider programs
 
@@ -444,9 +481,10 @@ MSBE registers the protocol handler on all three platforms and catches links fro
 **the integrated browser or the user's system browser alike** — a user who prefers
 Firefox loses nothing.
 
-**Status: planned.** A program can already select `browser_assisted` acquisition with
-`scheme = "nxm"`, so every file is typed as needing the user and names its page (§6.3). Registering
-the handler and redeeming links remain, and depend on the credential workflow M1 refuses.
+**Status: in progress.** A program selects `browser_assisted` acquisition with `scheme = "nxm"`,
+so every file is typed as needing the user and names its page (§6.3). Its `[handoff]` section lets
+the reviewed runtime read a link and redeem it with the user's key (§6.4). Registering the protocol
+handler, and receiving links into the download queue, remain.
 
 ## 6.7 Assisted download queue (the large-modpack case)
 

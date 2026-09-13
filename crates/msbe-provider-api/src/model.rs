@@ -122,6 +122,10 @@ pub struct ReleaseFile {
     pub name: String,
     /// Its size in bytes, when the provider publishes it.
     pub size: Option<u64>,
+    /// The most bytes it may be, when the provider publishes only an approximate size. Never
+    /// checked as an exact size.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u64>,
     /// Its MD5 as hex, when the provider publishes it.
     pub md5: Option<String>,
     /// Its SHA-1 as hex, when the provider publishes it.
@@ -208,6 +212,65 @@ impl fmt::Display for ActionReason {
             Self::NoDownloadUrl => "its provider publishes no download URL",
             Self::WebsiteOnly => "its provider only serves downloads through its website",
         })
+    }
+}
+
+/// The account a credential belongs to, as its provider reports it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Account {
+    /// The account's display name.
+    pub name: String,
+    /// Whether the provider reports the account as paid for. Shown to the user; nothing MSBE does
+    /// depends on it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub premium: Option<bool>,
+}
+
+/// A handoff link read against its provider's declared structure.
+///
+/// Only a provider's [`Handoff`](crate::Handoff) capability builds one, after checking every part.
+/// Its query values, such as a one-time key, are secret: `Debug` shows only their names, and the
+/// ticket cannot be serialized.
+#[derive(Clone, PartialEq, Eq)]
+pub struct HandoffTicket {
+    /// The provider whose link it is.
+    pub provider: String,
+    /// The plan game the link's host names.
+    pub game: String,
+    /// The catalog's identifier for that game, as the link's host wrote it.
+    pub catalog_game: String,
+    /// The provider's project id.
+    pub project: String,
+    /// The provider's release id.
+    pub release: String,
+    /// The query parameters kept, under the names the link used.
+    pub query: Vec<(String, String)>,
+    /// When the link expires, in Unix seconds, when it says.
+    pub expires: Option<u64>,
+}
+
+impl HandoffTicket {
+    /// The project the linked file belongs to.
+    pub fn package(&self) -> PackageId {
+        PackageId {
+            provider: self.provider.clone(),
+            project: self.project.clone(),
+        }
+    }
+}
+
+impl fmt::Debug for HandoffTicket {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let names: Vec<&str> = self.query.iter().map(|(name, _)| name.as_str()).collect();
+        formatter
+            .debug_struct("HandoffTicket")
+            .field("provider", &self.provider)
+            .field("game", &self.game)
+            .field("project", &self.project)
+            .field("release", &self.release)
+            .field("query", &names)
+            .field("expires", &self.expires)
+            .finish_non_exhaustive()
     }
 }
 

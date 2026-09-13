@@ -39,8 +39,8 @@ pub use acquisition::{
     AcquiredArtifact, AcquisitionError, ArtifactDescriptor, DOWNLOAD_LIMIT, acquire,
 };
 pub use adapter::{
-    Adapter, AdapterError, Build, ProgramRegistration, Registration, Releases, Search, Update,
-    UpdateCheck, Updates,
+    Accounts, Adapter, AdapterError, Build, Handoff, ProgramRegistration, Registration, Releases,
+    Search, Update, UpdateCheck, Updates,
 };
 pub use codec::{
     BlobSource, BuildPackCodec, ContainerKind, DistributionDecision, EmbeddedBlob, EntryContent,
@@ -67,10 +67,11 @@ pub use msbe_core::instance::NativeExtensionIdentity;
 pub use msbe_core::{instance::Provenance, solver::PackageId};
 pub use overlay::{Overlay, OverlayError};
 pub use program::{
-    Capability, ChannelMapping, Condition, DependencyKinds, DependencyMapping, EachSelector,
-    EditionGameIds, Encoding, Facets, FileMapping, GameId, HashAlgorithm, Items, Mappings,
+    AccountMapping, Auth, AuthKind, Capability, ChannelMapping, Condition, DependencyKinds,
+    DependencyMapping, EachSelector, EditionGameIds, Encoding, Facets, FileMapping, FilteredItems,
+    GameId, HandoffHost, HandoffLink, HandoffMapping, HandoffQuery, HashAlgorithm, Items, Mappings,
     ObjectMapping, Pages, ProgramError, ProviderProgram, ProviderProgramEnvelope, QueryParameter,
-    ReleaseMapping, ReleaseOrder, ReleasesRequest, Routes, RuntimeKind, SearchRequest,
+    RateLimit, ReleaseMapping, ReleaseOrder, ReleasesRequest, Routes, RuntimeKind, SearchRequest,
     SegmentedReference, Selector, SingleItem, TargetFact, TextDependency, Translations,
     UpdateFields, UpdateProtocol,
 };

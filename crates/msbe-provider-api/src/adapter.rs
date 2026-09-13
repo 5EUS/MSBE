@@ -9,7 +9,9 @@ use crate::{
     AcquiredArtifact, AcquisitionError, ApiHeaders, ArtifactDescriptor, DOWNLOAD_LIMIT,
     EndpointError, HttpClient, HttpError, ManifestError, PackCodecRegistration, Provider, Target,
     WasmPackCodecRegistration, acquire,
-    model::{Download, Project, Release, ReleaseFile, Request, SearchResult},
+    model::{
+        Account, Download, HandoffTicket, Project, Release, ReleaseFile, Request, SearchResult,
+    },
 };
 
 /// Builds an adapter from its validated manifest.
@@ -88,6 +90,16 @@ pub trait Adapter: fmt::Debug {
         None
     }
 
+    /// Reading and redeeming the links the provider's pages hand mod managers, when it has them.
+    fn as_handoff(&self) -> Option<&dyn Handoff> {
+        None
+    }
+
+    /// Checking which account a credential belongs to, when the provider accepts one.
+    fn as_accounts(&self) -> Option<&dyn Accounts> {
+        None
+    }
+
     /// The headers the provider's metadata API uses: the one its credential goes in, and the ones
     /// that report remaining quota. The adapter names them and never holds the credential; the
     /// registry attaches it to requests for the provider's metadata origin only.
@@ -117,7 +129,7 @@ pub trait Adapter: fmt::Debug {
         let descriptor = ArtifactDescriptor {
             url: url.clone(),
             file_name: file.name.clone(),
-            limit: file.size.unwrap_or(DOWNLOAD_LIMIT),
+            limit: file.size.or(file.limit).unwrap_or(DOWNLOAD_LIMIT),
             size: file.size,
             md5: file.md5.clone(),
             sha1: file.sha1.clone(),
@@ -216,6 +228,46 @@ pub trait Updates {
         installed: &[&Provenance],
         target: &Target,
     ) -> Result<Vec<UpdateCheck>, AdapterError>;
+}
+
+/// Reading and redeeming the links a browser-assisted provider's pages hand mod managers
+/// (`docs/06-providers-and-policy.md` §6.6).
+pub trait Handoff {
+    /// The URI scheme of the links, lowercase and without `://`.
+    fn scheme(&self) -> &str;
+
+    /// Reads `uri` against the provider's declared link structure, at `now` in Unix seconds.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdapterError`] for a link that is too long or of another scheme, names a game the
+    /// provider does not serve, has a path or reference that does not fit, or has expired.
+    fn parse(&self, uri: &str, now: u64) -> Result<HandoffTicket, AdapterError>;
+
+    /// Redeems `ticket` for the file it names, which MSBE downloads directly. The provider
+    /// publishes no digest to verify it against, so its SHA-256 and SHA-512 are recorded as
+    /// provenance.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdapterError`] for another provider's ticket, a request failure, or an answer
+    /// without a usable download URL.
+    fn redeem(
+        &self,
+        http: &dyn HttpClient,
+        ticket: &HandoffTicket,
+    ) -> Result<ReleaseFile, AdapterError>;
+}
+
+/// Checking which account a credential belongs to.
+pub trait Accounts {
+    /// The account that the credential the registry attaches belongs to.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdapterError`] when the provider refuses the credential, or its answer names no
+    /// account.
+    fn account(&self, http: &dyn HttpClient) -> Result<Account, AdapterError>;
 }
 
 /// What updating one installed release would do.

@@ -12,7 +12,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    EnvelopeError, ExtensionEnvelope, ExtensionProvide, Provider, VerifyingKey,
+    ApiHeaders, EnvelopeError, ExtensionEnvelope, ExtensionProvide, HeaderError, Provider,
+    VerifyingKey,
     manifest::{Acquisition, validate_https_url},
 };
 
@@ -23,6 +24,8 @@ pub const PROGRAM_SCHEMA_VERSION: u32 = 1;
 const TEXT_LIMIT: usize = 256;
 /// The longest game, edition or other identifier a program may declare.
 const IDENTIFIER_LIMIT: usize = 128;
+/// The most path segments a handoff link may declare.
+const HANDOFF_PATH_LIMIT: usize = 8;
 
 /// A provider program carried by the common extension envelope.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,6 +108,15 @@ pub struct ProviderProgram {
     /// Web pages that send the user to a file MSBE may not download itself.
     #[serde(default, skip_serializing_if = "Pages::is_empty")]
     pub pages: Pages,
+    /// How a catalog accepts a credential.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<Auth>,
+    /// The response headers that report remaining quota.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate_limit: Option<RateLimit>,
+    /// How the links a browser-assisted catalog's pages hand over are read and redeemed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff: Option<HandoffLink>,
     /// How a catalog is asked to search.
     #[serde(default)]
     pub search: SearchRequest,
@@ -133,6 +145,9 @@ impl ProviderProgram {
                     && self.translate.is_empty()
                     && self.routes.is_empty()
                     && self.pages.is_empty()
+                    && self.auth.is_none()
+                    && self.rate_limit.is_none()
+                    && self.handoff.is_none()
                     && self.mappings.is_empty()
                     && self.search == SearchRequest::default()
                     && self.releases == ReleasesRequest::default()
@@ -158,6 +173,8 @@ impl ProviderProgram {
                 }
                 self.mappings.validate()?;
                 self.validate_capabilities()?;
+                self.validate_auth()?;
+                self.validate_handoff()?;
                 self.validate_acquisition()
             }
         }
@@ -166,6 +183,125 @@ impl ProviderProgram {
     /// The catalog's identifier for `game` in `edition`, when the program serves it.
     pub fn game_id(&self, game: &str, edition: Option<&str>) -> Option<&str> {
         self.games.get(game)?.for_edition(edition)
+    }
+
+    /// The plan game the catalog identifies as `id`, in any of its editions.
+    pub fn game_with_id(&self, id: &str) -> Option<&str> {
+        self.games
+            .iter()
+            .find(|(_, ids)| ids.identifiers().any(|known| known == id))
+            .map(|(game, _)| game.as_str())
+    }
+
+    /// Checks `[auth]`, `[rate_limit]` and the account mapping: a policy that requires sign-in says
+    /// how a credential is sent and checked, and every header named is usable.
+    fn validate_auth(&self) -> Result<(), ProgramError> {
+        let account = self.mappings.account.is_some();
+        match &self.auth {
+            None if self.provider.policy.requires_auth => return Err(ProgramError::MissingAuth),
+            None if account => {
+                return Err(ProgramError::SectionDependency {
+                    section: "mappings.account",
+                    requires: "auth",
+                });
+            }
+            None => {}
+            Some(auth) => {
+                ApiHeaders {
+                    credential: Some(auth.header.clone()),
+                    quota: Vec::new(),
+                }
+                .validate()?;
+                check_page(&auth.key_page, &[], &[])?;
+                if auth.key_page.contains("{game}") {
+                    return Err(ProgramError::InvalidPage(auth.key_page.clone()));
+                }
+                check_route(&auth.validate, &[])?;
+                if auth.validate.contains("{game}") {
+                    return Err(ProgramError::InvalidRoute(auth.validate.clone()));
+                }
+                if !account {
+                    return Err(ProgramError::SectionDependency {
+                        section: "auth",
+                        requires: "mappings.account",
+                    });
+                }
+            }
+        }
+        if let Some(rate) = &self.rate_limit {
+            if rate.remaining.is_empty() {
+                return Err(ProgramError::InvalidRateLimit);
+            }
+            ApiHeaders {
+                credential: None,
+                quota: rate.remaining.clone(),
+            }
+            .validate()?;
+        }
+        Ok(())
+    }
+
+    /// Checks `[handoff]`: declared exactly when acquisition is browser-assisted, with a path that
+    /// names the project and release once each, a redeem route, a mapping of its answer, and games
+    /// a link's host can name unambiguously.
+    fn validate_handoff(&self) -> Result<(), ProgramError> {
+        let assisted = self.provider.handoff_scheme().is_some();
+        let Some(link) = &self.handoff else {
+            if assisted {
+                return Err(ProgramError::HandoffAcquisition);
+            }
+            if self.mappings.handoff.is_some() {
+                return Err(ProgramError::SectionDependency {
+                    section: "mappings.handoff",
+                    requires: "handoff",
+                });
+            }
+            return Ok(());
+        };
+        if !assisted {
+            return Err(ProgramError::HandoffAcquisition);
+        }
+        if self.mappings.handoff.is_none() {
+            return Err(ProgramError::SectionDependency {
+                section: "handoff",
+                requires: "mappings.handoff",
+            });
+        }
+        let placeholders = ["{project}", "{release}"];
+        let well_formed = !link.path.is_empty()
+            && link.path.len() <= HANDOFF_PATH_LIMIT
+            && placeholders.iter().all(|placeholder| {
+                link.path
+                    .iter()
+                    .filter(|segment| segment.as_str() == *placeholder)
+                    .count()
+                    == 1
+            })
+            && link
+                .path
+                .iter()
+                .all(|segment| placeholders.contains(&segment.as_str()) || is_identifier(segment));
+        if !well_formed {
+            return Err(ProgramError::InvalidHandoffPath(link.path.join("/")));
+        }
+        let names: Vec<&str> = link
+            .query
+            .key
+            .iter()
+            .chain(&link.query.expires)
+            .map(String::as_str)
+            .collect();
+        check_names(&names)?;
+        check_route(&link.redeem, &["project", "release"])?;
+        let mut owners: BTreeMap<&str, &str> = BTreeMap::new();
+        for (game, ids) in &self.games {
+            for id in ids.identifiers() {
+                if owners.insert(id, game).is_some_and(|owner| owner != game) {
+                    return Err(ProgramError::AmbiguousHandoffGame(id.to_owned()));
+                }
+            }
+        }
+        Ok(())
     }
 
     fn validate_games(&self) -> Result<(), ProgramError> {
@@ -376,23 +512,20 @@ impl ProviderProgram {
     fn require_release_model(&self, capability: Capability) -> Result<(), ProgramError> {
         let release = &self.mappings.release;
         let dependency = &release.dependency;
-        let textual = dependency.text.is_some();
+        // A catalog that publishes no dependencies leaves them unmapped; mapped, each is read.
+        let readable = release.dependencies.is_none() || dependency.text.is_some();
         for (present, requirement) in [
             (release.id.is_some(), "mapping release.id"),
             (release.number.is_some(), "mapping release.number"),
             (release.published.is_some(), "mapping release.published"),
             (release.files.is_some(), "mapping release.files"),
-            (
-                release.dependencies.is_some(),
-                "mapping release.dependencies",
-            ),
             (release.file.name.is_some(), "mapping release.file.name"),
             (
-                textual || dependency.project.is_some(),
+                readable || dependency.project.is_some(),
                 "mapping release.dependency.project or release.dependency.text",
             ),
             (
-                textual || dependency.kind.is_some(),
+                readable || dependency.kind.is_some(),
                 "mapping release.dependency.kind or release.dependency.text",
             ),
         ] {
@@ -439,6 +572,18 @@ pub enum GameId {
 }
 
 impl GameId {
+    /// Every identifier: the default, then each edition's.
+    fn identifiers(&self) -> impl Iterator<Item = &str> {
+        let (default, editions) = match self {
+            Self::Id(id) => (Some(id), None),
+            Self::ByEdition(ids) => (ids.id.as_ref(), Some(ids.editions.values())),
+        };
+        default
+            .into_iter()
+            .chain(editions.into_iter().flatten())
+            .map(String::as_str)
+    }
+
     /// The identifier for `edition`: its own, else the default, if the program declares one.
     pub fn for_edition(&self, edition: Option<&str>) -> Option<&str> {
         match self {
@@ -547,14 +692,14 @@ impl Routes {
     }
 
     fn validate(&self) -> Result<(), ProgramError> {
-        for (route, placeholder) in [
-            (&self.search, None),
-            (&self.project, Some("reference")),
-            (&self.releases, Some("project")),
-            (&self.release, Some("release")),
+        for (route, placeholders) in [
+            (&self.search, &[][..]),
+            (&self.project, &["reference"][..]),
+            (&self.releases, &["project"][..]),
+            (&self.release, &["release"][..]),
         ] {
             if let Some(route) = route {
-                check_route(route, placeholder)?;
+                check_route(route, placeholders)?;
             }
         }
         self.reference
@@ -618,6 +763,82 @@ impl Pages {
             check_page(page, &["release"], &["project"])?;
         }
         Ok(())
+    }
+}
+
+/// How a catalog accepts a credential.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Auth {
+    /// The sign-in type.
+    #[serde(rename = "type")]
+    pub kind: AuthKind,
+    /// The request header the credential is sent in, lowercase.
+    pub header: String,
+    /// The page where a user finds or creates their credential.
+    pub key_page: String,
+    /// Route answering with the account a credential belongs to, without placeholders.
+    pub validate: String,
+}
+
+/// Sign-in types; additions require an MSBE code review.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AuthKind {
+    /// A personal API key the user pastes, sent unchanged in the declared header.
+    ApiKeyV1,
+}
+
+/// The response headers that report remaining quota.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RateLimit {
+    /// Header names, lowercase.
+    pub remaining: Vec<String>,
+}
+
+/// How a link handed over by a browser-assisted catalog's page is read and redeemed.
+///
+/// A link is `<scheme>://<host>/<path>?<query>`, read against this fixed structure only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HandoffLink {
+    /// What the link's host names.
+    pub host: HandoffHost,
+    /// The path's segments, in order: literals, and `{project}` and `{release}` once each.
+    pub path: Vec<String>,
+    /// The query parameters kept from a link, by role. Every other parameter is dropped.
+    #[serde(default, skip_serializing_if = "HandoffQuery::is_empty")]
+    pub query: HandoffQuery,
+    /// Route redeeming a link for download URLs, with `{project}` and `{release}` once each and
+    /// `{game}` at most once. The kept query parameters are sent with it, under the same names.
+    pub redeem: String,
+}
+
+/// What a handoff link's host names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum HandoffHost {
+    /// The catalog's identifier for a game in `[games]`.
+    Game,
+}
+
+/// A handoff link's query parameter names, by role. Their values are secret.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HandoffQuery {
+    /// The parameter carrying the link's one-time key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    /// The parameter carrying the link's expiry, in Unix seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires: Option<String>,
+}
+
+impl HandoffQuery {
+    /// Whether no role is declared.
+    pub const fn is_empty(&self) -> bool {
+        self.key.is_none() && self.expires.is_none()
     }
 }
 
@@ -845,8 +1066,8 @@ impl UpdateProtocol {
                 fields,
                 ..
             } => {
-                check_route(listed, None)?;
-                check_route(latest, None)?;
+                check_route(listed, &[])?;
+                check_route(latest, &[])?;
                 check_names(&[
                     &fields.hashes,
                     &fields.algorithm,
@@ -922,6 +1143,12 @@ pub struct Mappings {
     /// Fields in each release object.
     #[serde(default)]
     pub release: ReleaseMapping,
+    /// Fields in the answer to `[auth] validate`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<AccountMapping>,
+    /// Fields in the answer to `[handoff] redeem`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff: Option<HandoffMapping>,
 }
 
 impl Mappings {
@@ -931,6 +1158,8 @@ impl Mappings {
             && self.hit.is_none()
             && self.project.is_empty()
             && self.release.is_empty()
+            && self.account.is_none()
+            && self.handoff.is_none()
     }
 
     fn validate(&self) -> Result<(), ProgramError> {
@@ -938,6 +1167,22 @@ impl Mappings {
             if pointer.len() > TEXT_LIMIT || !valid_json_pointer(pointer) {
                 return Err(ProgramError::InvalidPointer(pointer.clone()));
             }
+        }
+        for condition in self.all_conditions() {
+            if !condition.is_valid() {
+                return Err(ProgramError::InvalidCondition(condition.pointer.clone()));
+            }
+        }
+        for items in self.releases.iter().chain(&self.release.files) {
+            if let Items::Filtered(filtered) = items
+                && filtered.when.is_none()
+                && filtered.unless.is_none()
+            {
+                return Err(ProgramError::InvalidCondition(filtered.each.clone()));
+            }
+        }
+        if self.release.file.size.is_some() && self.release.file.size_kib.is_some() {
+            return Err(ProgramError::ConflictingSizes);
         }
         if let Some(channel) = &self.release.channel {
             check_distinct_names(&[&channel.release, &channel.beta, &channel.alpha])
@@ -954,14 +1199,74 @@ impl Mappings {
         Ok(())
     }
 
+    /// Every condition a filter or selector declares.
+    fn all_conditions(&self) -> impl Iterator<Item = &Condition> {
+        let release = &self.release;
+        let selectors = [
+            self.hit.as_ref().and_then(|hit| hit.games.as_ref()),
+            self.project.games.as_ref(),
+            release.game_versions.as_ref(),
+            release.loaders.as_ref(),
+            release.editions.as_ref(),
+            release.storefronts.as_ref(),
+            release.file.md5.as_ref(),
+            release.file.sha1.as_ref(),
+            release.file.sha256.as_ref(),
+            release.file.sha512.as_ref(),
+            self.handoff.as_ref().map(|handoff| &handoff.urls),
+        ];
+        self.releases
+            .iter()
+            .chain(&release.files)
+            .flat_map(Items::conditions)
+            .chain(
+                selectors
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|selector| match selector {
+                        Selector::Pointer(_) => None,
+                        Selector::Each(each) => each.when.as_ref(),
+                    }),
+            )
+    }
+
     fn all_pointers(&self) -> impl Iterator<Item = &String> {
         self.search_items
             .iter()
-            .chain(self.releases.iter().map(Items::pointer))
+            .chain(self.releases.iter().flat_map(Items::all_pointers))
             .chain(self.hit.iter().flat_map(ObjectMapping::all_pointers))
             .chain(self.project.all_pointers())
             .chain(self.release.all_pointers())
+            .chain(
+                self.account.iter().flat_map(|account| {
+                    std::iter::once(&account.name).chain(account.premium.as_ref())
+                }),
+            )
+            .chain(
+                self.handoff
+                    .iter()
+                    .flat_map(|handoff| handoff.urls.all_pointers()),
+            )
     }
+}
+
+/// The account a credential belongs to, as the `[auth] validate` answer describes it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AccountMapping {
+    /// The account's display name.
+    pub name: String,
+    /// Whether the account is paid for, shown to the user and never used to decide anything.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub premium: Option<String>,
+}
+
+/// The download URLs in a `[handoff] redeem` answer, the first of which is used.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HandoffMapping {
+    /// The URLs.
+    pub urls: Selector,
 }
 
 /// Items at a pointer.
@@ -972,15 +1277,52 @@ pub enum Items {
     Array(String),
     /// A pointer to one object, taken as the only item, such as a release that is its own file.
     Single(SingleItem),
+    /// The objects of an array that meet one condition, or fail another.
+    Filtered(FilteredItems),
 }
 
 impl Items {
-    /// The pointer.
-    pub const fn pointer(&self) -> &String {
-        match self {
-            Self::Array(pointer) | Self::Single(SingleItem { single: pointer }) => pointer,
-        }
+    /// The pointer to the items, then any pointer a condition reads.
+    fn all_pointers(&self) -> impl Iterator<Item = &String> {
+        let (pointer, conditions) = match self {
+            Self::Array(pointer) | Self::Single(SingleItem { single: pointer }) => {
+                (pointer, [None, None])
+            }
+            Self::Filtered(filtered) => (
+                &filtered.each,
+                [filtered.when.as_ref(), filtered.unless.as_ref()],
+            ),
+        };
+        std::iter::once(pointer).chain(
+            conditions
+                .into_iter()
+                .flatten()
+                .map(|condition| &condition.pointer),
+        )
     }
+
+    fn conditions(&self) -> impl Iterator<Item = &Condition> {
+        let conditions = match self {
+            Self::Array(_) | Self::Single(_) => [None, None],
+            Self::Filtered(filtered) => [filtered.when.as_ref(), filtered.unless.as_ref()],
+        };
+        conditions.into_iter().flatten()
+    }
+}
+
+/// The objects of an array kept by their conditions: each that meets `when`, if declared, and
+/// does not meet `unless`, if declared. At least one is declared.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FilteredItems {
+    /// Pointer to the array of objects.
+    pub each: String,
+    /// Keeps only objects that meet this condition.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<Condition>,
+    /// Drops objects that meet this condition.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unless: Option<Condition>,
 }
 
 /// A pointer to one object taken as a list of one.
@@ -1028,14 +1370,39 @@ pub struct EachSelector {
     pub when: Option<Condition>,
 }
 
-/// An object's value at `pointer` is `equals`, compared as text.
+/// An object's value at `pointer`, compared as text, is `equals`, or is one of `in`. Exactly one
+/// of the two is declared.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Condition {
     /// Pointer within the object.
     pub pointer: String,
     /// The text the value must be.
-    pub equals: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equals: Option<String>,
+    /// The texts the value may be.
+    #[serde(default, rename = "in", skip_serializing_if = "Vec::is_empty")]
+    pub one_of: Vec<String>,
+}
+
+impl Condition {
+    /// Whether `value`, the object's value as text, meets the condition. An absent value meets
+    /// none.
+    pub fn holds(&self, value: Option<&str>) -> bool {
+        value.is_some_and(|value| match &self.equals {
+            Some(equals) => equals == value,
+            None => self.one_of.iter().any(|allowed| allowed == value),
+        })
+    }
+
+    fn is_valid(&self) -> bool {
+        self.equals.is_some() == self.one_of.is_empty()
+            && self
+                .equals
+                .iter()
+                .chain(&self.one_of)
+                .all(|text| text.len() <= TEXT_LIMIT)
+    }
 }
 
 /// Project fields selected from a JSON object.
@@ -1173,7 +1540,7 @@ impl ReleaseMapping {
         ]
         .into_iter()
         .flatten()
-        .chain(self.files.iter().map(Items::pointer))
+        .chain(self.files.iter().flat_map(Items::all_pointers))
         .chain(
             [
                 &self.game_versions,
@@ -1215,8 +1582,13 @@ pub struct FileMapping {
     pub url: Option<String>,
     /// File name pointer.
     pub name: Option<String>,
-    /// File size pointer.
+    /// Pointer to the file's exact size in bytes, which a download must match.
     pub size: Option<String>,
+    /// Pointer to the file's size in whole kibibytes, for catalogs that publish no exact size. It bounds
+    /// a download's size and is never checked as an exact one. At most one of `size` and
+    /// `size_kib` is mapped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_kib: Option<String>,
     /// MD5 digest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub md5: Option<Selector>,
@@ -1244,6 +1616,7 @@ impl FileMapping {
         self.url.is_none()
             && self.name.is_none()
             && self.size.is_none()
+            && self.size_kib.is_none()
             && self.md5.is_none()
             && self.sha1.is_none()
             && self.sha256.is_none()
@@ -1258,6 +1631,7 @@ impl FileMapping {
             &self.url,
             &self.name,
             &self.size,
+            &self.size_kib,
             &self.primary,
             &self.distributable,
         ]
@@ -1368,9 +1742,9 @@ pub struct TextDependency {
     pub separator: String,
 }
 
-/// Refuses a route that can escape its origin, or whose placeholders are not exactly
-/// `placeholder`, once, and `{game}` at most once.
-fn check_route(route: &str, placeholder: Option<&str>) -> Result<(), ProgramError> {
+/// Refuses a route that can escape its origin, or whose placeholders are not exactly each of
+/// `placeholders` once, and `{game}` at most once.
+fn check_route(route: &str, placeholders: &[&str]) -> Result<(), ProgramError> {
     let invalid = || ProgramError::InvalidRoute(route.to_owned());
     if !route.starts_with('/')
         || route.contains("//")
@@ -1380,16 +1754,14 @@ fn check_route(route: &str, placeholder: Option<&str>) -> Result<(), ProgramErro
     {
         return Err(invalid());
     }
-    let rest = match placeholder {
-        Some(name) => {
-            let marker = format!("{{{name}}}");
-            if route.matches(&marker).count() != 1 {
-                return Err(invalid());
-            }
-            route.replacen(&marker, "", 1)
+    let mut rest = route.to_owned();
+    for name in placeholders {
+        let marker = format!("{{{name}}}");
+        if rest.matches(&marker).count() != 1 {
+            return Err(invalid());
         }
-        None => route.to_owned(),
-    };
+        rest = rest.replacen(&marker, "", 1);
+    }
     let rest = rest.replacen("{game}", "", 1);
     if rest.contains(['{', '}', '?', '#', ' ']) {
         return Err(invalid());
@@ -1652,6 +2024,44 @@ pub enum ProgramError {
     /// `releases-v1` cannot tell a newer release from an older one in the catalog's order.
     #[error("the releases-v1 update protocol needs [releases] order newest-first or semver")]
     UnorderedReleases,
+    /// A policy requires sign-in, but the program does not say how a credential is sent.
+    #[error("a catalog program whose policy requires authentication must declare [auth]")]
+    MissingAuth,
+    /// A section is declared without another section it needs.
+    #[error("provider program declares [{section}] without [{requires}]")]
+    SectionDependency {
+        /// The section declared.
+        section: &'static str,
+        /// The section it needs.
+        requires: &'static str,
+    },
+    /// `[handoff]` without browser-assisted acquisition, or browser-assisted acquisition without
+    /// `[handoff]`.
+    #[error(
+        "a catalog program declares [handoff] exactly when its acquisition is browser_assisted"
+    )]
+    HandoffAcquisition,
+    /// A handoff path does not name the project and release once each among identifier literals.
+    #[error("invalid provider program handoff path {0:?}")]
+    InvalidHandoffPath(String),
+    /// Two games share a catalog identifier, so a handoff link's host could not name one.
+    #[error("catalog identifier {0:?} names more than one game, so no handoff link can name it")]
+    AmbiguousHandoffGame(String),
+    /// A condition declares neither or both of `equals` and `in`, or a filter declares neither
+    /// `when` nor `unless`.
+    #[error(
+        "provider program condition at {0:?} must declare exactly one of equals and in, and a filter at least one of when and unless"
+    )]
+    InvalidCondition(String),
+    /// A file maps both an exact size and a size in kibibytes.
+    #[error("provider program maps both release.file.size and release.file.size_kib")]
+    ConflictingSizes,
+    /// `[rate_limit]` names no header.
+    #[error("provider program [rate_limit] must name at least one header")]
+    InvalidRateLimit,
+    /// A header the program names cannot be used.
+    #[error("invalid provider program header: {0}")]
+    Header(#[from] HeaderError),
     /// A capability was listed more than once.
     #[error("duplicate provider program capability {0:?}")]
     DuplicateCapability(Capability),
@@ -2120,5 +2530,246 @@ mod tests {
             validate(&mixed),
             Err(ProgramError::InvalidDependencyMapping)
         ));
+    }
+
+    /// A browser-assisted catalog that signs in with a key, in the shape of a real one: each file
+    /// its own release, old files filtered out, sizes in whole kibibytes, and no dependencies.
+    const HANDOFF: &str = r#"
+        runtime = "catalog-v1"
+        capabilities = ["project", "releases"]
+        [games]
+        game = "game-domain"
+        [provider]
+        schema = 1
+        id = "catalog"
+        name = "Catalog"
+        [provider.source]
+        type = "prefixed"
+        prefix = "catalog:"
+        [provider.metadata]
+        api_base = "https://api.example.test"
+        identify = "application-headers"
+        [provider.acquisition]
+        type = "browser_assisted"
+        scheme = "handoff"
+        [provider.policy]
+        requires_auth = true
+        respects_distribution_flag = false
+        tos_url = "https://www.example.test/terms"
+        ack_required = true
+        [auth]
+        type = "api-key-v1"
+        header = "apikey"
+        key_page = "https://www.example.test/account/keys"
+        validate = "/v1/users/validate.json"
+        [rate_limit]
+        remaining = ["x-hourly-remaining"]
+        [routes]
+        project = "/v1/games/{game}/mods/{reference}.json"
+        releases = "/v1/games/{game}/mods/{project}/files.json"
+        [pages]
+        release = "https://www.example.test/{game}/mods/{project}?file_id={release}"
+        [handoff]
+        host = "game"
+        path = ["mods", "{project}", "files", "{release}"]
+        query = { key = "key", expires = "expires" }
+        redeem = "/v1/games/{game}/mods/{project}/files/{release}/download_link.json"
+        [mappings]
+        releases = { each = "/files", unless = { pointer = "/category", in = ["OLD", "ARCHIVED"] } }
+        [mappings.project]
+        id = "/mod_id"
+        title = "/name"
+        [mappings.release]
+        id = "/file_id"
+        number = "/version"
+        published = "/uploaded"
+        files = { single = "" }
+        [mappings.release.file]
+        name = "/file_name"
+        size_kib = "/size_kb"
+        [mappings.account]
+        name = "/name"
+        premium = "/is_premium"
+        [mappings.handoff]
+        urls = { each = "", value = "/URI" }
+    "#;
+
+    #[test]
+    fn a_browser_assisted_catalog_declares_its_sign_in_and_handoff_links() {
+        let program: ProviderProgram = toml::from_str(HANDOFF).unwrap();
+        program.validate().unwrap();
+        assert_eq!(program.game_with_id("game-domain"), Some("game"));
+        assert_eq!(program.game_with_id("game"), None);
+        for (from, to, expected) in [
+            (
+                "type = \"api-key-v1\"",
+                "type = \"oauth-pkce-v1\"",
+                "unknown variant",
+            ),
+            (
+                "identify = \"application-headers\"",
+                "identify = \"user-agent\"",
+                "unknown variant",
+            ),
+            (
+                "header = \"apikey\"",
+                "header = \"authorization\"",
+                "cannot carry a credential",
+            ),
+            ("header = \"apikey\"", "header = \"Api Key\"", "header name"),
+            (
+                "validate = \"/v1/users/validate.json\"",
+                "validate = \"/v1/{game}/validate.json\"",
+                "route",
+            ),
+            (
+                "key_page = \"https://www.example.test/account/keys\"",
+                "key_page = \"http://www.example.test/account/keys\"",
+                "page",
+            ),
+            (
+                "remaining = [\"x-hourly-remaining\"]",
+                "remaining = []",
+                "rate_limit",
+            ),
+            (
+                "remaining = [\"x-hourly-remaining\"]",
+                "remaining = [\"X-Hourly\"]",
+                "header name",
+            ),
+            (
+                "[mappings.account]\n        name = \"/name\"\n        premium = \"/is_premium\"\n",
+                "",
+                "mappings.account",
+            ),
+        ] {
+            assert_refused(HANDOFF, from, to, expected);
+        }
+    }
+
+    #[test]
+    fn handoff_links_filters_and_sizes_are_bounded() {
+        let path = "path = [\"mods\", \"{project}\", \"files\", \"{release}\"]";
+        let filter = "unless = { pointer = \"/category\", in = [\"OLD\", \"ARCHIVED\"] }";
+        for (from, to, expected) in [
+            (
+                path,
+                "path = [\"mods\", \"{project}\", \"files\"]",
+                "handoff path",
+            ),
+            (
+                path,
+                "path = [\"mods\", \"{project}\", \"{project}\", \"{release}\"]",
+                "handoff path",
+            ),
+            (
+                path,
+                "path = [\"m/ods\", \"{project}\", \"files\", \"{release}\"]",
+                "handoff path",
+            ),
+            (
+                "expires = \"expires\" }",
+                "expires = \"key\" }",
+                "parameter",
+            ),
+            (
+                "/files/{release}/download_link.json",
+                "/files/download_link.json",
+                "route",
+            ),
+            (filter, "unless = { pointer = \"/category\" }", "condition"),
+            (
+                filter,
+                "unless = { pointer = \"/category\", equals = \"OLD\", in = [\"OLD\"] }",
+                "condition",
+            ),
+            (
+                &format!("releases = {{ each = \"/files\", {filter} }}"),
+                "releases = { each = \"/files\" }",
+                "condition",
+            ),
+            (
+                "size_kib = \"/size_kb\"",
+                "size_kib = \"/size_kb\"\n        size = \"/size\"",
+                "size_kib",
+            ),
+            (
+                "[mappings.handoff]\n        urls = { each = \"\", value = \"/URI\" }\n",
+                "",
+                "mappings.handoff",
+            ),
+        ] {
+            assert_refused(HANDOFF, from, to, expected);
+        }
+    }
+
+    /// Asserts that `document`, with `from` replaced by `to`, is refused with an error naming
+    /// `expected`.
+    fn assert_refused(document: &str, from: &str, to: &str, expected: &str) {
+        let refused = refusal(&document.replace(from, to));
+        assert!(
+            refused
+                .as_ref()
+                .is_some_and(|error| error.contains(expected)),
+            "{to}: {refused:?}"
+        );
+    }
+
+    #[test]
+    fn handoff_links_go_with_browser_assisted_acquisition_and_sign_in_with_its_policy() {
+        let direct = HANDOFF.replace(
+            "type = \"browser_assisted\"\n        scheme = \"handoff\"",
+            "type = \"direct_https\"",
+        );
+        assert!(matches!(
+            validate(&direct),
+            Err(ProgramError::HandoffAcquisition)
+        ));
+        let linkless = HANDOFF.replace("[handoff]\n", "[unused]\n").replace(
+            "[unused]\n        host = \"game\"\n        path = [\"mods\", \"{project}\", \"files\", \"{release}\"]\n        query = { key = \"key\", expires = \"expires\" }\n        redeem = \"/v1/games/{game}/mods/{project}/files/{release}/download_link.json\"\n",
+            "",
+        );
+        assert!(matches!(
+            validate(&linkless),
+            Err(ProgramError::HandoffAcquisition)
+        ));
+
+        let keyless = HANDOFF.replace(
+            "[auth]\n        type = \"api-key-v1\"\n        header = \"apikey\"\n        key_page = \"https://www.example.test/account/keys\"\n        validate = \"/v1/users/validate.json\"\n",
+            "",
+        );
+        assert!(matches!(validate(&keyless), Err(ProgramError::MissingAuth)));
+        let optional = keyless.replace("requires_auth = true", "requires_auth = false");
+        assert!(matches!(
+            validate(&optional),
+            Err(ProgramError::SectionDependency {
+                section: "mappings.account",
+                ..
+            })
+        ));
+
+        let ambiguous = HANDOFF.replace(
+            "game = \"game-domain\"",
+            "game = \"game-domain\"\n        other = { id = \"other\", editions = { old = \"game-domain\" } }",
+        );
+        assert!(matches!(
+            validate(&ambiguous),
+            Err(ProgramError::AmbiguousHandoffGame(id)) if id == "game-domain"
+        ));
+    }
+
+    /// Programs written before the new vocabulary serialize, and so are digested, as they did.
+    #[test]
+    fn earlier_programs_keep_their_canonical_form() {
+        let program: ProviderProgram = toml::from_str(MULTI_GAME).unwrap();
+        let value = serde_json::to_value(&program).unwrap();
+        for absent in ["/auth", "/rate_limit", "/handoff", "/mappings/account"] {
+            assert!(value.pointer(absent).is_none(), "{absent}");
+        }
+        assert_eq!(
+            value.pointer("/mappings/release/file/sha1/when"),
+            Some(&serde_json::json!({ "pointer": "/algo", "equals": "1" }))
+        );
+        assert!(value.pointer("/mappings/release/file/size_kib").is_none());
     }
 }

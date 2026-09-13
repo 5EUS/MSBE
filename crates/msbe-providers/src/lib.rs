@@ -15,6 +15,8 @@ mod builtin;
 mod catalog_tests;
 #[cfg(test)]
 mod conformance_tests;
+#[cfg(test)]
+mod handoff_tests;
 mod installed;
 mod registry;
 mod runtime;
