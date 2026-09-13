@@ -549,6 +549,39 @@ public sealed class MainViewModelTests
         Assert.StartsWith($"Could not open {DataDirectory}.", vm.StatusMessage, StringComparison.Ordinal);
     }
 
+    /// <summary>Settings lists installed extensions with their status, and reports a daemon that cannot list them.</summary>
+    /// <returns>A task representing the test.</returns>
+    [Fact]
+    public async Task SettingsListsInstalledExtensionsWithTheirStatus()
+    {
+        const string Extensions = """[{"kind":"program","path":"/msbe/extensions/providers/catalog.toml","id":"catalog","version":"0.1.0","signer":"publisher","digest":"aa","status":"active"},{"kind":"codec","path":"/msbe/extensions/codecs/broken.toml","status":"refused","reason":"extension signer \"stranger\" is not trusted"}]""";
+        var client = new TestClient(
+            _ => new CommandResult(0, "[]", string.Empty),
+            method => method switch
+            {
+                "extension.list" => Extensions,
+                _ => throw new InvalidOperationException(method),
+            });
+        MainViewModel vm = new(client) { IsTypedPackSupported = true };
+
+        await vm.LoadExtensionsCommand.ExecuteAsync(parameter: null);
+
+        Assert.Equal(["catalog 0.1.0", "broken.toml"], vm.InstalledExtensions.Select(extension => extension.Title));
+        Assert.Equal(["Active", "Refused"], vm.InstalledExtensions.Select(extension => extension.Status));
+        Assert.Equal(["Provider program", "Pack codec"], vm.InstalledExtensions.Select(extension => extension.Kind));
+        Assert.Contains("not trusted", vm.InstalledExtensions[1].Detail, StringComparison.Ordinal);
+        Assert.Equal("1 of 2 installed extensions are active.", vm.ExtensionsStatus);
+
+        var older = new TestClient(
+            _ => new CommandResult(0, "[]", string.Empty),
+            _ => throw new MsbeRpcException("method not found", -32601, failureCode: null));
+        MainViewModel outdated = new(older) { IsTypedPackSupported = true };
+        await outdated.LoadExtensionsCommand.ExecuteAsync(parameter: null);
+
+        Assert.Empty(outdated.InstalledExtensions);
+        Assert.StartsWith("This daemon cannot list installed extensions", outdated.ExtensionsStatus, StringComparison.Ordinal);
+    }
+
     /// <summary>Export discovers codecs, renders their schema, previews policy, and runs only the held plan as a job.</summary>
     /// <returns>A task representing the test.</returns>
     [Fact]

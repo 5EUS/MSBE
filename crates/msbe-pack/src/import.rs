@@ -127,13 +127,8 @@ pub fn preview_import(
         request.codec.as_deref(),
         &request.options,
     )?;
-    if let Some(lockfile) = &opened.plan.lockfile
-        && !providers.accepts_extension_pins(&lockfile.extensions)
-    {
-        return Err(PackError::issue(
-            IssueCode::IntegrityMismatch,
-            "the native bundle requires different reviewed extension code",
-        ));
+    if let Some(lockfile) = &opened.plan.lockfile {
+        providers.check_extension_pins(&lockfile.extensions)?;
     }
     let staged = stage::stage(&instance, &opened.plan, &target, &BTreeMap::new())?;
     Ok(ImportPreview {

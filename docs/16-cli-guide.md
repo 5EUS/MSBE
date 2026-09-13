@@ -264,8 +264,9 @@ preview, rather than copied into the game's mod directory.
 | `verify INSTANCE`                                                                                                                                | **Implemented** | Report deployment drift.                                                    |
 | `status INSTANCE`                                                                                                                                | **Implemented** | Show instance and deployment state.                                         |
 | `extension keygen SIGNER KEY_FILE`                                                                                                               | **Implemented** | Create a private signing key and print the trust entry for it.              |
-| `extension sign MODULE --key KEY_FILE --version VERSION [--id ID]`                                                                               | **Implemented** | Sign a WebAssembly pack codec; writes its envelope beside the module.       |
-| `extension verify ENVELOPE`                                                                                                                      | **Implemented** | Check a signed codec against the local trust root without installing it.   |
+| `extension sign INPUT --key KEY_FILE --version VERSION [--id ID] [--output DIRECTORY]`                                                           | **Implemented** | Sign a WebAssembly pack codec or a provider program, writing its envelope.  |
+| `extension verify ENVELOPE`                                                                                                                      | **Implemented** | Check a signed codec or program against the local trust root.               |
+| `extension list`                                                                                                                                 | **Implemented** | List installed codecs and programs, and why any is refused.                 |
 
 Pack commands are codec-driven: `pack formats` and `pack options` list what the reviewed registry
 provides, and the CLI names no format itself. Every pack command previews first. `--dry-run`
@@ -290,15 +291,22 @@ honors each manifest file's `path`; the archive `overrides/` directory is not ye
 snapshot is a private backup, not a pack: `pack import` refuses one. See
 [17 - Pack formats and native bundles](17-pack-formats-and-native-bundles.md).
 
-Extension commands publish WebAssembly pack codecs ([18 §18.3](18-wasm-extensions.md)). A publisher
-creates a key once, signs each release, and shares the trust entry `keygen` prints. A user adds that
-entry to `extensions/trust.toml` in the MSBE home, checks the codec with `verify`, and copies the
-envelope and its module into `extensions/codecs/`. Pass absolute paths, since the daemon resolves them.
+Extension commands publish WebAssembly pack codecs and provider programs
+([18 §18.3](18-wasm-extensions.md)). A publisher creates a key once, signs each release, and shares
+the trust entry `keygen` prints. A program also needs `programs = ["<provider id>"]` in that entry,
+which `sign` prints. A user adds the entry to `extensions/trust.toml` in the MSBE home and checks
+the extension with `verify`. They then copy a codec's envelope and module into `extensions/codecs/`,
+or a program's envelope into `extensions/providers/`. `list` shows what is installed. An extension
+that fails a check is skipped with its reason, and never stops the others. Pass absolute paths,
+since the daemon resolves them.
 
 ```sh
 "$MSBE" extension keygen example-publisher "$HOME/.msbe-keys/example-publisher.toml"
 "$MSBE" extension sign "$PWD/pack-list.wasm" --key "$HOME/.msbe-keys/example-publisher.toml" --version 1.0.0
 "$MSBE" extension verify "$PWD/pack-list.toml"
+"$MSBE" extension sign "$PWD/program.toml" --key "$HOME/.msbe-keys/example-publisher.toml" --version 0.1.0 --output "$PWD/signed"
+"$MSBE" extension verify "$PWD/signed/example.toml"
+"$MSBE" extension list
 ```
 
 A key file is created readable only by its owner and is never replaced; `sign` refuses a key file

@@ -193,6 +193,12 @@ pub(crate) fn codec_options(params: &Value, home: &Home) -> Result<Value, Failur
     )?)?)
 }
 
+/// `extension.list`.
+pub(crate) fn extension_list(home: &Home) -> Result<Value, Failure> {
+    let providers = Providers::installed(home).map_err(PackError::from)?;
+    Ok(value(&providers.installed_extensions())?)
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ExportParams {

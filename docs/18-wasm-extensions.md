@@ -259,24 +259,31 @@ A codec's failure keeps its kind. An `unreproducible` or `unsupported_target` er
 reaches the user, and sets the exit code, exactly as the same native error would.
 
 A codec is a signed extension envelope that provides exactly `pack-codec-v1`, requests no
-capabilities, and supports host API 1. The CLI and daemon load every codec installed in MSBE's data
-directory:
+capabilities, and supports host API 1. The CLI and daemon load every codec, and every signed
+provider program ([06 §6.4](06-providers-and-policy.md)), installed in MSBE's data directory:
 
 ```text
 <home>/extensions/
   trust.toml
   codecs/pack-list.toml
   codecs/pack-list.wasm
+  providers/example.toml
 ```
 
-`trust.toml` is local policy: the signers allowed to publish extensions, each with its hexadecimal
-Ed25519 public key and the providers it may bind codecs to.
+`trust.toml` is local policy. It lists the signers allowed to publish extensions, each with its
+hexadecimal Ed25519 public key, the providers it may bind codecs to, and the providers it may
+introduce as programs. It also lists the signers and package digests that are revoked.
 
 ```toml
 [[signer]]
 id        = "example-publisher"
 key       = "3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29"
 providers = ["modrinth"]
+programs  = ["example"]
+
+[revoked]
+signers = []
+digests = []
 ```
 
 An envelope document carries the envelope's fields and names its module, a `.wasm` file beside it,
@@ -296,16 +303,22 @@ signature      = "…"
 
 `msbe extension` writes both documents ([16](16-cli-guide.md)). `keygen` creates a private signing
 key and prints the trust entry for its public key. `sign` loads a module in the sandbox, then writes
-its envelope document beside it. `verify` checks an envelope against the local trust root exactly as
-installing it would, without installing anything. A key file is created readable only by its owner,
+its envelope document beside it. Given a provider program instead, `sign` validates the program and
+writes `<provider id>.toml`. `verify` checks an envelope against the local trust root exactly as
+installing it would, without installing anything, and `list` shows every installed extension and
+whether it runs. A key file is created readable only by its owner,
 is never replaced, and cannot sign while other users can read it.
 
 A codec whose descriptor names no provider needs only a trusted signer. A codec that names a
 provider is served under that provider's identity and policy gate, like a native codec, so it also
-needs the provider to be registered and its signer to be granted that provider. A codec that fails
-any check refuses them all, with an error naming its envelope: nothing runs with trust the user did
-not intend. Installed codecs are not native build pins, so installing one never changes which native
-bundles a build accepts.
+needs the provider to be registered, which an installed program can do, and its signer to be granted
+that provider. A revoked signer or digest refuses any extension.
+
+Each installed extension is admitted or refused on its own. One that cannot be read, or fails a
+check, is skipped: it never runs, and never stops another extension or a provider MSBE ships.
+`msbe extension list` and the daemon's `extension.list` name its envelope and the reason. A trust
+root that cannot be read trusts nothing. Installed codecs are not native build pins, so installing
+one never changes which native bundles a build accepts.
 
 **Shipped codecs.** MSBE ships Modrinth's `.mrpack` codec as a sandboxed codec. Its source is
 `extensions/providers/modrinth/codecs/mrpack`. `scripts/development/build-wasm-extensions.sh`

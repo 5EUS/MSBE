@@ -17,6 +17,7 @@ use msbe_secrets::{Access, Acknowledgement};
 use serde_json::json;
 
 use super::{ExtensionTrust, ProgramTrust, Providers, RegistryError, Routed};
+use crate::ExtensionStatus;
 
 struct SearchHttp;
 
@@ -373,12 +374,20 @@ fn installed_codecs_load_from_the_data_directory_under_its_trust_root() -> Resul
         "pack-list",
         &signed_codec("pack-list", PACK_LIST.to_vec()),
     );
+    let untrusted = Providers::installed(&home)?;
+    assert!(
+        untrusted.pack_codec("pack-list").is_err(),
+        "a codec from an untrusted signer is skipped"
+    );
     assert!(
         matches!(
-            Providers::installed(&home),
-            Err(RegistryError::InstalledCodec { .. })
+            untrusted.installed_extensions(),
+            [refused] if refused.status == ExtensionStatus::Refused
+                && refused.path.ends_with("pack-list.toml")
+                && refused.reason.is_some()
         ),
-        "a codec from an untrusted signer is refused"
+        "{:?}",
+        untrusted.installed_extensions()
     );
 
     trust_root(dir.path(), "");
@@ -400,10 +409,36 @@ fn installed_codecs_load_from_the_data_directory_under_its_trust_root() -> Resul
         "schema = 1\nid = \"escape\"\nversion = \"1\"\nmodule = \"../escape.wasm\"\npackage_digest = \"\"\nprovides = []\nhost_api = { minimum = 1, maximum = 1 }\nsigner = \"test-root\"\nsignature = \"\"\n",
     )
     .unwrap();
-    assert!(matches!(
-        Providers::installed(&home),
-        Err(RegistryError::InstalledExtension { .. })
-    ));
+    let providers = Providers::installed(&home)?;
+    assert!(
+        providers
+            .pack_codecs()
+            .iter()
+            .any(|descriptor| descriptor.id == "pack-list"),
+        "a malformed envelope does not stop the codecs beside it"
+    );
+    let statuses: Vec<(String, ExtensionStatus)> = providers
+        .installed_extensions()
+        .iter()
+        .map(|found| {
+            (
+                found
+                    .path
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+                found.status,
+            )
+        })
+        .collect();
+    assert_eq!(
+        statuses,
+        [
+            ("escape.toml".to_owned(), ExtensionStatus::Refused),
+            ("pack-list.toml".to_owned(), ExtensionStatus::Active),
+        ]
+    );
     Ok(())
 }
 

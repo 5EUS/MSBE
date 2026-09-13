@@ -1,9 +1,9 @@
-//! Signing keys and signed envelopes for publishing WebAssembly pack codecs.
+//! Signing keys and signed envelopes for publishing WebAssembly pack codecs and provider programs.
 //!
-//! A publisher generates a key once, signs each module it releases, and gives users the trust entry
-//! for the key's public half. Signing writes exactly the envelope document MSBE reads from
-//! `<home>/extensions/codecs/`, and verifying checks a signed codec the way installing it would
-//! (`docs/18-wasm-extensions.md` §18.3).
+//! A publisher generates a key once, signs each extension it releases, and gives users the trust
+//! entry for the key's public half. Signing writes exactly the envelope document MSBE reads from
+//! `<home>/extensions/codecs/` or `<home>/extensions/providers/`, and verifying checks a signed
+//! extension the way installing it would (`docs/18-wasm-extensions.md` §18.3).
 
 use std::{
     ffi::OsStr,
@@ -14,14 +14,15 @@ use std::{
 
 use msbe_core::config::Home;
 use msbe_provider_api::{
-    EnvelopeError, ExtensionEnvelope, ExtensionProvide, HostApiRange, PackCodec as _,
-    PackCodecError, SigningKey, hex,
+    EnvelopeError, ExtensionCapability, ExtensionEnvelope, ExtensionProvide, HostApiRange,
+    PackCodec as _, PackCodecError, ProgramError, ProviderProgram, ProviderProgramEnvelope,
+    SigningKey, hex,
 };
 use msbe_wasm_codec::WasmPackCodec;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{Providers, RegistryError, installed};
+use crate::{Providers, RegistryError, installed, registry::check_installable_program};
 
 /// The host API a signed codec declares.
 const HOST_API: HostApiRange = HostApiRange {
@@ -32,6 +33,8 @@ const HOST_API: HostApiRange = HostApiRange {
 const KEY_LIMIT: u64 = 4096;
 /// The longest signer ID.
 const SIGNER_LIMIT: usize = 64;
+/// The most bytes a provider program or envelope document may be.
+const DOCUMENT_LIMIT: u64 = 1 << 20;
 /// The comment every key file starts with.
 const KEY_HEADER: &str = "# An MSBE extension signing key. Anyone who holds this file can sign as its signer:\n# keep it private, back it up, and never commit it.\n";
 
@@ -149,22 +152,182 @@ impl SignerKey {
         hex(self.key.verifying_key().as_bytes())
     }
 
-    /// The `trust.toml` entry that trusts this key to publish provider-neutral codecs, and codecs
-    /// bound to `providers`.
-    pub fn trust_entry(&self, providers: &[String]) -> String {
+    /// The `trust.toml` entry that trusts this key to publish provider-neutral codecs, codecs
+    /// bound to `providers`, and provider programs introducing `programs`.
+    pub fn trust_entry(&self, providers: &[String], programs: &[String]) -> String {
         let quoted = |text: &str| toml::Value::String(text.to_owned()).to_string();
-        let providers = if providers.is_empty() {
-            String::new()
-        } else {
-            let names: Vec<String> = providers.iter().map(|provider| quoted(provider)).collect();
-            format!("providers = [{}]\n", names.join(", "))
+        let list = |key: &str, ids: &[String]| {
+            if ids.is_empty() {
+                String::new()
+            } else {
+                let names: Vec<String> = ids.iter().map(|id| quoted(id)).collect();
+                format!("{key} = [{}]\n", names.join(", "))
+            }
         };
         format!(
-            "[[signer]]\nid = {}\nkey = \"{}\"\n{providers}",
+            "[[signer]]\nid = {}\nkey = \"{}\"\n{}{}",
             quoted(&self.signer),
-            self.public_key()
+            self.public_key(),
+            list("providers", providers),
+            list("programs", programs)
         )
     }
+}
+
+/// A provider program [`sign_program`] signed.
+#[derive(Debug, Clone, Serialize)]
+pub struct SignedProgram {
+    /// The envelope document written.
+    pub envelope: PathBuf,
+    /// The extension ID, which is the provider id.
+    pub id: String,
+    /// The extension version.
+    pub version: String,
+    /// The signer.
+    pub signer: String,
+    /// The SHA-256 package digest the signature covers.
+    pub package_digest: String,
+    /// The `trust.toml` entry that lets the signing key introduce this program.
+    pub trust_entry: String,
+}
+
+/// Signs the provider program at `program` with `key`, writing its envelope document as
+/// `<provider id>.toml` in `output`, or beside the program when `output` is `None`, and replacing
+/// any earlier envelope there.
+///
+/// The program is validated first, so only a program a reviewed runtime can serve is signed. Its
+/// extension ID is its provider id.
+///
+/// # Errors
+///
+/// Returns [`AuthoringError::Program`] when it is not a valid provider program,
+/// [`AuthoringError::ProgramId`] when `id` is not its provider id,
+/// [`AuthoringError::OverwritesProgram`] when the envelope would replace the program itself, and
+/// another [`AuthoringError`] when it cannot be read, signed or written.
+pub fn sign_program(
+    program: &Path,
+    key: &SignerKey,
+    version: &str,
+    id: Option<&str>,
+    output: Option<&Path>,
+) -> Result<SignedProgram, AuthoringError> {
+    let bytes = installed::read_limited(program, DOCUMENT_LIMIT)?
+        .ok_or_else(|| io_error("read", program, io::Error::from(io::ErrorKind::NotFound)))?;
+    let text = String::from_utf8(bytes).map_err(|error| ProgramError::Parse(error.to_string()))?;
+    let payload: ProviderProgram =
+        toml::from_str(&text).map_err(|error| ProgramError::Parse(error.to_string()))?;
+    payload.validate()?;
+    let provider = payload.provider.id.clone();
+    if let Some(id) = id
+        && id != provider
+    {
+        return Err(AuthoringError::ProgramId {
+            id: id.to_owned(),
+            provider,
+        });
+    }
+    let directory = output
+        .or_else(|| program.parent())
+        .unwrap_or_else(|| Path::new("."));
+    let path = directory.join(format!("{provider}.toml"));
+    if fs::canonicalize(&path)
+        .ok()
+        .is_some_and(|existing| fs::canonicalize(program).is_ok_and(|source| source == existing))
+    {
+        return Err(AuthoringError::OverwritesProgram(path));
+    }
+    let mut envelope = ExtensionEnvelope {
+        schema: 1,
+        package_digest: ProviderProgramEnvelope::digest_for(&payload)?,
+        id: provider.clone(),
+        version: version.to_owned(),
+        provides: vec![ExtensionProvide::ProviderProgramV1],
+        host_api: HOST_API,
+        capabilities: vec![ExtensionCapability::Network],
+        signer: key.signer.clone(),
+        signature: "00".repeat(64),
+        payload,
+    };
+    envelope.sign(&key.key)?;
+    let signed = SignedProgram {
+        envelope: path,
+        id: provider.clone(),
+        version: envelope.version.clone(),
+        signer: envelope.signer.clone(),
+        package_digest: envelope.package_digest.clone(),
+        trust_entry: key.trust_entry(&[], &[provider]),
+    };
+    let document = toml::to_string(&ProviderProgramEnvelope(envelope))
+        .map_err(|error| AuthoringError::Encode(error.to_string()))?;
+    msbe_fsops::atomic::write_file(&signed.envelope, document.as_bytes())?;
+    Ok(signed)
+}
+
+/// A signed provider program [`verify_program`] found acceptable.
+#[derive(Debug, Clone, Serialize)]
+pub struct VerifiedProgram {
+    /// The envelope document.
+    pub envelope: PathBuf,
+    /// The extension ID, which is the provider id.
+    pub id: String,
+    /// The extension version.
+    pub version: String,
+    /// The signer.
+    pub signer: String,
+    /// The SHA-256 package digest the signature covers.
+    pub package_digest: String,
+    /// The trust root that accepts it.
+    pub trust: PathBuf,
+}
+
+/// Checks the signed provider program whose envelope document is at `envelope` against `home`'s
+/// trust root, as installing it would: its signature, its signer's trust, grant and revocation, that
+/// it is named for its provider, and that its provider collides with none MSBE ships or `home` has
+/// installed under another file. Nothing is installed.
+///
+/// # Errors
+///
+/// Returns [`AuthoringError::Registry`] naming why the program would be refused.
+pub fn verify_program(home: &Home, envelope: &Path) -> Result<VerifiedProgram, AuthoringError> {
+    let checked = check_installable_program(&home.root().join(installed::DIRECTORY), envelope)?.0;
+    Ok(VerifiedProgram {
+        envelope: envelope.to_path_buf(),
+        id: checked.id,
+        version: checked.version,
+        signer: checked.signer,
+        package_digest: checked.package_digest,
+        trust: installed::trust_file(home),
+    })
+}
+
+/// A signed extension [`verify_extension`] found acceptable.
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum VerifiedExtension {
+    /// A pack codec.
+    Codec(VerifiedCodec),
+    /// A provider program.
+    Program(VerifiedProgram),
+}
+
+/// Checks the signed codec or provider program whose envelope document is at `envelope`, as
+/// [`verify_codec`] or [`verify_program`] would. A document with a `payload` table is a program.
+///
+/// # Errors
+///
+/// As for [`verify_codec`] and [`verify_program`].
+pub fn verify_extension(home: &Home, envelope: &Path) -> Result<VerifiedExtension, AuthoringError> {
+    let bytes = installed::read_limited(envelope, DOCUMENT_LIMIT)?
+        .ok_or_else(|| io_error("read", envelope, io::Error::from(io::ErrorKind::NotFound)))?;
+    let is_program = std::str::from_utf8(&bytes)
+        .ok()
+        .and_then(|text| toml::from_str::<toml::Table>(text).ok())
+        .is_some_and(|table| table.contains_key("payload"));
+    Ok(if is_program {
+        VerifiedExtension::Program(verify_program(home, envelope)?)
+    } else {
+        VerifiedExtension::Codec(verify_codec(home, envelope)?)
+    })
 }
 
 /// A codec [`sign_codec`] signed.
@@ -337,9 +500,28 @@ pub enum AuthoringError {
     /// The envelope could not be signed.
     #[error(transparent)]
     Envelope(#[from] EnvelopeError),
-    /// The signed codec would be refused.
+    /// The signed extension would be refused.
     #[error(transparent)]
     Registry(#[from] RegistryError),
+    /// A file is not a valid provider program.
+    #[error("not a valid provider program: {0}")]
+    Program(#[from] ProgramError),
+    /// An extension ID other than a program's provider id was given.
+    #[error("a provider program's extension id is its provider id {provider:?}, not {id:?}")]
+    ProgramId {
+        /// The ID given.
+        id: String,
+        /// The program's provider id.
+        provider: String,
+    },
+    /// A program's envelope would replace the program itself.
+    #[error("{} is the program itself; sign it into another --output directory", .0.display())]
+    OverwritesProgram(PathBuf),
+    /// An output directory was given for a codec.
+    #[error(
+        "a codec's envelope is always written beside its module; --output applies to provider programs"
+    )]
+    CodecOutput,
 }
 
 /// Refuses a signer ID that is empty, long, or would need quoting to read.
@@ -377,14 +559,128 @@ mod tests {
 
     use msbe_core::config::Home;
 
-    use super::{AuthoringError, SignerKey, sign_codec, verify_codec};
+    use super::{
+        AuthoringError, SignerKey, VerifiedExtension, sign_codec, sign_program, verify_codec,
+        verify_extension, verify_program,
+    };
     use crate::RegistryError;
 
     const PACK_LIST: &[u8] = include_bytes!("../../msbe-wasm-codec/tests/fixtures/pack-list.wasm");
 
+    const PROGRAM: &str = r#"
+runtime = "catalog-v1"
+
+[games]
+game = "game"
+
+[provider]
+schema = 1
+id = "signed"
+name = "Signed catalog"
+[provider.source]
+type = "prefixed"
+prefix = "signed:"
+[provider.metadata]
+api_base = "https://api.signed.test"
+[provider.acquisition]
+type = "direct_https"
+[provider.policy]
+requires_auth = false
+respects_distribution_flag = false
+tos_url = ""
+ack_required = false
+"#;
+
     fn trust(home: &Path, key: &SignerKey) {
+        write_trust(home, &key.trust_entry(&[], &[]));
+    }
+
+    fn write_trust(home: &Path, entry: &str) {
         std::fs::create_dir_all(home.join("extensions")).unwrap();
-        std::fs::write(home.join("extensions/trust.toml"), key.trust_entry(&[])).unwrap();
+        std::fs::write(home.join("extensions/trust.toml"), entry).unwrap();
+    }
+
+    #[test]
+    fn signed_programs_verify_only_when_their_signer_is_granted_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = Home::at(dir.path().join("home"));
+        let source = dir.path().join("program.toml");
+        std::fs::write(&source, PROGRAM).unwrap();
+        let key = SignerKey::generate("publisher").unwrap();
+
+        assert!(matches!(
+            sign_program(&source, &key, "1.0.0", Some("other"), None),
+            Err(AuthoringError::ProgramId { provider, .. }) if provider == "signed"
+        ));
+        let signed = sign_program(&source, &key, "1.0.0", Some("signed"), None).unwrap();
+        assert_eq!(signed.envelope, dir.path().join("signed.toml"));
+        assert_eq!(
+            (signed.id.as_str(), signed.version.as_str()),
+            ("signed", "1.0.0")
+        );
+        assert!(
+            signed.trust_entry.contains("programs = [\"signed\"]"),
+            "{}",
+            signed.trust_entry
+        );
+
+        assert!(matches!(
+            verify_extension(&home, &signed.envelope),
+            Err(AuthoringError::Registry(RegistryError::Program(_)))
+        ));
+        trust(home.root(), &key);
+        assert!(matches!(
+            verify_program(&home, &signed.envelope),
+            Err(AuthoringError::Registry(
+                RegistryError::ProgramNotGranted { .. }
+            ))
+        ));
+        write_trust(home.root(), &signed.trust_entry);
+        let Ok(VerifiedExtension::Program(verified)) = verify_extension(&home, &signed.envelope)
+        else {
+            panic!("the granted program verifies");
+        };
+        assert_eq!(
+            (verified.id.as_str(), verified.signer.as_str()),
+            ("signed", "publisher")
+        );
+
+        let providers = home.root().join("extensions/providers");
+        std::fs::create_dir_all(&providers).unwrap();
+        let installed = providers.join("signed.toml");
+        std::fs::copy(&signed.envelope, &installed).unwrap();
+        verify_program(&home, &installed).unwrap();
+        assert!(
+            matches!(
+                verify_program(&home, &signed.envelope),
+                Err(AuthoringError::Registry(RegistryError::Manifest(_)))
+            ),
+            "another file for an installed provider collides with it"
+        );
+
+        let beside = dir.path().join("beside");
+        std::fs::create_dir_all(&beside).unwrap();
+        let named = beside.join("signed.toml");
+        std::fs::write(&named, PROGRAM).unwrap();
+        assert!(matches!(
+            sign_program(&named, &key, "1.0.0", None, None),
+            Err(AuthoringError::OverwritesProgram(_))
+        ));
+        let output = dir.path().join("out");
+        std::fs::create_dir_all(&output).unwrap();
+        assert_eq!(
+            sign_program(&named, &key, "1.0.1", None, Some(&output))
+                .unwrap()
+                .envelope,
+            output.join("signed.toml")
+        );
+
+        let invalid = dir.path().join("invalid.toml");
+        std::fs::write(&invalid, PROGRAM.replace("[games]\ngame = \"game\"\n", "")).unwrap();
+        assert!(matches!(
+            sign_program(&invalid, &key, "1.0.0", None, Some(&beside)),
+            Err(AuthoringError::Program(_))
+        ));
     }
 
     #[test]

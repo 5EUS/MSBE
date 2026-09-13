@@ -18,6 +18,8 @@ mod conformance_tests;
 #[cfg(test)]
 mod handoff_tests;
 mod installed;
+#[cfg(test)]
+mod installed_tests;
 mod registry;
 mod runtime;
 #[cfg(test)]
@@ -26,9 +28,13 @@ mod runtime_tests;
 mod thunderstore_tests;
 
 pub use authoring::{
-    AuthoringError, SignedCodec, SignerKey, VerifiedCodec, sign_codec, verify_codec,
+    AuthoringError, SignedCodec, SignedProgram, SignerKey, VerifiedCodec, VerifiedExtension,
+    VerifiedProgram, sign_codec, sign_program, verify_codec, verify_extension, verify_program,
 };
 pub use authorized::CredentialSource;
 pub use builtin::{BUILTIN, BUILTIN_PROGRAMS};
-pub use installed::{ExtensionTrust, codecs_directory, trust_file};
+pub use installed::{
+    ExtensionKind, ExtensionStatus, ExtensionTrust, InstalledExtension, codecs_directory,
+    providers_directory, trust_file,
+};
 pub use registry::{ProgramTrust, Providers, RegistryError, Routed};

@@ -51,6 +51,10 @@ pub const PACK_CODEC_LIST_METHOD: &str = "pack.codec.list";
 /// Returns a codec's option schema and normalized values: `{ codec, direction?, preset? }`.
 pub const PACK_CODEC_OPTIONS_METHOD: &str = "pack.codec.options";
 
+/// Lists the codecs and provider programs installed in the data directory, and whether each runs:
+/// `{ kind, path, id?, version?, signer?, digest?, status, reason? }` each.
+pub const EXTENSION_LIST_METHOD: &str = "extension.list";
+
 /// Previews an import and holds it: returns `{ plan_id, plan_digest, plan }`.
 pub const PACK_IMPORT_PREVIEW_METHOD: &str = "pack.import.preview";
 

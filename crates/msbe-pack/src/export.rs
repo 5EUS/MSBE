@@ -108,11 +108,16 @@ pub fn preview_export(
     let codec = providers.pack_codec(&request.codec)?;
     let instance = Instance::open(home, &request.instance)?;
     let profile = instance.profile(&request.profile)?;
-    let lockfile = instance.lockfile_for_with_extensions(
-        &request.profile,
-        profile.clone(),
-        providers.extension_pins(),
-    )?;
+    // A signed program is pinned only when the profile has content from its provider.
+    let pins = providers.extension_pins_for(
+        profile
+            .mods
+            .values()
+            .filter_map(|entry| entry.provider.as_ref())
+            .map(|provenance| provenance.provider.as_str()),
+    );
+    let lockfile =
+        instance.lockfile_for_with_extensions(&request.profile, profile.clone(), pins)?;
     if !descriptor.supported_games.contains(&lockfile.plan.id) {
         return Err(PackError::issue(
             IssueCode::UnsupportedTarget,

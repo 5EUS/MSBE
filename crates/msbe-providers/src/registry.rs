@@ -2,7 +2,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
@@ -21,10 +21,11 @@ use msbe_wasm_codec::WasmPackCodec;
 use thiserror::Error;
 
 use crate::{
-    CredentialSource, ExtensionTrust,
+    CredentialSource, ExtensionKind, ExtensionTrust, InstalledExtension,
     authorized::{Authorized, Keys},
     builtin::{BUILTIN, BUILTIN_PROGRAMS},
-    installed, runtime,
+    installed::{self, Found},
+    runtime,
 };
 
 const NATIVE_HOST_API_VERSION: u32 = 1;
@@ -67,6 +68,10 @@ pub struct Providers {
     programs: BTreeMap<String, String>,
     /// Which providers have a credential, and which terms were acknowledged.
     access: Access,
+    /// The pin of each signed program, naming its real signer, by provider id.
+    signed_pins: BTreeMap<String, ExtensionPin>,
+    /// Every extension found in the data directory, and whether it runs.
+    installed: Vec<InstalledExtension>,
 }
 
 #[derive(Debug)]
@@ -162,31 +167,75 @@ impl Providers {
         Ok(id)
     }
 
-    /// The providers MSBE ships, plus the WebAssembly pack codecs installed in `home` that its
-    /// `extensions/trust.toml` trusts (`docs/18-wasm-extensions.md` §18.3), authorized by the
-    /// credentials and acknowledgements `home` records (`docs/07-browser-and-secrets.md` §7.5).
-    /// Requests that may carry a credential read it from `home`'s credentials when first needed.
+    /// Adds an installed codec, once neither its signer nor its digest is revoked.
+    fn install_codec(
+        &mut self,
+        envelope: &ExtensionEnvelope<Vec<u8>>,
+        trust: &ExtensionTrust,
+    ) -> Result<String, RegistryError> {
+        if trust.is_revoked_signer(&envelope.signer) {
+            return Err(RegistryError::RevokedCodecSigner(envelope.signer.clone()));
+        }
+        if trust.is_revoked_digest(&envelope.package_digest) {
+            return Err(RegistryError::RevokedCodec(envelope.package_digest.clone()));
+        }
+        self.register_wasm_codec(envelope, trust)
+    }
+
+    /// The providers MSBE ships, plus the provider programs and WebAssembly pack codecs installed
+    /// in `home` that its `extensions/trust.toml` trusts (`docs/18-wasm-extensions.md` §18.3),
+    /// authorized by the credentials and acknowledgements `home` records
+    /// (`docs/07-browser-and-secrets.md` §7.5). Requests that may carry a credential read it from
+    /// `home`'s credentials when first needed.
+    ///
+    /// Each installed extension is admitted or refused on its own. One that cannot be read,
+    /// verified, trusted or registered is skipped, and [`Providers::installed_extensions`] says
+    /// why; it never stops another, or a provider MSBE ships. A trust root that cannot be read
+    /// trusts nothing. Programs are admitted before codecs, so a codec can bind to an installed
+    /// provider.
     ///
     /// # Errors
     ///
-    /// Returns [`RegistryError::InstalledExtension`] for an unreadable or malformed trust root or
-    /// envelope, and [`RegistryError::InstalledCodec`] naming the envelope of a refused codec. One
-    /// refused codec refuses them all, so nothing runs with trust the user did not intend. Returns
-    /// [`RegistryError::Access`] when the credential records or acknowledgements cannot be read.
+    /// Returns [`RegistryError::Access`] when the credential records or acknowledgements cannot be
+    /// read, and another [`RegistryError`] only when a provider MSBE ships is invalid.
     pub fn installed(home: &Home) -> Result<Self, RegistryError> {
-        let mut providers = Self::builtins()?
+        let found = installed::read(&home.root().join(installed::DIRECTORY));
+        let mut listed = Vec::new();
+        let trust = found.trust.unwrap_or_else(|error| {
+            listed.push(InstalledExtension::unreadable(
+                ExtensionKind::TrustRoot,
+                installed::trust_file(home),
+                &error,
+            ));
+            ExtensionTrust::default()
+        });
+        let mut documents = builtin_manifests()?;
+        let programs = admit_programs(found.programs, &trust, &mut documents, &mut listed);
+        let mut providers = Self::assemble(BUILTIN, BUILTIN_PROGRAMS, &[], programs)?
             .with_access(Access::load(home)?)
             .with_credentials(Arc::new(Mutex::new(Credentials::open(home)?)));
-        let found = installed::read(&home.root().join(installed::DIRECTORY))?;
-        for codec in found.codecs {
-            providers
-                .register_wasm_codec(&codec.envelope, &found.trust)
-                .map_err(|source| RegistryError::InstalledCodec {
-                    path: codec.path,
-                    source: Box::new(source),
-                })?;
+        for Found { path, item } in found.codecs {
+            listed.push(match item {
+                Ok(codec) => {
+                    let refusal = providers.install_codec(&codec.envelope, &trust).err();
+                    InstalledExtension::from_envelope(
+                        ExtensionKind::Codec,
+                        path,
+                        &codec.envelope,
+                        refusal.as_ref(),
+                    )
+                }
+                Err(error) => InstalledExtension::unreadable(ExtensionKind::Codec, path, &error),
+            });
         }
+        providers.installed = listed;
         Ok(providers)
+    }
+
+    /// Every extension found in the data directory by [`Providers::installed`], in the order
+    /// found, and whether it runs. A trust root that cannot be read is listed first.
+    pub fn installed_extensions(&self) -> &[InstalledExtension] {
+        &self.installed
     }
 
     /// The providers MSBE ships: its native exceptions, and the programs it ships.
@@ -196,13 +245,7 @@ impl Providers {
     /// Returns [`RegistryError`] if a built-in manifest, program or overlay entry is invalid.
     /// This indicates a build error in MSBE rather than user-provided input.
     pub fn builtins() -> Result<Self, RegistryError> {
-        Self::assemble(
-            BUILTIN,
-            BUILTIN_PROGRAMS,
-            &[],
-            &[],
-            &ProgramTrust::default(),
-        )
+        Self::assemble(BUILTIN, BUILTIN_PROGRAMS, &[], Vec::new())
     }
 
     /// Registers `registrations`, plus `manifests` no compiled adapter serves, such as ones a
@@ -214,7 +257,7 @@ impl Providers {
     /// Returns [`RegistryError`] if a manifest or overlay entry is invalid, or a registration
     /// builds an adapter for a provider other than its manifest's.
     pub fn new(registrations: &[Registration], manifests: &[&str]) -> Result<Self, RegistryError> {
-        Self::assemble(registrations, &[], manifests, &[], &ProgramTrust::default())
+        Self::assemble(registrations, &[], manifests, Vec::new())
     }
 
     /// Registers reviewed adapters and trusted declarative provider programs.
@@ -232,19 +275,22 @@ impl Providers {
         program_documents: &[&str],
         trust: &ProgramTrust,
     ) -> Result<Self, RegistryError> {
-        Self::assemble(registrations, &[], manifests, program_documents, trust)
+        Self::assemble(
+            registrations,
+            &[],
+            manifests,
+            verified_programs(program_documents, trust)?,
+        )
     }
 
     /// Registers native `registrations`, the programs this build ships, `manifests` nothing
-    /// serves, and the signed `program_documents` that `trust` accepts.
+    /// serves, and `signed` programs a trust root has already accepted.
     fn assemble(
         registrations: &[Registration],
         shipped: &[ProgramRegistration],
         manifests: &[&str],
-        program_documents: &[&str],
-        trust: &ProgramTrust,
+        signed: Vec<SignedProgram>,
     ) -> Result<Self, RegistryError> {
-        let signed = verified_programs(program_documents, trust)?;
         let shipped = shipped
             .iter()
             .map(|registration| Ok((registration, shipped_program(registration)?)))
@@ -252,12 +298,8 @@ impl Providers {
         let program_manifests: Vec<String> = shipped
             .iter()
             .map(|(_, program)| program)
-            .chain(&signed)
-            .map(|program| {
-                toml::to_string(&program.provider).map_err(|error| {
-                    RegistryError::Program(ProgramError::Canonical(error.to_string()))
-                })
-            })
+            .chain(signed.iter().map(|signed| &signed.program))
+            .map(provider_manifest)
             .collect::<Result<_, _>>()?;
         let documents: Vec<&str> = registrations
             .iter()
@@ -276,11 +318,15 @@ impl Providers {
                 .push(program_pin(registration, program)?);
             assembly.overlay.extend_from_slice(registration.overlay);
         }
+        let signed_pins: BTreeMap<String, ExtensionPin> = signed
+            .iter()
+            .map(|signed| (signed.program.provider.id.clone(), signed.pin.clone()))
+            .collect();
         let mut programs = BTreeMap::new();
         for program in shipped
             .iter()
             .map(|(_, program)| program.clone())
-            .chain(signed)
+            .chain(signed.into_iter().map(|signed| signed.program))
         {
             programs.insert(
                 program.provider.id.clone(),
@@ -297,6 +343,8 @@ impl Providers {
             overlay: Overlay::from_toml(&assembly.overlay)?,
             programs,
             access: Access::none(),
+            signed_pins,
+            installed: Vec::new(),
         };
         let modules = registrations
             .iter()
@@ -434,17 +482,63 @@ impl Providers {
         self.extensions.clone()
     }
 
-    /// Whether `pins` name precisely the native extensions reviewed into this build.
+    /// The pins an export of content from `providers` records: every extension reviewed into this
+    /// build, and the signed program of each of `providers` served by one, with its real signer.
+    /// A signed program the content does not use is not pinned, so installing one never stops a
+    /// pack from importing elsewhere.
+    #[must_use]
+    pub fn extension_pins_for<'a>(
+        &self,
+        providers: impl IntoIterator<Item = &'a str>,
+    ) -> Vec<ExtensionPin> {
+        let mut pins = self.extension_pins();
+        pins.extend(
+            providers
+                .into_iter()
+                .filter_map(|provider| self.signed_pins.get(provider).cloned()),
+        );
+        pins
+    }
+
+    /// Checks that this registry serves what `pins` name: precisely the extensions reviewed into
+    /// this build, and, for each signed program pinned, a trusted program of that id and digest.
     ///
     /// Empty pins are accepted for native bundles produced before extension pinning was added.
-    #[must_use]
-    pub fn accepts_extension_pins(&self, pins: &[ExtensionPin]) -> bool {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RegistryError::ExtensionPinsDiffer`] when the build's extensions differ, and
+    /// [`RegistryError::MissingExtension`] naming the first signed program that is not installed
+    /// and trusted here, or is installed with other content.
+    pub fn check_extension_pins(&self, pins: &[ExtensionPin]) -> Result<(), RegistryError> {
         if pins.is_empty() {
-            return true;
+            return Ok(());
         }
+        let (build, signed): (Vec<&ExtensionPin>, Vec<&ExtensionPin>) =
+            pins.iter().partition(|pin| pin.signer == BUILD_SIGNER);
         let mut expected = self.extension_pins();
         expected.sort_by(|left, right| left.id.cmp(&right.id));
-        expected == pins
+        if !build.into_iter().eq(expected.iter()) {
+            return Err(RegistryError::ExtensionPinsDiffer);
+        }
+        match signed.into_iter().find(|pin| {
+            self.signed_pins
+                .get(&pin.id)
+                .is_none_or(|installed| installed.digest != pin.digest)
+        }) {
+            Some(missing) => Err(RegistryError::MissingExtension {
+                id: missing.id.clone(),
+                version: missing.version.clone(),
+                signer: missing.signer.clone(),
+            }),
+            None => Ok(()),
+        }
+    }
+
+    /// Whether [`Providers::check_extension_pins`] accepts `pins`.
+    #[must_use]
+    pub fn accepts_extension_pins(&self, pins: &[ExtensionPin]) -> bool {
+        self.check_extension_pins(pins).is_ok()
     }
 
     /// Looks up a reviewed pack codec after enforcing its provider's policy.
@@ -569,24 +663,212 @@ impl Providers {
     }
 }
 
+/// A signed program a trust root accepted, and the pin an export records for it.
+struct SignedProgram {
+    program: ProviderProgram,
+    pin: ExtensionPin,
+}
+
 /// The signed programs in `documents` that `trust` accepts, refusing any it does not.
 fn verified_programs(
     documents: &[&str],
     trust: &ProgramTrust,
-) -> Result<Vec<ProviderProgram>, RegistryError> {
-    let mut programs = Vec::with_capacity(documents.len());
-    for document in documents {
-        let envelope = ProviderProgramEnvelope::from_toml(document)?;
-        if trust.revoked_signers.contains(&envelope.0.signer) {
-            return Err(RegistryError::RevokedProgramSigner(envelope.0.signer));
-        }
-        if trust.revoked_digests.contains(&envelope.0.package_digest) {
-            return Err(RegistryError::RevokedProgram(envelope.0.package_digest));
-        }
-        envelope.verify(&trust.trusted_keys)?;
-        programs.push(envelope.0.payload);
+) -> Result<Vec<SignedProgram>, RegistryError> {
+    documents
+        .iter()
+        .map(|document| {
+            let envelope = ProviderProgramEnvelope::from_toml(document)?;
+            verify_program(&envelope, trust)?;
+            Ok(SignedProgram {
+                pin: signed_pin(&envelope)?,
+                program: envelope.0.payload,
+            })
+        })
+        .collect()
+}
+
+/// Refuses `envelope` when its signer or digest is revoked, or its signature does not verify
+/// against a key `trust` holds for its signer.
+fn verify_program(
+    envelope: &ProviderProgramEnvelope,
+    trust: &ProgramTrust,
+) -> Result<(), RegistryError> {
+    let signed = &envelope.0;
+    if trust.revoked_signers.contains(&signed.signer) {
+        return Err(RegistryError::RevokedProgramSigner(signed.signer.clone()));
     }
-    Ok(programs)
+    if trust.revoked_digests.contains(&signed.package_digest)
+        || trust
+            .revoked_digests
+            .contains(&signed.package_digest.to_ascii_lowercase())
+    {
+        return Err(RegistryError::RevokedProgram(signed.package_digest.clone()));
+    }
+    Ok(envelope.verify(&trust.trusted_keys)?)
+}
+
+/// The installed program envelopes `trust` admits, one at a time, with each found recorded in
+/// `listed`, admitted or refused.
+///
+/// A program is admitted when it parses and validates, neither its signer nor its digest is
+/// revoked, its signature verifies against a trusted key, its signer is granted its provider id,
+/// it is installed under that id, and its provider collides with none in `documents`: the providers
+/// MSBE ships and the programs admitted before it. Each admitted provider joins `documents`.
+fn admit_programs(
+    found: Vec<Found<String>>,
+    trust: &ExtensionTrust,
+    documents: &mut Vec<String>,
+    listed: &mut Vec<InstalledExtension>,
+) -> Vec<SignedProgram> {
+    let program_trust = trust.program_trust();
+    let mut admitted = Vec::new();
+    for Found { path, item } in found {
+        let envelope = match item.and_then(|document| {
+            ProviderProgramEnvelope::from_toml(&document).map_err(RegistryError::from)
+        }) {
+            Ok(envelope) => envelope,
+            Err(error) => {
+                listed.push(InstalledExtension::unreadable(
+                    ExtensionKind::Program,
+                    path,
+                    &error,
+                ));
+                continue;
+            }
+        };
+        match admit_program(&path, &envelope, trust, &program_trust, documents) {
+            Ok((manifest, pin)) => {
+                listed.push(InstalledExtension::from_envelope(
+                    ExtensionKind::Program,
+                    path,
+                    &envelope.0,
+                    None,
+                ));
+                documents.push(manifest);
+                admitted.push(SignedProgram {
+                    pin,
+                    program: envelope.0.payload,
+                });
+            }
+            Err(error) => listed.push(InstalledExtension::from_envelope(
+                ExtensionKind::Program,
+                path,
+                &envelope.0,
+                Some(&error),
+            )),
+        }
+    }
+    admitted
+}
+
+/// Checks the installed program `envelope`, found at `path`, against `trust` and the provider
+/// manifests in `documents`, returning its own manifest and pin.
+fn admit_program(
+    path: &Path,
+    envelope: &ProviderProgramEnvelope,
+    trust: &ExtensionTrust,
+    program_trust: &ProgramTrust,
+    documents: &[String],
+) -> Result<(String, ExtensionPin), RegistryError> {
+    verify_program(envelope, program_trust)?;
+    let provider = &envelope.0.payload.provider.id;
+    let signer = &envelope.0.signer;
+    if !trust.may_introduce(signer, provider) {
+        return Err(RegistryError::ProgramNotGranted {
+            provider: provider.clone(),
+            signer: signer.clone(),
+        });
+    }
+    let file = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if envelope.0.id != *provider || file != format!("{provider}.toml") {
+        return Err(RegistryError::MisnamedProgram {
+            provider: provider.clone(),
+            id: envelope.0.id.clone(),
+            file,
+        });
+    }
+    let manifest = provider_manifest(&envelope.0.payload)?;
+    let mut candidate: Vec<&str> = documents.iter().map(String::as_str).collect();
+    candidate.push(&manifest);
+    Catalog::from_toml(&candidate)?;
+    Ok((manifest, signed_pin(envelope)?))
+}
+
+/// Checks the provider program envelope at `path` as installing it into the extensions directory
+/// `directory` would: against that directory's trust root, the providers MSBE ships, and the
+/// programs installed there under other files. Nothing is installed.
+///
+/// # Errors
+///
+/// Returns [`RegistryError`] naming why the program would be refused.
+pub(crate) fn check_installable_program(
+    directory: &Path,
+    path: &Path,
+) -> Result<ProviderProgramEnvelope, RegistryError> {
+    let found = installed::read(directory);
+    let trust = found.trust?;
+    let others = found
+        .programs
+        .into_iter()
+        .filter(|other| !same_file(&other.path, path))
+        .collect();
+    let mut documents = builtin_manifests()?;
+    admit_programs(others, &trust, &mut documents, &mut Vec::new());
+    let envelope = ProviderProgramEnvelope::from_toml(&installed::read_program(path)?)?;
+    admit_program(path, &envelope, &trust, &trust.program_trust(), &documents)?;
+    Ok(envelope)
+}
+
+/// Whether `left` and `right` name the same file.
+fn same_file(left: &Path, right: &Path) -> bool {
+    match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left == right,
+    }
+}
+
+/// The provider manifests of everything this build ships, which no installed program may collide
+/// with.
+fn builtin_manifests() -> Result<Vec<String>, RegistryError> {
+    BUILTIN
+        .iter()
+        .map(|registration| Ok(registration.manifest.to_owned()))
+        .chain(
+            BUILTIN_PROGRAMS
+                .iter()
+                .map(|registration| provider_manifest(&shipped_program(registration)?)),
+        )
+        .collect()
+}
+
+/// `program`'s provider, as a manifest document.
+fn provider_manifest(program: &ProviderProgram) -> Result<String, RegistryError> {
+    toml::to_string(&program.provider)
+        .map_err(|error| RegistryError::Program(ProgramError::Canonical(error.to_string())))
+}
+
+/// The canonical digest of `program`, which pins and acknowledgements name.
+fn program_digest(program: &ProviderProgram) -> Result<Digest, RegistryError> {
+    format!("sha256:{}", ProviderProgramEnvelope::digest_for(program)?)
+        .parse()
+        .map_err(|error: msbe_fsops::Error| RegistryError::NativeCanonical(error.to_string()))
+}
+
+/// The pin of a signed program: its provider and digest, and the version, host API and signer its
+/// envelope names.
+fn signed_pin(envelope: &ProviderProgramEnvelope) -> Result<ExtensionPin, RegistryError> {
+    let envelope = &envelope.0;
+    Ok(ExtensionPin {
+        id: envelope.payload.provider.id.clone(),
+        version: envelope.version.clone(),
+        digest: program_digest(&envelope.payload)?,
+        host_api_minimum: envelope.host_api.minimum,
+        host_api_maximum: envelope.host_api.maximum,
+        signer: envelope.signer.clone(),
+    })
 }
 
 /// The program `registration` ships, validated.
@@ -602,13 +884,10 @@ fn program_pin(
     registration: &ProgramRegistration,
     program: &ProviderProgram,
 ) -> Result<ExtensionPin, RegistryError> {
-    let digest = format!("sha256:{}", ProviderProgramEnvelope::digest_for(program)?)
-        .parse()
-        .map_err(|error: msbe_fsops::Error| RegistryError::NativeCanonical(error.to_string()))?;
     Ok(ExtensionPin {
         id: program.provider.id.clone(),
         version: registration.version.to_owned(),
-        digest,
+        digest: program_digest(program)?,
         host_api_minimum: NATIVE_HOST_API_VERSION,
         host_api_maximum: NATIVE_HOST_API_VERSION,
         signer: BUILD_SIGNER.to_owned(),
@@ -858,15 +1137,49 @@ pub enum RegistryError {
         /// What is wrong.
         reason: String,
     },
-    /// An installed codec was refused.
-    #[error("installed codec {}: {source}", .path.display())]
-    InstalledCodec {
-        /// Its envelope document.
-        path: PathBuf,
-        /// Why it was refused.
-        #[source]
-        source: Box<RegistryError>,
+    /// An installed codec's signer is revoked.
+    #[error("codec signer {0:?} is revoked")]
+    RevokedCodecSigner(String),
+    /// An installed codec's digest is revoked.
+    #[error("codec digest {0:?} is revoked")]
+    RevokedCodec(String),
+    /// An installed program introduces a provider its signer is not granted.
+    #[error(
+        "provider program {provider:?} is signed by {signer:?}, whose trust entry does not grant programs = [\"{provider}\"]"
+    )]
+    ProgramNotGranted {
+        /// The provider id the program introduces.
+        provider: String,
+        /// The envelope's signer.
+        signer: String,
     },
+    /// An installed program is not installed under its provider id.
+    #[error(
+        "provider program {provider:?} must be installed as {provider}.toml with extension id {provider:?}, not as {file} with id {id:?}"
+    )]
+    MisnamedProgram {
+        /// The provider id the program introduces.
+        provider: String,
+        /// The envelope's extension id.
+        id: String,
+        /// The envelope document's file name.
+        file: String,
+    },
+    /// Content pins a signed program this installation does not serve.
+    #[error(
+        "requires provider program {id} {version} signed by {signer}, which is not installed and trusted here, or is installed with different content"
+    )]
+    MissingExtension {
+        /// The provider id.
+        id: String,
+        /// The pinned version.
+        version: String,
+        /// The pinned signer.
+        signer: String,
+    },
+    /// Content pins other extension code than this build reviewed.
+    #[error("the native bundle requires different reviewed extension code")]
+    ExtensionPinsDiffer,
     /// Native registration identity differs from the provider or codec it serves.
     #[error("native extension identity {identity:?} does not match registration {registration:?}")]
     MismatchedNativeIdentity {

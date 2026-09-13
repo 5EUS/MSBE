@@ -72,6 +72,7 @@ internal sealed partial class MainViewModel : ViewModelBase
 
             await this.RefreshInstancesAsync().ConfigureAwait(true);
             await this.LoadExportCodecsAsync().ConfigureAwait(true);
+            await this.LoadExtensionsAsync().ConfigureAwait(true);
             this.StatusMessage = this.IsPackConfigurationSupported
                 ? $"Connected to daemon {daemon.Version} (RPC {daemon.RpcVersion})."
                 : $"Daemon RPC {daemon.RpcVersion} is outdated; restart MSBE to enable Pack configuration.";

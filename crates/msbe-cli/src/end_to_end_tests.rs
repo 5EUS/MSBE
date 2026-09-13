@@ -1367,14 +1367,125 @@ fn signed_wasm_codecs_join_the_codec_catalog_under_the_local_trust_root() {
     assert!(formats.contains(r#""pack-list""#), "{formats}");
 
     fs::write(&trust, "").unwrap();
-    let refused = world.msbe(&["pack", "formats"]);
-    assert_eq!(refused.code, exit::FAILURE);
-    assert!(refused.err.contains("pack-list.toml"), "{}", refused.err);
+    let formats = world.json(&["pack", "formats"]).to_string();
+    assert!(
+        !formats.contains(r#""pack-list""#),
+        "a codec whose signer is no longer trusted is skipped: {formats}"
+    );
+    let listed = world.json(&["extension", "list"]).to_string();
+    assert!(
+        listed.contains("pack-list.toml") && listed.contains(r#""status":"refused""#),
+        "{listed}"
+    );
     let diagnosed = world.msbe(&["extension", "verify", envelope.as_str()]);
     assert!(
         diagnosed.err.contains("not trusted"),
         "extension commands still run to diagnose a refused codec: {}",
         diagnosed.err
+    );
+}
+
+/// A publisher signs a provider program; a user grants its signer the program, verifies it and
+/// installs it, and MSBE lists it as active, while a broken extension beside it is only reported.
+#[test]
+fn signed_provider_programs_install_under_a_programs_grant() {
+    const PROGRAM: &str = r#"
+runtime = "catalog-v1"
+
+[games]
+game = "game"
+
+[provider]
+schema = 1
+id = "published"
+name = "Published catalog"
+[provider.source]
+type = "prefixed"
+prefix = "published:"
+[provider.metadata]
+api_base = "https://api.published.test"
+[provider.acquisition]
+type = "direct_https"
+[provider.policy]
+requires_auth = false
+respects_distribution_flag = false
+tos_url = ""
+ack_required = false
+"#;
+    let world = World::new();
+    let key = world.inputs.join("publisher.toml").display().to_string();
+    let program = world.file("program.toml", PROGRAM.as_bytes());
+
+    let generated = world.json(&["extension", "keygen", "publisher", key.as_str()]);
+    let signed = world.json(&[
+        "extension",
+        "sign",
+        program.as_str(),
+        "--key",
+        key.as_str(),
+        "--version",
+        "0.1.0",
+    ]);
+    assert_eq!(at(&signed, "/id"), "published");
+    let envelope = at(&signed, "/envelope").as_str().unwrap().to_owned();
+    assert!(envelope.ends_with("published.toml"), "{envelope}");
+
+    let trust = PathBuf::from(at(&generated, "/trust").as_str().unwrap());
+    fs::create_dir_all(trust.parent().unwrap()).unwrap();
+    fs::write(&trust, at(&generated, "/trust_entry").as_str().unwrap()).unwrap();
+    let ungranted = world.msbe(&["extension", "verify", envelope.as_str()]);
+    assert_eq!(ungranted.code, exit::FAILURE);
+    assert!(
+        ungranted.err.contains("does not grant"),
+        "{}",
+        ungranted.err
+    );
+
+    fs::write(&trust, at(&signed, "/trust_entry").as_str().unwrap()).unwrap();
+    let verified = world.json(&["extension", "verify", envelope.as_str()]);
+    assert_eq!(at(&verified, "/signer"), "publisher");
+
+    let installed = world.home.join("extensions/providers");
+    fs::create_dir_all(&installed).unwrap();
+    fs::copy(&envelope, installed.join("published.toml")).unwrap();
+    fs::write(installed.join("broken.toml"), "not an envelope").unwrap();
+    let listed = world.json(&["extension", "list"]);
+    let statuses: Vec<(String, String)> = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| {
+            (
+                entry["path"]
+                    .as_str()
+                    .unwrap()
+                    .rsplit('/')
+                    .next()
+                    .unwrap()
+                    .to_owned(),
+                entry["status"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        statuses,
+        [
+            ("broken.toml".to_owned(), "refused".to_owned()),
+            ("published.toml".to_owned(), "active".to_owned()),
+        ]
+    );
+    let text = world.msbe(&["extension", "list"]);
+    assert_eq!(text.code, exit::OK);
+    assert!(
+        text.out
+            .contains("provider program published 0.1.0 by publisher: active"),
+        "{}",
+        text.out
+    );
+    assert_eq!(
+        world.msbe(&["pack", "formats"]).code,
+        exit::OK,
+        "a broken extension does not stop commands that load providers"
     );
 }
 

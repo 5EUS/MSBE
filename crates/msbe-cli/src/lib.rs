@@ -37,8 +37,9 @@ use msbe_provider_api::{
     },
 };
 use msbe_providers::{
-    AuthoringError, Providers, RegistryError, Routed, SignerKey, codecs_directory, sign_codec,
-    trust_file, verify_codec,
+    AuthoringError, ExtensionKind, ExtensionStatus, Providers, RegistryError, Routed, SignerKey,
+    VerifiedExtension, codecs_directory, providers_directory, sign_codec, sign_program, trust_file,
+    verify_extension,
 };
 use serde::Serialize;
 
@@ -392,26 +393,35 @@ enum ExtensionCommand {
         /// The key file to create. An existing file is never replaced.
         key: PathBuf,
     },
-    /// Sign a WebAssembly pack codec, writing its envelope beside the module.
+    /// Sign a WebAssembly pack codec, writing its envelope beside the module, or a provider
+    /// program, writing its envelope as `<provider id>.toml`.
     Sign {
-        /// The .wasm module.
-        module: PathBuf,
+        /// The .wasm module, or the provider program's .toml.
+        input: PathBuf,
         /// The key file to sign with.
         #[arg(long, value_name = "FILE")]
         key: PathBuf,
-        /// The version to publish the codec as.
+        /// The version to publish the extension as.
         #[arg(long)]
         version: String,
-        /// The extension ID. Defaults to the codec ID the module declares.
+        /// The extension ID. A codec's defaults to the codec ID the module declares; a program's
+        /// is its provider id.
         #[arg(long)]
         id: Option<String>,
+        /// The directory a program's envelope is written to. Defaults to the program's own
+        /// directory. A codec's envelope is always written beside its module.
+        #[arg(long, value_name = "DIRECTORY")]
+        output: Option<PathBuf>,
     },
-    /// Check a signed codec against the local trust root, as installing it would, without
-    /// installing it.
+    /// Check a signed codec or provider program against the local trust root, as installing it
+    /// would, without installing it.
     Verify {
-        /// The envelope document beside the module.
+        /// The envelope document.
         envelope: PathBuf,
     },
+    /// List the codecs and provider programs installed in the data directory, and whether each
+    /// runs.
+    List,
 }
 
 #[derive(Debug, Subcommand)]
@@ -1419,7 +1429,7 @@ fn extension_command(
                 key: path,
                 public_key: generated.public_key(),
                 trust: trust_file(home),
-                trust_entry: generated.trust_entry(&[]),
+                trust_entry: generated.trust_entry(&[], &[]),
             };
             console.emit(&report, |out, report| {
                 writeln!(
@@ -1432,47 +1442,115 @@ fn extension_command(
                 writeln!(out, "Public key: {}", report.public_key)?;
                 writeln!(
                     out,
-                    "To trust it, add this entry to {}, with `providers = [...]` naming any provider its codecs bind to:\n",
+                    "To trust it, add this entry to {}, with `providers = [...]` naming any provider its codecs bind to, and `programs = [...]` naming any provider it introduces as a program:\n",
                     report.trust.display()
                 )?;
                 write!(out, "{}", report.trust_entry)
             })?;
         }
         ExtensionCommand::Sign {
-            module,
+            input,
             key,
             version,
             id,
+            output,
         } => {
             let key = SignerKey::read(&absolute(key)?)?;
-            let signed = sign_codec(&absolute(module)?, &key, version, id.as_deref())?;
-            let install = codecs_directory(home);
-            console.emit(&signed, |out, signed| {
-                writeln!(
-                    out,
-                    "Signed codec {} as {} {} by {}, and wrote {}.",
-                    signed.codec,
-                    signed.id,
-                    signed.version,
-                    signed.signer,
-                    signed.envelope.display()
-                )?;
-                if let Some(provider) = &signed.provider {
-                    writeln!(
-                        out,
-                        "It binds to provider {provider}, so its signer's trust entry needs providers = [\"{provider}\"]."
-                    )?;
-                }
-                writeln!(
-                    out,
-                    "Install it by copying the envelope and {} into {}.",
-                    signed.module.display(),
-                    install.display()
-                )
-            })?;
+            let input = absolute(input)?;
+            if input
+                .extension()
+                .is_some_and(|extension| extension == "toml")
+            {
+                let output = output.as_deref().map(absolute).transpose()?;
+                let signed = sign_program(&input, &key, version, id.as_deref(), output.as_deref())?;
+                report_signed_program(home, &signed, console)?;
+            } else if output.is_some() {
+                return Err(AuthoringError::CodecOutput.into());
+            } else {
+                let signed = sign_codec(&input, &key, version, id.as_deref())?;
+                report_signed_codec(home, &signed, console)?;
+            }
         }
         ExtensionCommand::Verify { envelope } => {
-            let verified = verify_codec(home, &absolute(envelope)?)?;
+            verify_extension_envelope(home, envelope, console)?;
+        }
+        ExtensionCommand::List => list_extensions(home, console)?,
+    }
+    Ok(exit::OK)
+}
+
+/// Reports a signed provider program, and what trusting and installing it takes.
+fn report_signed_program(
+    home: &Home,
+    signed: &msbe_providers::SignedProgram,
+    console: &mut Console<'_>,
+) -> Result<(), CliError> {
+    let install = providers_directory(home);
+    console.emit(signed, |out, signed| {
+        writeln!(
+            out,
+            "Signed provider program {} {} by {}, and wrote {}.",
+            signed.id,
+            signed.version,
+            signed.signer,
+            signed.envelope.display()
+        )?;
+        writeln!(
+            out,
+            "Its signer's trust entry needs programs = [\"{}\"]:\n",
+            signed.id
+        )?;
+        write!(out, "{}", signed.trust_entry)?;
+        writeln!(
+            out,
+            "\nInstall it by copying the envelope into {}.",
+            install.display()
+        )
+    })?;
+    Ok(())
+}
+
+/// Reports a signed codec, and what installing it takes.
+fn report_signed_codec(
+    home: &Home,
+    signed: &msbe_providers::SignedCodec,
+    console: &mut Console<'_>,
+) -> Result<(), CliError> {
+    let install = codecs_directory(home);
+    console.emit(signed, |out, signed| {
+        writeln!(
+            out,
+            "Signed codec {} as {} {} by {}, and wrote {}.",
+            signed.codec,
+            signed.id,
+            signed.version,
+            signed.signer,
+            signed.envelope.display()
+        )?;
+        if let Some(provider) = &signed.provider {
+            writeln!(
+                out,
+                "It binds to provider {provider}, so its signer's trust entry needs providers = [\"{provider}\"]."
+            )?;
+        }
+        writeln!(
+            out,
+            "Install it by copying the envelope and {} into {}.",
+            signed.module.display(),
+            install.display()
+        )
+    })?;
+    Ok(())
+}
+
+/// Checks the codec or provider program envelope at `envelope` against `home`'s trust root.
+fn verify_extension_envelope(
+    home: &Home,
+    envelope: &Path,
+    console: &mut Console<'_>,
+) -> Result<(), CliError> {
+    match verify_extension(home, &absolute(envelope)?)? {
+        VerifiedExtension::Codec(verified) => {
             console.emit(&verified, |out, verified| {
                 writeln!(
                     out,
@@ -1486,8 +1564,72 @@ fn extension_command(
                 )
             })?;
         }
+        VerifiedExtension::Program(verified) => {
+            console.emit(&verified, |out, verified| {
+                writeln!(
+                    out,
+                    "{} is provider program {} {}, signed by {} and trusted by {}.",
+                    verified.envelope.display(),
+                    verified.id,
+                    verified.version,
+                    verified.signer,
+                    verified.trust.display()
+                )
+            })?;
+        }
     }
-    Ok(exit::OK)
+    Ok(())
+}
+
+/// Lists the extensions installed in `home`, and whether each runs.
+fn list_extensions(home: &Home, console: &mut Console<'_>) -> Result<(), CliError> {
+    let providers = Providers::installed(home)?;
+    let listed = providers.installed_extensions();
+    let directory = home.root().join("extensions");
+    console.emit(&listed, |out, listed| {
+        if listed.is_empty() {
+            return writeln!(
+                out,
+                "No extensions are installed in {}.",
+                directory.display()
+            );
+        }
+        for extension in *listed {
+            let kind = match extension.kind {
+                ExtensionKind::TrustRoot => "trust root",
+                ExtensionKind::Codec => "codec",
+                ExtensionKind::Program => "provider program",
+            };
+            let name = [&extension.id, &extension.version]
+                .into_iter()
+                .flatten()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .join(" ");
+            let signer = extension
+                .signer
+                .as_deref()
+                .map_or_else(String::new, |signer| format!(" by {signer}"));
+            match extension.status {
+                ExtensionStatus::Active => writeln!(
+                    out,
+                    "{kind} {name}{signer}: active ({})",
+                    extension.path.display()
+                )?,
+                ExtensionStatus::Refused => writeln!(
+                    out,
+                    "{kind} {name}{signer}: refused, {} ({})",
+                    extension
+                        .reason
+                        .as_deref()
+                        .unwrap_or("for no stated reason"),
+                    extension.path.display()
+                )?,
+            }
+        }
+        Ok(())
+    })?;
+    Ok(())
 }
 
 fn snapshot_command(
@@ -1598,6 +1740,7 @@ const fn pack_exit(code: IssueCode) -> u8 {
         | IssueCode::UntrustedExtension => exit::POLICY,
         IssueCode::IntegrityMismatch
         | IssueCode::EnvironmentMismatch
+        | IssueCode::MissingExtension
         | IssueCode::DerivationMismatch => exit::INTEGRITY,
         _ => exit::FAILURE,
     }

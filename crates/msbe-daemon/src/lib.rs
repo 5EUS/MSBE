@@ -14,11 +14,11 @@ use std::{
 use msbe_core::config::Home;
 use msbe_provider_api::{HttpClient, HttpError};
 use msbe_rpc_schema::{
-    COMMAND_METHOD, CONTRACT_VERSION, DaemonInfo, GAME_LIST_METHOD, INFO_METHOD, JOB_CANCEL_METHOD,
-    JOB_EVENTS_METHOD, JOB_METHODS, JOB_START_METHOD, PACK_CAPTURE_PREVIEW_METHOD,
-    PACK_CODEC_LIST_METHOD, PACK_CODEC_OPTIONS_METHOD, PACK_EXPORT_PREVIEW_METHOD,
-    PACK_IMPORT_PREVIEW_METHOD, PACK_UPDATE_PREVIEW_METHOD, PLAN_LOAD_METHOD, PLAN_UNLOAD_METHOD,
-    Request, Response,
+    COMMAND_METHOD, CONTRACT_VERSION, DaemonInfo, EXTENSION_LIST_METHOD, GAME_LIST_METHOD,
+    INFO_METHOD, JOB_CANCEL_METHOD, JOB_EVENTS_METHOD, JOB_METHODS, JOB_START_METHOD,
+    PACK_CAPTURE_PREVIEW_METHOD, PACK_CODEC_LIST_METHOD, PACK_CODEC_OPTIONS_METHOD,
+    PACK_EXPORT_PREVIEW_METHOD, PACK_IMPORT_PREVIEW_METHOD, PACK_UPDATE_PREVIEW_METHOD,
+    PLAN_LOAD_METHOD, PLAN_UNLOAD_METHOD, Request, Response,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -108,6 +108,11 @@ impl Daemon {
                 id,
                 self.pack_home()
                     .and_then(|home| pack::codec_options(&request.params, &home)),
+            ),
+            EXTENSION_LIST_METHOD => pack::respond(
+                id,
+                self.pack_home()
+                    .and_then(|home| pack::extension_list(&home)),
             ),
             method @ (PACK_IMPORT_PREVIEW_METHOD
             | PACK_UPDATE_PREVIEW_METHOD
@@ -401,7 +406,8 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        COMMAND_METHOD, Daemon, GAME_LIST_METHOD, INFO_METHOD, PLAN_UNLOAD_METHOD, PlanRegistry,
+        COMMAND_METHOD, Daemon, EXTENSION_LIST_METHOD, GAME_LIST_METHOD, INFO_METHOD,
+        PLAN_UNLOAD_METHOD, PlanRegistry,
     };
     use msbe_rpc_schema::{
         CONTRACT_VERSION, JOB_CANCEL_METHOD, JOB_EVENTS_METHOD, JOB_START_METHOD,
@@ -442,6 +448,33 @@ bootstrap = "none"
 
     fn text<'a>(value: &'a Value, key: &str) -> &'a str {
         value.get(key).and_then(Value::as_str).unwrap()
+    }
+
+    #[test]
+    fn extension_list_reports_each_installed_extension_and_why_one_is_refused() {
+        let (_plans, registry) = registry();
+        let root = TempDir::new().unwrap();
+        let home = root.path().join("home");
+        let mut daemon = Daemon::new(registry).with_home(home.clone());
+        assert_eq!(
+            success(call(&mut daemon, EXTENSION_LIST_METHOD, Value::Null)),
+            json!([])
+        );
+
+        fs::create_dir_all(home.join("extensions/providers")).unwrap();
+        fs::write(
+            home.join("extensions/providers/broken.toml"),
+            "not an envelope",
+        )
+        .unwrap();
+        let listed = success(call(&mut daemon, EXTENSION_LIST_METHOD, Value::Null));
+        let [broken] = listed.as_array().unwrap().as_slice() else {
+            panic!("{listed}");
+        };
+        assert_eq!(text(broken, "kind"), "program");
+        assert_eq!(text(broken, "status"), "refused");
+        assert!(text(broken, "path").ends_with("broken.toml"), "{broken}");
+        assert!(!text(broken, "reason").is_empty());
     }
 
     #[test]

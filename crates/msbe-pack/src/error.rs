@@ -55,6 +55,8 @@ pub enum IssueCode {
     StalePlan,
     /// An extension failed trust validation.
     UntrustedExtension,
+    /// Content pins an installed extension this installation does not serve.
+    MissingExtension,
     /// A codec failed without a more specific code.
     CodecFailure,
     /// The caller cancelled the operation.
@@ -202,7 +204,13 @@ fn registry_code(error: &RegistryError) -> IssueCode {
         RegistryError::PackCodec(error) => codec_code(error),
         RegistryError::Program(_)
         | RegistryError::RevokedProgram(_)
-        | RegistryError::RevokedProgramSigner(_) => IssueCode::UntrustedExtension,
+        | RegistryError::RevokedProgramSigner(_)
+        | RegistryError::RevokedCodec(_)
+        | RegistryError::RevokedCodecSigner(_)
+        | RegistryError::ProgramNotGranted { .. }
+        | RegistryError::MisnamedProgram { .. } => IssueCode::UntrustedExtension,
+        RegistryError::MissingExtension { .. } => IssueCode::MissingExtension,
+        RegistryError::ExtensionPinsDiffer => IssueCode::IntegrityMismatch,
         RegistryError::AuthenticationRequired(_)
         | RegistryError::AcknowledgementRequired { .. } => IssueCode::UserActionRequired,
         _ => IssueCode::HostFailure,

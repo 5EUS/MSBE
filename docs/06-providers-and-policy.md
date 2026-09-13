@@ -263,9 +263,20 @@ only select a runtime implementation shipped and reviewed by MSBE, such as `cata
 future `github-releases-v1`; it cannot alter that implementation's transport or policy rules.
 
 Provider programs are signed registry artifacts. Local policy chooses trusted signing keys and
-whether a program may be enabled. The daemon reports the program id, schema, signer, and selected
-runtime to clients. An untrusted or unsupported program is visible for diagnosis but cannot make
-network requests.
+whether a program may be enabled. Until the registry exists, a signed program is installed by
+copying its envelope to `<home>/extensions/providers/<provider id>.toml`, and it then loads in a
+build that does not ship it.
+
+- **Trust.** Its signer needs a `programs` grant naming the provider id in `trust.toml`
+  ([18 §18.3](18-wasm-extensions.md)).
+- **No replacement.** A program that shares a provider id, source prefix or handoff scheme with a
+  provider already registered is refused. An installed program never replaces one MSBE ships.
+- **Isolation.** Each program is admitted or refused on its own. `extension.list` reports each
+  one's id, version, digest and signer, and why any was refused. An untrusted or refused program
+  cannot make network requests.
+- **Pins.** An export pins a signed program, with its real signer, only when the exported profile
+  has content from its provider. Importing such a pack where no trusted program of that id and
+  digest is installed fails with `MissingExtension`.
 
 The M1 runtime resolves every recognized source through a fail-closed reviewed-adapter registry.
 MSBE ships three provider programs, `url` on `direct-url-v1`, and `modrinth` and `thunderstore` on
