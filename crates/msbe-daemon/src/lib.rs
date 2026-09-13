@@ -15,14 +15,16 @@ use msbe_core::config::Home;
 use msbe_provider_api::{HttpClient, HttpError};
 use msbe_rpc_schema::{
     COMMAND_METHOD, CONTRACT_VERSION, DaemonInfo, EXTENSION_LIST_METHOD, GAME_LIST_METHOD,
-    INFO_METHOD, JOB_CANCEL_METHOD, JOB_EVENTS_METHOD, JOB_METHODS, JOB_START_METHOD,
-    PACK_CAPTURE_PREVIEW_METHOD, PACK_CODEC_LIST_METHOD, PACK_CODEC_OPTIONS_METHOD,
-    PACK_EXPORT_PREVIEW_METHOD, PACK_IMPORT_PREVIEW_METHOD, PACK_UPDATE_PREVIEW_METHOD,
-    PLAN_LOAD_METHOD, PLAN_UNLOAD_METHOD, Request, Response,
+    HANDOFF_SUBMIT_METHOD, INFO_METHOD, JOB_CANCEL_METHOD, JOB_EVENTS_METHOD, JOB_METHODS,
+    JOB_START_METHOD, PACK_CAPTURE_PREVIEW_METHOD, PACK_CODEC_LIST_METHOD,
+    PACK_CODEC_OPTIONS_METHOD, PACK_EXPORT_PREVIEW_METHOD, PACK_IMPORT_PREVIEW_METHOD,
+    PACK_UPDATE_PREVIEW_METHOD, PLAN_LOAD_METHOD, PLAN_UNLOAD_METHOD, Request, Response,
 };
+use msbe_secrets::SystemClock;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+mod handoff;
 mod jobs;
 mod pack;
 mod registry;
@@ -96,6 +98,15 @@ impl Daemon {
         match request.method.as_str() {
             INFO_METHOD => self.info(id, &request.params),
             COMMAND_METHOD => self.command(id, request.params.clone()),
+            HANDOFF_SUBMIT_METHOD => handoff::respond(
+                id,
+                handoff::submit(
+                    &request.params,
+                    self.home().as_ref(),
+                    &self.connect,
+                    &SystemClock,
+                ),
+            ),
             GAME_LIST_METHOD => game_list(id, &request.params, &self.registry),
             PLAN_LOAD_METHOD => plan_load(id, request.params.clone(), &mut self.registry),
             PLAN_UNLOAD_METHOD => plan_unload(id, request.params.clone(), &mut self.registry),
@@ -406,8 +417,8 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        COMMAND_METHOD, Daemon, EXTENSION_LIST_METHOD, GAME_LIST_METHOD, INFO_METHOD,
-        PLAN_UNLOAD_METHOD, PlanRegistry,
+        COMMAND_METHOD, Daemon, EXTENSION_LIST_METHOD, GAME_LIST_METHOD, HANDOFF_SUBMIT_METHOD,
+        INFO_METHOD, PLAN_UNLOAD_METHOD, PlanRegistry,
     };
     use msbe_rpc_schema::{
         CONTRACT_VERSION, JOB_CANCEL_METHOD, JOB_EVENTS_METHOD, JOB_START_METHOD,
@@ -617,6 +628,26 @@ bootstrap = "none"
                 .and_then(Value::as_str)
                 .is_some_and(|output| output.contains("msbe"))
         );
+    }
+
+    #[test]
+    fn handoff_submission_refuses_invalid_input_without_echoing_link_keys() {
+        let mut daemon =
+            Daemon::new(PlanRegistry::discover(PathBuf::from("missing-test-plans")).unwrap());
+        let invalid = call(
+            &mut daemon,
+            HANDOFF_SUBMIT_METHOD,
+            json!({"unexpected": true}),
+        );
+        assert!(matches!(invalid, Response::Error { error, .. } if error.code == -32602));
+
+        let refused = call(
+            &mut daemon,
+            HANDOFF_SUBMIT_METHOD,
+            json!({"uri": "unknown://item?key=not-for-output"}),
+        );
+        assert!(matches!(refused, Response::Error { error, .. }
+            if error.code == -32602 && !error.message.contains("not-for-output")));
     }
 
     #[test]

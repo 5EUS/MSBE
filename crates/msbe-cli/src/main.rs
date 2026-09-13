@@ -12,7 +12,7 @@ use std::{
     process::{Command, ExitCode, Stdio},
 };
 
-use msbe_rpc_schema::{COMMAND_METHOD, Request};
+use msbe_rpc_schema::{COMMAND_METHOD, HANDOFF_SUBMIT_METHOD, Request};
 use serde_json::{Value, json};
 
 fn main() -> ExitCode {
@@ -47,7 +47,10 @@ fn run_via_daemon(args: Vec<OsString>) -> Result<u8, String> {
         start_daemon(&socket)?;
         connect_daemon(&socket, &thread::sleep, &Duration::from_millis(50))?
     };
-    let request = Request::new(json!(1), COMMAND_METHOD, json!({"args": command}));
+    let request = handoff_uri(&command).map_or_else(
+        || Request::new(json!(1), COMMAND_METHOD, json!({"args": command})),
+        |uri| Request::new(json!(1), HANDOFF_SUBMIT_METHOD, json!({"uri": uri})),
+    );
     serde_json::to_writer(&mut stream, &request).map_err(|error| error.to_string())?;
     stream.write_all(b"\n").map_err(|error| error.to_string())?;
     stream.flush().map_err(|error| error.to_string())?;
@@ -58,6 +61,15 @@ fn run_via_daemon(args: Vec<OsString>) -> Result<u8, String> {
         .map_err(|error| error.to_string())?;
     let response: Value = serde_json::from_str(&response).map_err(|error| error.to_string())?;
     let result = response.get("result").ok_or_else(|| rpc_error(&response))?;
+    if request.method == HANDOFF_SUBMIT_METHOD {
+        serde_json::to_writer_pretty(&mut io::stdout().lock(), result)
+            .map_err(|error| error.to_string())?;
+        io::stdout()
+            .lock()
+            .write_all(b"\n")
+            .map_err(|error| error.to_string())?;
+        return Ok(0);
+    }
     let stdout = result
         .get("stdout")
         .and_then(Value::as_str)
@@ -79,6 +91,23 @@ fn run_via_daemon(args: Vec<OsString>) -> Result<u8, String> {
         .and_then(Value::as_u64)
         .ok_or_else(|| "daemon returned no exit code".to_owned())?;
     u8::try_from(exit_code).map_err(|_| "daemon returned an invalid exit code".to_owned())
+}
+
+/// Returns the protocol URI when this invocation is the narrow handoff command.
+#[cfg(unix)]
+fn handoff_uri(command: &[String]) -> Option<&str> {
+    let mut arguments = command.iter();
+    while let Some(argument) = arguments.next() {
+        match argument.as_str() {
+            "--home" | "--format" => {
+                arguments.next()?;
+            }
+            argument if argument.starts_with("--home=") || argument.starts_with("--format=") => {}
+            "handoff" => return arguments.next().map(String::as_str),
+            _ => return None,
+        }
+    }
+    None
 }
 
 #[cfg(unix)]

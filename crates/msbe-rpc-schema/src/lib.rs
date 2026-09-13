@@ -16,7 +16,7 @@ use std::path::PathBuf;
 pub const JSON_RPC_VERSION: &str = "2.0";
 
 /// The RPC contract with typed pack methods, daemon-held plans and jobs.
-pub const CONTRACT_VERSION: u32 = 4;
+pub const CONTRACT_VERSION: u32 = 5;
 
 /// The method that reports daemon identity and contract compatibility.
 pub const INFO_METHOD: &str = "daemon.info";
@@ -26,6 +26,9 @@ pub const INFO_METHOD: &str = "daemon.info";
 /// A compatibility bridge for surfaces without typed methods yet. Pack workflows use the typed
 /// methods below.
 pub const COMMAND_METHOD: &str = "command.run";
+
+/// Submits a browser-assisted provider link: `{ uri }` returns its acquired artifact receipt.
+pub const HANDOFF_SUBMIT_METHOD: &str = "handoff.submit";
 
 /// The method that lists games supported by the daemon's loaded plans.
 pub const GAME_LIST_METHOD: &str = "game.list";
@@ -325,7 +328,7 @@ mod tests {
         let encoded = serde_json::to_string(&info)?;
         assert_eq!(
             encoded,
-            r#"{"version":"0.0.0","rpc_version":4,"data_directory":"/msbe"}"#
+            r#"{"version":"0.0.0","rpc_version":5,"data_directory":"/msbe"}"#
         );
         assert_eq!(serde_json::from_str::<DaemonInfo>(&encoded)?, info);
         Ok(())

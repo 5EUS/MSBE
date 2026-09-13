@@ -140,6 +140,11 @@ enum Command {
         #[arg(long)]
         with_deps: bool,
     },
+    /// Submit a browser-assisted provider link to the local daemon.
+    Handoff {
+        /// The provider link received from the browser or operating system.
+        uri: String,
+    },
     /// Search every provider that supports it for mods compatible with a profile target.
     Search {
         /// The instance.
@@ -653,6 +658,8 @@ enum CliError {
     },
     #[error("pass exactly one of --bad or --good")]
     BisectVerdict,
+    #[error("handoff links must be submitted to the local daemon")]
+    HandoffViaDaemon,
     #[error("cannot create scratch space for downloads: {0}")]
     Scratch(#[source] io::Error),
     #[error("cannot read config {}: {source}", .path.display())]
@@ -840,6 +847,7 @@ fn execute(cli: &Cli, console: &mut Console<'_>) -> Result<u8, CliError> {
         } => add(
             &providers, &home, instance, profile, sources, *with_deps, console,
         ),
+        Command::Handoff { .. } => Err(CliError::HandoffViaDaemon),
         Command::Search {
             instance,
             query,
