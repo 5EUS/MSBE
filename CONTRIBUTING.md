@@ -82,7 +82,7 @@ Linux machine cannot lint the crates that depend on it for that target. The othe
 ```sh
 rustup target add x86_64-pc-windows-msvc
 cargo clippy -p msbe-fsops -p msbe-archive -p msbe-plan-schema -p msbe-core \
-  -p msbe-provider-api -p msbe-provider-modrinth -p msbe-providers \
+  -p msbe-provider-api -p msbe-providers \
   --all-targets --all-features --target x86_64-pc-windows-msvc -- -D warnings
 ```
 

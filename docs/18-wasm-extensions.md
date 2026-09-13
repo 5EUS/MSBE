@@ -308,9 +308,9 @@ not intend. Installed codecs are not native build pins, so installing one never 
 bundles a build accepts.
 
 **Shipped codecs.** MSBE ships Modrinth's `.mrpack` codec as a sandboxed codec. Its source is
-`extensions/codecs/modrinth-mrpack`. `scripts/development/build-wasm-extensions.sh` builds it into
-`crates/msbe-provider-modrinth/codecs/`, and the provider's registration embeds the module through
-`wasm_pack_codecs`. A shipped codec is trusted as part of the build rather than through `trust.toml`,
+`extensions/providers/modrinth/codecs/mrpack`. `scripts/development/build-wasm-extensions.sh`
+builds `extensions/providers/modrinth/modrinth-mrpack.wasm`, and the provider registry embeds the
+module through `wasm_pack_codecs`. A shipped codec is trusted as part of the build rather than through `trust.toml`,
 may name only its registration's provider, and is pinned like a native extension, by the SHA-256 of
 its module. Each module is compiled once per process.
 

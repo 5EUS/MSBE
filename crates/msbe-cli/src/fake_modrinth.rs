@@ -1,9 +1,7 @@
 //! In-memory Modrinth service for integration tests of consumers of this adapter.
 
 #![expect(
-    clippy::panic,
     clippy::type_complexity,
-    clippy::unwrap_used,
     reason = "the opt-in test fixture intentionally uses infallible test setup and shared mutable canned responses"
 )]
 
@@ -18,16 +16,16 @@ const CDN: &str = "https://cdn.modrinth.test";
 
 /// Shared mutable routes and hosted contents for an in-memory Modrinth service.
 #[derive(Debug, Clone, Default)]
-pub struct FakeModrinth {
+pub(crate) struct FakeModrinth {
     /// JSON responses by absolute API URL.
-    pub json: Rc<RefCell<BTreeMap<String, Value>>>,
+    pub(crate) json: Rc<RefCell<BTreeMap<String, Value>>>,
     /// Download contents by absolute CDN URL.
-    pub files: Rc<RefCell<BTreeMap<String, Vec<u8>>>>,
+    pub(crate) files: Rc<RefCell<BTreeMap<String, Vec<u8>>>>,
 }
 
 impl FakeModrinth {
     /// A catalogue containing Sodium, Iris, and Iris's required Sodium dependency.
-    pub fn catalogue() -> Self {
+    pub(crate) fn catalogue() -> Self {
         let fake = Self::default();
         fake.publish(
             "sodium",
@@ -48,7 +46,14 @@ impl FakeModrinth {
     }
 
     /// Publishes a project release with a deterministic downloadable JAR.
-    pub fn publish(&self, slug: &str, number: &str, kind: &str, date: &str, dependencies: &Value) {
+    pub(crate) fn publish(
+        &self,
+        slug: &str,
+        number: &str,
+        kind: &str,
+        date: &str,
+        dependencies: &Value,
+    ) {
         let id = project_id(slug);
         let file = format!("{slug}-fabric-{number}.jar");
         let bytes = format!("{slug} {number} jar bytes").into_bytes();
@@ -71,7 +76,7 @@ impl FakeModrinth {
     }
 
     /// Corrupts a hosted file without changing its declared size.
-    pub fn corrupt(&self, file: &str) {
+    pub(crate) fn corrupt(&self, file: &str) {
         if let Some(bytes) = self.files.borrow_mut().get_mut(&format!("{CDN}/{file}"))
             && let Some(last) = bytes.last_mut()
         {

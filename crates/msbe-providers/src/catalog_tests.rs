@@ -20,7 +20,7 @@ use msbe_provider_api::{
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha512};
 
-use crate::Providers;
+use crate::{Providers, registry::MODRINTH};
 
 const ID: &str = "modrinth";
 /// The production API base, which the fake answers for.
@@ -464,7 +464,7 @@ fn search_asks_for_mods_compatible_with_the_target() {
 
 #[test]
 fn ships_overlay_entries_for_fabric_api_reimplementations() {
-    let overlay = Overlay::from_toml(msbe_provider_modrinth::PROGRAM.overlay).unwrap();
+    let overlay = Overlay::from_toml(MODRINTH.overlay).unwrap();
     let suppliers: Vec<&str> = overlay
         .suppliers(&package("P7dR8mSH"))
         .map(|supplier| supplier.project.as_str())
@@ -699,7 +699,7 @@ fn a_project_that_does_not_support_the_target_side_is_refused() {
 #[test]
 fn an_installed_stand_in_meets_requirements_and_excludes_the_original() {
     let http = fabric_api_catalogue();
-    let overlay = Overlay::from_toml(msbe_provider_modrinth::PROGRAM.overlay).unwrap();
+    let overlay = Overlay::from_toml(MODRINTH.overlay).unwrap();
 
     // Nothing stands in yet, so Fabric API is preferred over the fork that provides it, and the
     // stand-in Modrinth no longer has does not fail resolution.

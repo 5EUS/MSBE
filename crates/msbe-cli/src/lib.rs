@@ -44,6 +44,8 @@ use serde::Serialize;
 
 #[cfg(test)]
 mod end_to_end_tests;
+#[cfg(test)]
+mod fake_modrinth;
 
 /// Opens a network client on first use, so commands that never touch the network never load
 /// the platform's certificates.

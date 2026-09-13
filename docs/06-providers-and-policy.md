@@ -120,7 +120,7 @@ and bounded JSON pointers into responses, and serves up to five capabilities:
 A program cannot form arbitrary URLs, run scripts, or select a transport. Native registrations must
 state a non-empty exception reason; they remain reserved for protocol semantics the reviewed
 declarative vocabulary cannot represent. An excerpt of the Modrinth program
-(`crates/msbe-provider-modrinth/program.toml`):
+(`extensions/providers/modrinth/program.toml`):
 
 ```toml
 runtime      = "catalog-v1"

@@ -43,10 +43,10 @@ build() {
 # Examples, used as test fixtures.
 build extensions/codecs/pack-list crates/msbe-wasm-codec/tests/fixtures/pack-list.wasm
 build extensions/steps/option-installer crates/msbe-plan-host/tests/fixtures/option-installer.wasm
-# Shipped with MSBE, embedded by the crate that registers them.
-build extensions/codecs/modrinth-mrpack crates/msbe-provider-modrinth/codecs/modrinth-mrpack.wasm
+# Shipped with MSBE, embedded by the provider registry.
+build extensions/providers/modrinth/codecs/mrpack extensions/providers/modrinth/modrinth-mrpack.wasm
 
-for extension in extensions/*/*/; do
+for extension in extensions/codecs/*/ extensions/steps/*/; do
   case "$listed " in
     *" $extension "*) ;;
     *)

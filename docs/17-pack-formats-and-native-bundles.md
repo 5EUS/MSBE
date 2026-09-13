@@ -47,11 +47,11 @@ Consequences:
   but does not branch on those IDs.
 - `msbe-pack` knows codecs, option schemas, neutral references, lockfiles, and blobs. It does not
   know external archive layouts.
-- `msbe-provider-modrinth` packages Modrinth's provider program and its sandboxed `.mrpack` codec,
-  which owns `.mrpack` detection, `modrinth.index.json`, Modrinth dependency keys, environment
-  rules, and conversion to and from Modrinth project/version references.
-- A future `msbe-provider-curseforge` owns CurseForge `manifest.json`, project/file IDs, and
-  `allowModDistribution` behavior.
+- `extensions/providers/modrinth/` packages Modrinth's provider program, overlays, and sandboxed
+  `.mrpack` codec, which owns `.mrpack` detection, `modrinth.index.json`, Modrinth dependency
+  keys, environment rules, and conversion to and from Modrinth project/version references.
+- A future `extensions/providers/curseforge/` owns CurseForge `manifest.json`, project/file IDs,
+  and `allowModDistribution` behavior.
 - The local/native extension owns `.msbepack`, local-file references, embedded blobs, and native
   bundle policy.
 - Plans own installation topology. A codec never decides that a JAR belongs in `mods/`; it uses
@@ -68,11 +68,12 @@ The target repository layout is:
 crates/
   msbe-core/                  profiles, lockfiles, resolution, provenance, CAS references
   msbe-provider-api/          provider-program contracts plus neutral pack-codec contracts
-  msbe-provider-modrinth/     Modrinth's provider program, overlays and sandboxed .mrpack codec
   msbe-provider-local/        local acquisition and native .msbepack codec registration
   msbe-providers/             runtime registry, trusted provider programs, codecs, policy gate
   msbe-pack/                  codec selection, neutral import/export planning, option validation
   msbe-cli/                   generic pack commands; no format-specific branches
+extensions/
+  providers/modrinth/         Modrinth program, overlays, sandboxed .mrpack codec and built module
 ```
 
 A dedicated `msbe-pack-native` crate may be split from `msbe-provider-local` if the native codec
@@ -527,7 +528,7 @@ loader IDs plus neutral capabilities. It may ship reviewed mappings in its own c
 provider-owned data files:
 
 ```toml
-# Private to msbe-provider-modrinth.
+# Private to the Modrinth provider bundle.
 [[pack-target]]
 plan = "minecraft"
 game = "minecraft"
@@ -1015,7 +1016,7 @@ release-channel behavior. The production violations it found, and how each was r
 
 | Location                                    | Violation                                                                                                                                                                      | Required owner                                                                                                                     |
 | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `msbe-pack`                                 | Resolved in Phase B: the crate owns only provider-neutral host container utilities and the unregistered native codec. Modrinth wire records, `.mrpack` detection, and export layout live in `msbe-provider-modrinth`; CurseForge records were removed. | Phase B complete. |
+| `msbe-pack`                                 | Resolved in Phase B: the crate owns only provider-neutral host container utilities and the unregistered native codec. Modrinth wire records, `.mrpack` detection, and export layout live in `extensions/providers/modrinth/`; CurseForge records were removed. | Phase B complete. |
 | `msbe-cli::pack_import`                     | Resolved in Phase D: import previews and executes `msbe_pack` plans; codecs are detected through the registry, and requirements are acquired through the provider policy gate. | Phase D complete. |
 | `msbe-cli::pack_export`                     | Resolved in Phase D: export selects a codec by ID, normalizes its schema, and writes only the policy-gated `PackExportPlan`.                                                   | Phase D complete. |
 | `msbe-cli::loader_dependency`               | Resolved in Phase B: the mapping is private to the Modrinth codec.                                                                                                             | Phase B complete. |
@@ -1028,11 +1029,11 @@ The following matches were reviewed and are **not** boundary violations:
   mentions are examples and migration fixtures; it has no provider-name branches.
 - SHA-256 and SHA-512 support in `msbe-provider-api` and `msbe-core` is generic integrity and
   legacy-data handling, not a Modrinth protocol assumption.
-- `msbe-providers` names `msbe-provider-modrinth::PROGRAM` in `BUILTIN_PROGRAMS` and verifies
-  routing, and the Modrinth program's behavior, in its tests. The reviewed registry is the one generic crate allowed to list shipped
-  extensions.
-- `msbe-cli` has a dev-only dependency on `msbe-provider-modrinth` for end-to-end fixtures. Test
-  coupling to a provider-owned fake is intentional and does not put provider behavior in the CLI.
+- `msbe-providers` builds Modrinth's `ProgramRegistration` from its bundle in `BUILTIN_PROGRAMS`
+  and verifies routing and the program's behavior in its tests. The reviewed registry is the one
+  generic crate allowed to list shipped extensions.
+- `msbe-cli` keeps its end-to-end-only Modrinth fake in its test module. It does not put provider
+  production behavior in the CLI.
 - `msbe-http` mentions the Modrinth CDN and API in comments and an ignored live transport test.
   Its production user agent, TLS, limits, and request behavior are provider-neutral.
 - `msbe-provider-api` overlay and manifest tests use `modrinth` as a concrete sample provider ID
@@ -1099,7 +1100,7 @@ Phase B is implemented. Existing external pack behavior now enters generic clien
 reviewed codec registry.
 
 1. [x] Move Modrinth wire structs and `.mrpack` manifest handling from `msbe-pack` into
-   `msbe-provider-modrinth` on the Phase A2 contract. ZIP reading and writing stay in the host.
+  `extensions/providers/modrinth/` on the Phase A2 contract. ZIP reading and writing stay in the host.
 2. [x] Move Minecraft/loader dependency mapping from `msbe-cli` into Modrinth codec-owned mapping.
 3. [x] Remove CurseForge wire structs from generic code; reintroduce them only with the reviewed
    CurseForge adapter and codec.

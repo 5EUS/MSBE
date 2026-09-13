@@ -53,9 +53,9 @@ replaces = []                    # successors of abandoned mods go here
 ```
 
 A mod may not provide or replace itself, or both provide and replace the same package.
-Until the registry ships, each adapter crate compiles in the entries it carries about its
-provider's projects (such as `crates/msbe-provider-modrinth/overlays/`), in this format and with
-this validation.
+Until the registry ships, the provider registry compiles in the entries each bundled provider
+carries about its projects (such as `extensions/providers/modrinth/overlays/`), in this format and
+with this validation.
 
 ## 10.2 Distribution & trust
 

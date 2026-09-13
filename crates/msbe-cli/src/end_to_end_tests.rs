@@ -11,13 +11,12 @@ use std::{
 };
 
 use msbe_provider_api::{HttpClient, HttpError};
-use msbe_provider_modrinth::cli_test_support::FakeModrinth;
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256, Sha512};
 use tempfile::TempDir;
 use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
-use crate::{exit, run_with};
+use crate::{exit, fake_modrinth::FakeModrinth, run_with};
 
 const API: &str = "https://api.modrinth.com/v2";
 

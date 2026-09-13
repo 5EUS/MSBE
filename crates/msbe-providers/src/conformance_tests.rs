@@ -7,7 +7,7 @@ use msbe_wasm_codec::WasmPackCodec;
 
 use crate::{Providers, RegistryError};
 
-const MRPACK: &str = "../../extensions/codecs/modrinth-mrpack/conformance";
+const MRPACK: &str = "../../extensions/providers/modrinth/codecs/mrpack/conformance";
 
 /// Checks `codec` against the golden transcript of the suite in `directory`, first rewriting the
 /// transcript when `MSBE_BLESS` is set.

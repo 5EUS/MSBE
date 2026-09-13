@@ -69,7 +69,7 @@ crates/
   msbe-archive/       hardened extraction (zip/7z/rar/tar), path safety
   msbe-fsops/         CAS shards, capability probe, journaled applier (the only writer)
   msbe-provider-api/  neutral adapter and pack-codec contracts; HttpClient, acquisition, resolution; no TLS
-  msbe-provider-*/    one crate per shipped provider: a program and its data (modrinth), or a native exception (local); no TLS
+  msbe-provider-local/ native local-file adapter and .msbepack codec exception; no TLS
   msbe-providers/     reviewed adapter and codec registrations, behind the policy gate
   msbe-pack/          provider-neutral pack orchestration: options, blob policy, previews, snapshots
   msbe-http/          the one crate that links TLS: ureq + rustls/ring, OS trust store
@@ -92,6 +92,7 @@ dotnet/
   tests/MSBE.Desktop.Tests/
 
 plans/                first-party plans (mirrored into the registry)
+extensions/providers/ provider bundles: programs, overlays, sandboxed codecs, and built modules
 fixtures/             synthetic game dirs + mod archives for tests
 scripts/development/  check.sh, check-xaml.sh, format.sh, install-git-hooks.sh
 docs/

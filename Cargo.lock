@@ -1049,7 +1049,6 @@ dependencies = [
  "msbe-pack",
  "msbe-plan-schema",
  "msbe-provider-api",
- "msbe-provider-modrinth",
  "msbe-providers",
  "msbe-rpc-schema",
  "serde",
@@ -1199,15 +1198,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "msbe-provider-modrinth"
-version = "0.0.0"
-dependencies = [
- "msbe-provider-api",
- "serde_json",
- "sha2 0.11.0",
-]
-
-[[package]]
 name = "msbe-providers"
 version = "0.0.0"
 dependencies = [
@@ -1217,7 +1207,6 @@ dependencies = [
  "msbe-plan-schema",
  "msbe-provider-api",
  "msbe-provider-local",
- "msbe-provider-modrinth",
  "msbe-wasm-codec",
  "serde",
  "serde_json",
