@@ -4,7 +4,7 @@ using Avalonia.Controls;
 
 namespace MSBE.Desktop.Views.Shell;
 
-/// <summary>Hosts workspace navigation and the instance library.</summary>
+/// <summary>Hosts the instance library.</summary>
 [SuppressMessage("Design", "CA1515:Consider making public types internal", Justification = "Avalonia's external previewer must instantiate the view.")]
 public partial class NavigationSidebarView : UserControl
 {

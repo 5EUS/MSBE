@@ -1,0 +1,15 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:MSBE.Desktop.ViewModels"
+             x:Class="MSBE.Desktop.Views.Shell.WorkspaceTabsView"
+             x:DataType="vm:MainViewModel">
+    <Border Classes="workspace-tabs">
+        <StackPanel Orientation="Horizontal" Spacing="24">
+            <Button Classes="workspace-tab" Classes.active="{Binding IsInstancesWorkspace}" Content="INSTANCES" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Instances}" />
+            <Button Classes="workspace-tab" Classes.active="{Binding IsGamesWorkspace}" Content="GAMES" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Games}" />
+            <Button Classes="workspace-tab" Classes.active="{Binding IsBrowseWorkspace}" Content="BROWSE" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Browse}" />
+            <Button Classes="workspace-tab" Classes.active="{Binding IsPackWorkspace}" Content="PACK" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Pack}" />
+            <Button Classes="workspace-tab" Classes.active="{Binding IsSettingsWorkspace}" Content="SETTINGS" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Settings}" />
+        </StackPanel>
+    </Border>
+</UserControl>

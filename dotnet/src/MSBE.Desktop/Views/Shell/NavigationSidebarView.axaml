@@ -6,14 +6,6 @@
     <Border Classes="sidebar" Width="228" IsVisible="{Binding IsSidebarExpanded}">
         <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
             <StackPanel Spacing="10">
-                <TextBlock Classes="sidebar-label" Text="WORKSPACE" />
-                <StackPanel Spacing="2">
-                    <Button Classes="nav-button" Content="Instances" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Instances}" />
-                    <Button Classes="nav-button" Content="Games" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Games}" />
-                    <Button Classes="nav-button" Content="Browse" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Browse}" />
-                    <Button Classes="nav-button" Content="Pack" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Pack}" />
-                    <Button Classes="nav-button" Content="Settings" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Settings}" />
-                </StackPanel>
                 <TextBlock Classes="sidebar-label" Text="LIBRARY" />
                 <StackPanel Spacing="6">
                     <TextBox HorizontalAlignment="Stretch" PlaceholderText="Search instances" Text="{Binding InstanceSearchText}" />

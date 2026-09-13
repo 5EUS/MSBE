@@ -19,9 +19,10 @@
     <KeyBinding Gesture="Ctrl+," Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Settings}" />
   </Window.KeyBindings>
   <Grid>
-    <Grid RowDefinitions="Auto,*,Auto">
+    <Grid RowDefinitions="Auto,Auto,*,Auto">
       <shell:CommandBarView />
-      <Grid Grid.Row="1" ColumnDefinitions="Auto,*">
+      <shell:WorkspaceTabsView Grid.Row="1" />
+      <Grid Grid.Row="2" ColumnDefinitions="Auto,*">
         <shell:NavigationSidebarView />
         <Border Grid.Column="1" Classes="workspace">
           <Grid>
@@ -37,7 +38,7 @@
           </Grid>
         </Border>
       </Grid>
-      <Border Grid.Row="2" Classes="status-bar"><TextBlock Classes="caption" Text="{Binding StatusMessage}" /></Border>
+      <Border Grid.Row="3" Classes="status-bar"><TextBlock Classes="caption" Text="{Binding StatusMessage}" /></Border>
     </Grid>
 
     <Border x:Name="NorthResizeGrip"

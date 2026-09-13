@@ -36,8 +36,6 @@
 
   <Style Selector="Border.shell-header">
     <Setter Property="Background" Value="#0E1014" />
-    <Setter Property="BorderBrush" Value="#242832" />
-    <Setter Property="BorderThickness" Value="0,0,0,1" />
     <Setter Property="Height" Value="36" />
     <Setter Property="Padding" Value="12,0,0,0" />
   </Style>
@@ -123,17 +121,37 @@
     <Setter Property="FontWeight" Value="SemiBold" />
   </Style>
 
-  <Style Selector="Button.nav-button">
-    <Setter Property="HorizontalContentAlignment" Value="Left" />
-    <Setter Property="HorizontalAlignment" Value="Stretch" />
-    <Setter Property="Background" Value="Transparent" />
-    <Setter Property="Foreground" Value="#C9CED8" />
-    <Setter Property="CornerRadius" Value="6" />
-    <Setter Property="Padding" Value="10,7" />
+  <Style Selector="Border.workspace-tabs">
+    <Setter Property="Background" Value="#0E1014" />
+    <Setter Property="BorderBrush" Value="#242832" />
+    <Setter Property="BorderThickness" Value="0,0,0,1" />
+    <Setter Property="Padding" Value="16,0" />
   </Style>
 
-  <Style Selector="Button.nav-button:pointerover">
-    <Setter Property="Background" Value="#20242C" />
+  <Style Selector="Button.workspace-tab">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="Foreground" Value="#8D94A3" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0,0,0,2" />
+    <Setter Property="CornerRadius" Value="0" />
+    <Setter Property="Padding" Value="2,10,2,8" />
+    <Setter Property="FontSize" Value="15" />
+    <Setter Property="FontWeight" Value="Bold" />
+  </Style>
+
+  <Style Selector="Button.workspace-tab:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+    <Setter Property="Foreground" Value="#F3F4F6" />
+  </Style>
+
+  <Style Selector="Button.workspace-tab:pressed /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="Transparent" />
+  </Style>
+
+  <Style Selector="Button.workspace-tab.active /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Foreground" Value="#72C6A5" />
+    <Setter Property="BorderBrush" Value="#72C6A5" />
   </Style>
 
   <Style Selector="Border.shell-header MenuItem">
