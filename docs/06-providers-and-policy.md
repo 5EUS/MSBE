@@ -58,9 +58,9 @@ struct ProviderPolicy {
 
 ## 6.3 Provider manifests
 
-Provider definitions are versioned TOML documents. The M1 runtime loads the built-in direct
-URL and Modrinth definitions through the same validated catalog that will consume signed
-registry definitions. A manifest declares identity, source recognition, metadata origin,
+Provider definitions are versioned TOML documents. MSBE ships the direct URL and Modrinth
+providers as provider programs (§6.4), whose manifests pass through the same validated catalog
+that will consume signed registry definitions. A manifest declares identity, source recognition, metadata origin,
 policy, and an acquisition primitive; it cannot execute code, alter HTTP transport rules, or
 weaken policy enforcement.
 
@@ -105,44 +105,63 @@ digest of their canonical payload. The registry accepts a program only when its 
 configured trust allowlist and its digest is not revoked. Unknown fields, unsupported runtimes,
 digest mismatches, untrusted signers, and revoked programs fail closed before an adapter exists.
 
-The runtime vocabulary is closed: `direct-url-v1` parses HTTPS URLs and optional SHA-256/SHA-512
-fragments; `catalog-v1` can use fixed endpoint-relative routes and bounded JSON pointers to map
-search, project, and release data into the neutral provider model. It cannot form arbitrary URLs,
-run scripts, or select a transport. Native registrations must state a non-empty exception reason;
-they remain reserved for protocol semantics the reviewed declarative vocabulary cannot represent.
+The runtime vocabulary is closed. `direct-url-v1` parses HTTPS URLs and optional SHA-256/SHA-512
+fragments. `catalog-v1` fills fixed slots with endpoint-relative routes, named request parameters,
+and bounded JSON pointers into responses, and serves up to five capabilities:
+
+| Capability        | What the runtime does                                                                                                                                   |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `search`          | sends the words, a limit lowered to the catalog's `maximum`, and facet groups built from the target; drops hits whose side availability rules them out |
+| `project`         | fetches a project by slug or ID, with its client and server availability                                                                                |
+| `releases`        | sends target-derived query parameters, keeps releases for the game version, a target loader, and the loader version, and orders them                   |
+| `release-project` | finds the project a release belongs to, for a dependency that names only a release                                                                     |
+| `updates`         | runs a reviewed update protocol; `hash-lookup-v1` looks installed files up by hash and keeps each on its release channel or a more stable one           |
+
+A program cannot form arbitrary URLs, run scripts, or select a transport. Native registrations must
+state a non-empty exception reason; they remain reserved for protocol semantics the reviewed
+declarative vocabulary cannot represent. An excerpt of the Modrinth program
+(`crates/msbe-provider-modrinth/program.toml`):
 
 ```toml
-[runtime]
-type = "catalog-v1"
+runtime      = "catalog-v1"
+capabilities = ["search", "project", "releases", "release-project", "updates"]
 
 [routes]
-search = "/search"
-project = "/project/{reference}"
+search   = "/search"
+project  = "/project/{reference}"
 releases = "/project/{project}/version"
+release  = "/version/{release}"
 
-[records.project]
-id = "/id"
-title = "/title"
+[search]
+query   = "query"
+maximum = 100
+facets  = { parameter = "facets", groups = [["project_type:mod"], ["versions:{game_version}"], ["categories:{loader}"]] }
 
-[records.release]
-id = "/id"
-number = "/version_number"
-files = "/files"
-dependencies = "/dependencies"
+[releases]
+order = "newest-first"
+query = [
+  { name = "loaders", target = "loaders" },
+  { name = "game_versions", target = "game-version" },
+  { name = "include_changelog", literal = "false" },
+]
 
-[compatibility]
-game_versions = { query = "game_versions", encoding = "json-array" }
-loaders = { query = "loaders", values = "target-loader-and-provides", encoding = "json-array" }
-client_side = "/client_side"
-server_side = "/server_side"
+[updates]
+type      = "hash-lookup-v1"
+algorithm = "sha512"
+listed    = "/version_files"
+latest    = "/version_files/update"
 
-[downloads]
-type = "release-files-v1"
-url = "url"
-name = "filename"
-size = "size"
-sha512 = { object = "hashes", key = "sha512" }
+[mappings.release]
+id              = "/id"
+project         = "/project_id"
+published       = "/date_published"
+loader_versions = "/loader_versions"
+channel         = { pointer = "/version_type", release = "release", beta = "beta", alpha = "alpha" }
 ```
+
+Validation refuses a program that declares a capability without the routes and mappings it needs,
+a section without its capability, a route whose placeholders are not exactly the one it takes, an
+unknown facet placeholder, or a parameter with no single value.
 
 The generic runtime owns HTTPS-only URL resolution, endpoint-relative route expansion, fixed
 request methods, response limits, pagination bounds, JSON-pointer extraction, scalar and enum
@@ -157,7 +176,9 @@ runtime to clients. An untrusted or unsupported program is visible for diagnosis
 network requests.
 
 The M1 runtime resolves every recognized source through a fail-closed reviewed-adapter registry.
-Only the built-in `modrinth` and `url` adapters are available today. M1 has no credential or
+MSBE ships two provider programs, `url` on `direct-url-v1` and `modrinth` on `catalog-v1`, and
+one native exception, `local`, which ingests files the user selects. Shipped programs are trusted
+as part of the build and pinned in native export lockfiles by their canonical digest. M1 has no credential or
 persisted-acknowledgement workflow, so providers declaring `requires_auth = true` or
 `ack_required = true` are refused with an explicit unsupported-workflow error. This permits
 future runtimes to declare stronger requirements without accidentally weakening policy on older
@@ -175,16 +196,16 @@ bounded resource use:
   a fixed set of query encodings.
 - **Record mappings:** JSON pointers to typed scalar fields and bounded arrays; no expression
   language, implicit coercion, or user-provided parser.
-- **Capabilities:** `search`, `releases`, `updates`, and acquisition modes selected from the
-  runtime's advertised vocabulary.
+- **Capabilities:** `search`, `project`, `releases`, `release-project`, `updates`, and
+  acquisition modes selected from the runtime's advertised vocabulary.
 - **Compatibility and relations:** named target fields, closed availability values, and closed
   dependency relation names.
 - **Policy:** authentication posture, acknowledgement, distribution handling, rate-limit class,
   and terms metadata. The runtime enforces the restrictive interpretation.
 
 This is intentionally not a universal REST client. A provider whose API, update semantics,
-authentication flow, or legal policy cannot be represented safely uses `runtime = "native"` and
-a reviewed native adapter. The manifest must name that exception and its reason. Native adapters
+authentication flow, or legal policy cannot be represented safely uses a reviewed native adapter
+instead of a program. Its registration must name that exception and its reason. Native adapters
 may use the same neutral records, acquisition service, policy gate, and conformance tests; they
 do not create a second client-facing protocol.
 
@@ -198,11 +219,12 @@ provider behavior separate:
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
 | `msbe-provider-api`  | provider-program schema, runtime contracts, neutral records, `HttpClient`, verified acquisition, manifests, overlays, and resolution |
 | `msbe-providers`     | reviewed runtime implementations, trusted program loading, codec registrations, and the shared fail-closed policy gate               |
-| `msbe-provider-<id>` | only a native provider exception: wire records, protocol behavior, reviewed mappings, and a justification for code                   |
+| `msbe-provider-<id>` | a provider MSBE ships: a program with its overlay, codecs and test fixtures, or a native exception with its justification for code  |
 
-Adding a declarative provider is a signed provider program. Adding a native provider is a new
-`msbe-provider-<id>` crate, one reviewed registration, and an explicit reason it cannot use an
-existing runtime. The CLI, daemon, and `msbe-core` never name a provider. Every runtime or native
+Adding a declarative provider is a signed provider program; shipping one with MSBE is a
+`msbe-provider-<id>` crate exporting a `ProgramRegistration` and one line in `BUILTIN_PROGRAMS`.
+Adding a native provider is a new `msbe-provider-<id>` crate, one reviewed registration, and an
+explicit reason it cannot use an existing runtime. The CLI, daemon, and `msbe-core` never name a provider. Every runtime or native
 adapter must obey these boundaries:
 
 1. **Registration-only entry.** The crate exports one `Registration`: its provider id,
@@ -224,15 +246,15 @@ adapter must obey these boundaries:
    in its release files.
 6. **Capabilities, not stubs.** `as_search`, `as_releases` and `as_updates` return `None` unless
    the provider supports them, so a missing capability is known before a command starts.
-   Provider-specific protocols, such as Modrinth's bulk hash lookups and release-channel policy,
-   stay behind the capability they implement.
+   Update protocols, such as the bulk hash lookups and release-channel policy of
+   `hash-lookup-v1`, stay behind the capability they implement.
 7. **Shared resolution.** An adapter that implements `Releases` gets dependency resolution, the
    overlay, installed-release pinning and PubGrub's explanations from `resolve::Resolver`; it
    never walks a dependency graph itself. A requirement on one provider's project can be met by
    another provider's project when the overlay says it stands in.
 
-Modrinth is the reference adapter and implements all three capabilities. The `url` adapter
-implements none: it returns a `Request::File` that needs no resolution, the shape an `nxm://`
+Modrinth's program is the reference catalog program and uses every capability; the tests the
+former native Modrinth adapter passed now run against it. The `url` program implements none: it returns a `Request::File` that needs no resolution, the shape an `nxm://`
 link will take too.
 
 ### Pack codec capability

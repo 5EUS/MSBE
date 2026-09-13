@@ -8,11 +8,10 @@ use std::{
 use msbe_core::{config::Home, instance::ExtensionPin};
 use msbe_fsops::Digest;
 use msbe_provider_api::{
-    Adapter, AdapterError, Catalog, ExtensionCapability, ExtensionEnvelope, ExtensionProvide,
-    HostApiRange, HttpClient, ManifestError, Overlay, OverlayError, PackCodec, PackCodecDescriptor,
-    PackCodecError, PackCodecRegistration, PackInput, ProgramError, Provider, ProviderProgram,
-    ProviderProgramEnvelope, Registration, SigningKey, Target, VerifyingKey,
-    WasmPackCodecRegistration,
+    Adapter, AdapterError, Catalog, ExtensionEnvelope, HttpClient, ManifestError, Overlay,
+    OverlayError, PackCodec, PackCodecDescriptor, PackCodecError, PackCodecRegistration, PackInput,
+    ProgramError, ProgramRegistration, Provider, ProviderProgram, ProviderProgramEnvelope,
+    Registration, Target, VerifyingKey, WasmPackCodecRegistration,
     model::{Request, SearchResult},
     resolve::{Adapters, ResolveError},
 };
@@ -25,11 +24,19 @@ const NATIVE_HOST_API_VERSION: u32 = 1;
 /// The signer every extension compiled into or embedded in this build is pinned with.
 const BUILD_SIGNER: &str = "msbe-build";
 
-/// The adapters MSBE ships. A new provider is a crate beside these and one line here.
-pub const BUILTIN: &[Registration] = &[
-    msbe_provider_modrinth::REGISTRATION,
-    msbe_provider_local::REGISTRATION,
-];
+/// The native adapters MSBE ships, each a reviewed exception to provider programs.
+pub const BUILTIN: &[Registration] = &[msbe_provider_local::REGISTRATION];
+
+/// The providers MSBE ships as declarative programs. A new one is a program, its data, and one line
+/// here.
+pub const BUILTIN_PROGRAMS: &[ProgramRegistration] = &[DIRECT_URL, msbe_provider_modrinth::PROGRAM];
+
+const DIRECT_URL: ProgramRegistration = ProgramRegistration {
+    program: DIRECT_PROGRAM,
+    version: env!("CARGO_PKG_VERSION"),
+    overlay: &[],
+    wasm_pack_codecs: &[],
+};
 
 const DIRECT_PROGRAM: &str = r#"
 runtime = "direct-url-v1"
@@ -198,24 +205,20 @@ impl Providers {
         Ok(providers)
     }
 
-    /// The providers MSBE ships.
+    /// The providers MSBE ships: its native exceptions, and the programs it ships.
     ///
     /// # Errors
     ///
-    /// Returns [`RegistryError`] if a built-in manifest or overlay entry is invalid. This
-    /// indicates a build error in MSBE rather than user-provided input.
+    /// Returns [`RegistryError`] if a built-in manifest, program or overlay entry is invalid.
+    /// This indicates a build error in MSBE rather than user-provided input.
     pub fn builtins() -> Result<Self, RegistryError> {
-        let direct = builtin_direct_program()?;
-        let trust = ProgramTrust {
-            trusted_keys: [(
-                "msbe-builtin".to_owned(),
-                builtin_signing_key().verifying_key(),
-            )]
-            .into(),
-            revoked_signers: BTreeSet::new(),
-            revoked_digests: BTreeSet::new(),
-        };
-        Self::new_with_programs(BUILTIN, &[], &[&direct], &trust)
+        Self::assemble(
+            BUILTIN,
+            BUILTIN_PROGRAMS,
+            &[],
+            &[],
+            &ProgramTrust::default(),
+        )
     }
 
     /// Registers `registrations`, plus `manifests` no compiled adapter serves, such as ones a
@@ -227,7 +230,7 @@ impl Providers {
     /// Returns [`RegistryError`] if a manifest or overlay entry is invalid, or a registration
     /// builds an adapter for a provider other than its manifest's.
     pub fn new(registrations: &[Registration], manifests: &[&str]) -> Result<Self, RegistryError> {
-        Self::new_with_programs(registrations, manifests, &[], &ProgramTrust::default())
+        Self::assemble(registrations, &[], manifests, &[], &ProgramTrust::default())
     }
 
     /// Registers reviewed adapters and trusted declarative provider programs.
@@ -245,27 +248,29 @@ impl Providers {
         program_documents: &[&str],
         trust: &ProgramTrust,
     ) -> Result<Self, RegistryError> {
-        let programs: Vec<ProviderProgramEnvelope> = program_documents
+        Self::assemble(registrations, &[], manifests, program_documents, trust)
+    }
+
+    /// Registers native `registrations`, the programs this build ships, `manifests` nothing
+    /// serves, and the signed `program_documents` that `trust` accepts.
+    fn assemble(
+        registrations: &[Registration],
+        shipped: &[ProgramRegistration],
+        manifests: &[&str],
+        program_documents: &[&str],
+        trust: &ProgramTrust,
+    ) -> Result<Self, RegistryError> {
+        let signed = verified_programs(program_documents, trust)?;
+        let shipped = shipped
             .iter()
-            .map(|document| ProviderProgramEnvelope::from_toml(document))
-            .collect::<Result<_, _>>()?;
-        for envelope in &programs {
-            if trust.revoked_signers.contains(&envelope.0.signer) {
-                return Err(RegistryError::RevokedProgramSigner(
-                    envelope.0.signer.clone(),
-                ));
-            }
-            if trust.revoked_digests.contains(&envelope.0.package_digest) {
-                return Err(RegistryError::RevokedProgram(
-                    envelope.0.package_digest.clone(),
-                ));
-            }
-            envelope.verify(&trust.trusted_keys)?;
-        }
-        let program_manifests: Vec<String> = programs
+            .map(|registration| Ok((registration, shipped_program(registration)?)))
+            .collect::<Result<Vec<_>, RegistryError>>()?;
+        let program_manifests: Vec<String> = shipped
             .iter()
-            .map(|envelope| {
-                toml::to_string(&envelope.0.payload.provider).map_err(|error| {
+            .map(|(_, program)| program)
+            .chain(&signed)
+            .map(|program| {
+                toml::to_string(&program.provider).map_err(|error| {
                     RegistryError::Program(ProgramError::Canonical(error.to_string()))
                 })
             })
@@ -277,62 +282,43 @@ impl Providers {
             .chain(program_manifests.iter().map(String::as_str))
             .collect();
         let catalog = Catalog::from_toml(&documents)?;
-        let mut adapters = BTreeMap::new();
-        let mut codecs = CodecTable::default();
-        let mut extensions = Vec::new();
-        let mut overlay = Vec::new();
+        let mut assembly = Assembly::default();
         for registration in registrations {
-            if registration.exception_reason.trim().is_empty() {
-                return Err(RegistryError::MissingNativeException(
-                    registration.id.to_owned(),
-                ));
-            }
-            if registration.identity.id != registration.id {
-                return Err(RegistryError::MismatchedNativeIdentity {
-                    registration: registration.id.to_owned(),
-                    identity: registration.identity.id.to_owned(),
-                });
-            }
-            let manifest: toml::Value = toml::from_str(registration.manifest)
-                .map_err(|error| RegistryError::NativeCanonical(error.to_string()))?;
-            extensions.push(native_pin(&registration.identity, manifest)?);
-            let provider = catalog.provider(registration.id)?;
-            let adapter = (registration.build)(provider)?;
-            if adapter.id() != provider.id {
-                return Err(RegistryError::MismatchedAdapter {
-                    manifest: provider.id.clone(),
-                    adapter: adapter.id().to_owned(),
-                });
-            }
-            adapters.insert(provider.id.clone(), adapter);
-            for codec_registration in registration.pack_codecs {
-                extensions.push(codecs.register(&provider.id, codec_registration)?);
-            }
-            overlay.extend_from_slice(registration.overlay);
+            assembly.add_native(&catalog, registration)?;
         }
-        for envelope in programs {
-            let provider = catalog.provider(&envelope.0.payload.provider.id)?;
-            let adapter = runtime::build(envelope.0.payload);
-            if adapter.id() != provider.id {
-                return Err(RegistryError::MismatchedAdapter {
-                    manifest: provider.id.clone(),
-                    adapter: adapter.id().to_owned(),
-                });
-            }
-            if adapters.insert(provider.id.clone(), adapter).is_some() {
-                return Err(RegistryError::DuplicateProgramAdapter(provider.id.clone()));
-            }
+        for (registration, program) in &shipped {
+            assembly
+                .extensions
+                .push(program_pin(registration, program)?);
+            assembly.overlay.extend_from_slice(registration.overlay);
+        }
+        for program in shipped
+            .iter()
+            .map(|(_, program)| program.clone())
+            .chain(signed)
+        {
+            assembly.add_program(&catalog, program)?;
         }
         let mut providers = Self {
             catalog,
-            adapters,
-            codecs,
-            extensions,
-            overlay: Overlay::from_toml(&overlay)?,
+            adapters: assembly.adapters,
+            codecs: assembly.codecs,
+            extensions: assembly.extensions,
+            overlay: Overlay::from_toml(&assembly.overlay)?,
         };
-        for registration in registrations {
-            for shipped in registration.wasm_pack_codecs {
-                providers.register_shipped_codec(registration.id, shipped)?;
+        let modules = registrations
+            .iter()
+            .map(|registration| -> (&str, &[WasmPackCodecRegistration]) {
+                (registration.id, registration.wasm_pack_codecs)
+            })
+            .chain(shipped.iter().map(
+                |(registration, program)| -> (&str, &[WasmPackCodecRegistration]) {
+                    (&program.provider.id, registration.wasm_pack_codecs)
+                },
+            ));
+        for (provider, codecs) in modules {
+            for codec in codecs {
+                providers.register_shipped_codec(provider, codec)?;
             }
         }
         Ok(providers)
@@ -497,36 +483,119 @@ impl Providers {
     }
 }
 
-fn builtin_direct_program() -> Result<String, RegistryError> {
-    let program: ProviderProgram = toml::from_str(DIRECT_PROGRAM)
-        .map_err(|error| RegistryError::Program(ProgramError::Parse(error.to_string())))?;
-    let mut envelope = ExtensionEnvelope {
-        schema: 1,
-        package_digest: ProviderProgramEnvelope::digest_for(&program)?,
-        id: "msbe-direct-url".to_owned(),
-        version: env!("CARGO_PKG_VERSION").to_owned(),
-        provides: vec![ExtensionProvide::ProviderProgramV1],
-        host_api: HostApiRange {
-            minimum: 1,
-            maximum: 1,
-        },
-        capabilities: vec![ExtensionCapability::Network],
-        signer: "msbe-builtin".to_owned(),
-        signature: "00".repeat(64),
-        payload: program,
-    };
-    envelope
-        .sign(&builtin_signing_key())
-        .map_err(ProgramError::from)?;
-    toml::to_string(&ProviderProgramEnvelope(envelope))
-        .map_err(|error| RegistryError::Program(ProgramError::Canonical(error.to_string())))
+/// The signed programs in `documents` that `trust` accepts, refusing any it does not.
+fn verified_programs(
+    documents: &[&str],
+    trust: &ProgramTrust,
+) -> Result<Vec<ProviderProgram>, RegistryError> {
+    let mut programs = Vec::with_capacity(documents.len());
+    for document in documents {
+        let envelope = ProviderProgramEnvelope::from_toml(document)?;
+        if trust.revoked_signers.contains(&envelope.0.signer) {
+            return Err(RegistryError::RevokedProgramSigner(envelope.0.signer));
+        }
+        if trust.revoked_digests.contains(&envelope.0.package_digest) {
+            return Err(RegistryError::RevokedProgram(envelope.0.package_digest));
+        }
+        envelope.verify(&trust.trusted_keys)?;
+        programs.push(envelope.0.payload);
+    }
+    Ok(programs)
 }
 
-fn builtin_signing_key() -> SigningKey {
-    SigningKey::from_bytes(&[
-        90, 80, 20, 229, 17, 66, 33, 121, 94, 153, 27, 192, 63, 18, 74, 155, 222, 39, 50, 195, 70,
-        164, 31, 88, 6, 183, 11, 245, 128, 219, 44, 101,
-    ])
+/// The program `registration` ships, validated.
+fn shipped_program(registration: &ProgramRegistration) -> Result<ProviderProgram, RegistryError> {
+    let program: ProviderProgram = toml::from_str(registration.program)
+        .map_err(|error| ProgramError::Parse(error.to_string()))?;
+    program.validate()?;
+    Ok(program)
+}
+
+/// The pin of a program this build ships: its provider, version, and canonical digest.
+fn program_pin(
+    registration: &ProgramRegistration,
+    program: &ProviderProgram,
+) -> Result<ExtensionPin, RegistryError> {
+    let digest = format!("sha256:{}", ProviderProgramEnvelope::digest_for(program)?)
+        .parse()
+        .map_err(|error: msbe_fsops::Error| RegistryError::NativeCanonical(error.to_string()))?;
+    Ok(ExtensionPin {
+        id: program.provider.id.clone(),
+        version: registration.version.to_owned(),
+        digest,
+        host_api_minimum: NATIVE_HOST_API_VERSION,
+        host_api_maximum: NATIVE_HOST_API_VERSION,
+        signer: BUILD_SIGNER.to_owned(),
+    })
+}
+
+/// A registry being assembled: the adapters, codecs, pins and overlay entries gathered so far.
+#[derive(Default)]
+struct Assembly {
+    adapters: BTreeMap<String, Box<dyn Adapter>>,
+    codecs: CodecTable,
+    extensions: Vec<ExtensionPin>,
+    overlay: Vec<&'static str>,
+}
+
+impl Assembly {
+    /// Adds a native registration: its adapter, pin, codecs and overlay entries.
+    fn add_native(
+        &mut self,
+        catalog: &Catalog,
+        registration: &Registration,
+    ) -> Result<(), RegistryError> {
+        if registration.exception_reason.trim().is_empty() {
+            return Err(RegistryError::MissingNativeException(
+                registration.id.to_owned(),
+            ));
+        }
+        if registration.identity.id != registration.id {
+            return Err(RegistryError::MismatchedNativeIdentity {
+                registration: registration.id.to_owned(),
+                identity: registration.identity.id.to_owned(),
+            });
+        }
+        let manifest: toml::Value = toml::from_str(registration.manifest)
+            .map_err(|error| RegistryError::NativeCanonical(error.to_string()))?;
+        self.extensions
+            .push(native_pin(&registration.identity, manifest)?);
+        let provider = catalog.provider(registration.id)?;
+        let adapter = (registration.build)(provider)?;
+        if adapter.id() != provider.id {
+            return Err(RegistryError::MismatchedAdapter {
+                manifest: provider.id.clone(),
+                adapter: adapter.id().to_owned(),
+            });
+        }
+        self.adapters.insert(provider.id.clone(), adapter);
+        for codec_registration in registration.pack_codecs {
+            let pin = self.codecs.register(&provider.id, codec_registration)?;
+            self.extensions.push(pin);
+        }
+        self.overlay.extend_from_slice(registration.overlay);
+        Ok(())
+    }
+
+    /// Adds the adapter a program's reviewed runtime builds.
+    fn add_program(
+        &mut self,
+        catalog: &Catalog,
+        program: ProviderProgram,
+    ) -> Result<(), RegistryError> {
+        let provider = catalog.provider(&program.provider.id)?;
+        let adapter = runtime::build(program);
+        if adapter.id() != provider.id {
+            return Err(RegistryError::MismatchedAdapter {
+                manifest: provider.id.clone(),
+                adapter: adapter.id().to_owned(),
+            });
+        }
+        if self.adapters.insert(provider.id.clone(), adapter).is_some() {
+            return Err(RegistryError::DuplicateProgramAdapter(provider.id.clone()));
+        }
+        Ok(())
+    }
 }
 
 impl Adapters for Providers {
@@ -1321,6 +1390,20 @@ mod tests {
                 .count(),
             2
         );
+        Ok(())
+    }
+
+    #[test]
+    fn builtins_pin_the_programs_and_modules_they_ship_as_part_of_the_build()
+    -> Result<(), RegistryError> {
+        let pins = Providers::builtins()?.extension_pins();
+        for id in ["url", "modrinth", "modrinth-mrpack", "local", "msbe-native"] {
+            assert!(
+                pins.iter()
+                    .any(|pin| pin.id == id && pin.signer == "msbe-build"),
+                "{id} is not pinned: {pins:?}"
+            );
+        }
         Ok(())
     }
 

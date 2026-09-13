@@ -1202,15 +1202,9 @@ dependencies = [
 name = "msbe-provider-modrinth"
 version = "0.0.0"
 dependencies = [
- "msbe-core",
- "msbe-fsops",
- "msbe-plan-schema",
  "msbe-provider-api",
- "serde",
  "serde_json",
  "sha2 0.11.0",
- "tempfile",
- "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -1227,6 +1221,7 @@ dependencies = [
  "msbe-wasm-codec",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "tempfile",
  "thiserror 2.0.20",
  "toml 1.1.6+spec-1.1.0",

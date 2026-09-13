@@ -1,0 +1,108 @@
+# Modrinth, as a provider program for MSBE's reviewed catalog-v1 runtime.
+# See docs/06-providers-and-policy.md §6.4 for the vocabulary. The runtime owns everything this file
+# cannot say: how target facts are encoded, how releases are filtered and ordered, and which release
+# may replace an installed one.
+
+runtime      = "catalog-v1"
+capabilities = ["search", "project", "releases", "release-project", "updates"]
+
+[provider]
+schema = 1
+id     = "modrinth"
+name   = "Modrinth"
+
+[provider.source]
+type   = "prefixed"
+prefix = "modrinth:"
+
+[provider.metadata]
+api_base = "https://api.modrinth.com/v2"
+
+[provider.acquisition]
+type = "direct_https"
+
+[provider.policy]
+requires_auth              = false
+respects_distribution_flag = true
+tos_url                    = "https://modrinth.com/legal/terms"
+ack_required               = false
+
+[routes]
+search   = "/search"
+project  = "/project/{reference}"
+releases = "/project/{project}/version"
+release  = "/version/{release}"
+
+[search]
+query   = "query"
+limit   = "limit"
+maximum = 100
+# Mods for the target's game version and any loader it accepts.
+facets = { parameter = "facets", groups = [["project_type:mod"], ["versions:{game_version}"], ["categories:{loader}"]] }
+
+[releases]
+order = "newest-first"
+query = [
+  { name = "loaders", target = "loaders" },
+  { name = "game_versions", target = "game-version" },
+  { name = "include_changelog", literal = "false" },
+]
+
+# POST /version_files names the release each installed file belongs to; POST /version_files/update
+# names the newest release of its project the filters admit.
+[updates]
+type      = "hash-lookup-v1"
+algorithm = "sha512"
+listed    = "/version_files"
+latest    = "/version_files/update"
+
+[updates.fields]
+hashes        = "hashes"
+algorithm     = "algorithm"
+loaders       = "loaders"
+game_versions = "game_versions"
+channels      = "version_types"
+
+[mappings]
+search_items = "/hits"
+
+[mappings.hit]
+id          = "/project_id"
+slug        = "/slug"
+title       = "/title"
+description = "/description"
+downloads   = "/downloads"
+icon        = "/icon_url"
+client      = "/client_side"
+server      = "/server_side"
+
+[mappings.project]
+id     = "/id"
+slug   = "/slug"
+title  = "/title"
+client = "/client_side"
+server = "/server_side"
+
+[mappings.release]
+id              = "/id"
+project         = "/project_id"
+number          = "/version_number"
+published       = "/date_published"
+files           = "/files"
+game_versions   = "/game_versions"
+loaders         = "/loaders"
+loader_versions = "/loader_versions"
+dependencies    = "/dependencies"
+channel         = { pointer = "/version_type", release = "release", beta = "beta", alpha = "alpha" }
+
+[mappings.release.file]
+url     = "/url"
+name    = "/filename"
+size    = "/size"
+sha512  = "/hashes/sha512"
+primary = "/primary"
+
+[mappings.release.dependency]
+project = "/project_id"
+release = "/version_id"
+kind    = "/dependency_type"

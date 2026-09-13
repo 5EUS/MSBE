@@ -32,5 +32,6 @@ toml.workspace         = true
 msbe-fsops         = { version = "0.0.0", path = "../msbe-fsops" }
 msbe-provider-api  = { version = "0.0.0", path = "../msbe-provider-api", features = ["conformance"] }
 msbe-plan-schema   = { version = "0.0.0", path = "../msbe-plan-schema" }
+sha2.workspace     = true
 tempfile.workspace = true
 wat                = "1.0.97"

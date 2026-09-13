@@ -40,6 +40,22 @@ pub struct Registration {
     pub exception_reason: &'static str,
 }
 
+/// A provider MSBE ships as a declarative program, with the data that travels with it.
+///
+/// A shipped program is interpreted by the same reviewed runtime as a signed one. It is trusted as
+/// part of the build that embeds it, and pinned like a native extension, by its program's digest.
+#[derive(Debug, Clone, Copy)]
+pub struct ProgramRegistration {
+    /// The provider program, as TOML.
+    pub program: &'static str,
+    /// The version the program is pinned at.
+    pub version: &'static str,
+    /// Overlay entries about the provider's projects, one TOML document each.
+    pub overlay: &'static [&'static str],
+    /// Pack formats the provider ships as sandboxed WebAssembly modules.
+    pub wasm_pack_codecs: &'static [WasmPackCodecRegistration],
+}
+
 /// A reviewed provider adapter.
 ///
 /// Every provider can parse what a user typed and fetch a file it selected. Everything else is a

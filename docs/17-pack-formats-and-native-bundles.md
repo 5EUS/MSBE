@@ -47,8 +47,9 @@ Consequences:
   but does not branch on those IDs.
 - `msbe-pack` knows codecs, option schemas, neutral references, lockfiles, and blobs. It does not
   know external archive layouts.
-- `msbe-provider-modrinth` owns `.mrpack` detection, `modrinth.index.json`, Modrinth dependency
-  keys, environment rules, and conversion to and from Modrinth project/version references.
+- `msbe-provider-modrinth` packages Modrinth's provider program and its sandboxed `.mrpack` codec,
+  which owns `.mrpack` detection, `modrinth.index.json`, Modrinth dependency keys, environment
+  rules, and conversion to and from Modrinth project/version references.
 - A future `msbe-provider-curseforge` owns CurseForge `manifest.json`, project/file IDs, and
   `allowModDistribution` behavior.
 - The local/native extension owns `.msbepack`, local-file references, embedded blobs, and native
@@ -67,7 +68,7 @@ The target repository layout is:
 crates/
   msbe-core/                  profiles, lockfiles, resolution, provenance, CAS references
   msbe-provider-api/          provider-program contracts plus neutral pack-codec contracts
-  msbe-provider-modrinth/     native Modrinth exception; embeds the sandboxed .mrpack codec
+  msbe-provider-modrinth/     Modrinth's provider program, overlays and sandboxed .mrpack codec
   msbe-provider-local/        local acquisition and native .msbepack codec registration
   msbe-providers/             runtime registry, trusted provider programs, codecs, policy gate
   msbe-pack/                  codec selection, neutral import/export planning, option validation
@@ -1027,8 +1028,8 @@ The following matches were reviewed and are **not** boundary violations:
   mentions are examples and migration fixtures; it has no provider-name branches.
 - SHA-256 and SHA-512 support in `msbe-provider-api` and `msbe-core` is generic integrity and
   legacy-data handling, not a Modrinth protocol assumption.
-- `msbe-providers` names `msbe-provider-modrinth::REGISTRATION` in `BUILTIN` and verifies routing
-  in integration tests. The reviewed registry is the one generic crate allowed to list shipped
+- `msbe-providers` names `msbe-provider-modrinth::PROGRAM` in `BUILTIN_PROGRAMS` and verifies
+  routing, and the Modrinth program's behavior, in its tests. The reviewed registry is the one generic crate allowed to list shipped
   extensions.
 - `msbe-cli` has a dev-only dependency on `msbe-provider-modrinth` for end-to-end fixtures. Test
   coupling to a provider-owned fake is intentional and does not put provider behavior in the CLI.
@@ -1107,9 +1108,11 @@ reviewed codec registry.
 
 ### Phase C - declarative provider runtimes
 
-Phase C provider-program execution is implemented. `direct-url-v1` runs as a signed declarative
-program; Modrinth remains a reviewed native exception because its bulk update and release
-protocol semantics are not yet representable by `catalog-v1`. The shared envelope is active for
+Phase C provider-program execution is implemented. MSBE ships both remote providers as programs:
+direct URLs on `direct-url-v1`, and Modrinth on `catalog-v1`, whose vocabulary now covers
+target-filtered search, release filtering and ordering, release-project lookups, and
+`hash-lookup-v1` update checks ([06 §6.4](06-providers-and-policy.md)). The only native provider is
+`local`, which has no remote protocol. Shipped programs are pinned by their canonical digest. The shared envelope is active for
 provider programs. Compiled native registrations and codecs carry reviewed identity metadata and
 are pinned in native export lockfiles; loading every extension kind through the signed envelope
 remains the next extension-identity migration.

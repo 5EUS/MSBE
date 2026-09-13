@@ -39,7 +39,8 @@ pub use acquisition::{
     AcquiredArtifact, AcquisitionError, ArtifactDescriptor, DOWNLOAD_LIMIT, acquire,
 };
 pub use adapter::{
-    Adapter, AdapterError, Build, Registration, Releases, Search, Update, UpdateCheck, Updates,
+    Adapter, AdapterError, Build, ProgramRegistration, Registration, Releases, Search, Update,
+    UpdateCheck, Updates,
 };
 pub use codec::{
     BlobSource, BuildPackCodec, ContainerKind, DistributionDecision, EmbeddedBlob, EntryContent,
@@ -63,7 +64,9 @@ pub use msbe_core::instance::NativeExtensionIdentity;
 pub use msbe_core::{instance::Provenance, solver::PackageId};
 pub use overlay::{Overlay, OverlayError};
 pub use program::{
-    Capability, DependencyMapping, FileMapping, Mappings, ObjectMapping, ProgramError,
-    ProviderProgram, ProviderProgramEnvelope, ReleaseMapping, Routes, RuntimeKind,
+    Capability, ChannelMapping, DependencyMapping, Facets, FileMapping, HashAlgorithm, Mappings,
+    ObjectMapping, ProgramError, ProviderProgram, ProviderProgramEnvelope, QueryParameter,
+    ReleaseMapping, ReleaseOrder, ReleasesRequest, Routes, RuntimeKind, SearchRequest, TargetFact,
+    UpdateFields, UpdateProtocol, UpdateProtocolKind,
 };
 pub use target::{Availability, Target};
