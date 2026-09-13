@@ -8,17 +8,27 @@ use msbe_plan_schema::Side;
 use serde::{Deserialize, Serialize};
 
 /// What a mod must be compatible with before it can be selected.
+///
+/// Every fact is MSBE's own spelling: the plan's id for the game, and the ids the plan declares for
+/// editions, storefronts and loaders. A provider program translates them into its catalog's
+/// spellings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Target {
-    /// The game this target belongs to, such as `minecraft`.
+    /// The game this target belongs to: its plan's id.
     pub game: String,
-    /// The selected loader id.
+    /// The game edition, such as a remaster sold alongside the original, when the plan declares
+    /// editions and the instance names one.
+    pub edition: Option<String>,
+    /// The storefront the installation came from, when the plan declares storefronts and the
+    /// instance names one.
+    pub storefront: Option<String>,
+    /// The selected loader id. A game without loaders uses the plan's `none` loader.
     pub loader: String,
     /// Virtual loader APIs satisfied by the selected loader.
     pub provides: Vec<String>,
     /// The selected loader version, when the game or loader exposes one.
     pub loader_version: Option<String>,
-    /// The game version, such as `1.21.1`, when the game exposes one.
+    /// The game version, when the game exposes one and the instance names it.
     pub game_version: Option<String>,
     /// Whether this target is a player client or dedicated server.
     pub side: Side,

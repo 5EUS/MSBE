@@ -31,6 +31,10 @@ pub struct ArtifactDescriptor {
     pub limit: u64,
     /// The exact byte length when the provider publishes it.
     pub size: Option<u64>,
+    /// An MD5 digest when the provider publishes one.
+    pub md5: Option<String>,
+    /// A SHA-1 digest when the provider publishes one.
+    pub sha1: Option<String>,
     /// A SHA-256 digest when the provider publishes one.
     pub sha256: Option<String>,
     /// A SHA-512 digest when the provider publishes one.
@@ -44,10 +48,28 @@ pub struct AcquiredArtifact {
     pub path: PathBuf,
     /// The number of transferred bytes.
     pub size: u64,
+    /// MD5 of the transferred bytes, as lowercase hex. Only for matching a catalog's lookups.
+    pub md5: String,
+    /// SHA-1 of the transferred bytes, as lowercase hex. Only for matching a catalog's lookups.
+    pub sha1: String,
     /// SHA-256 of the transferred bytes, as lowercase hex.
     pub sha256: String,
     /// SHA-512 of the transferred bytes, as lowercase hex.
     pub sha512: String,
+}
+
+impl AcquiredArtifact {
+    /// The digest computed with `algorithm`, named as provenance records name it: `md5`, `sha1`,
+    /// `sha256` or `sha512`.
+    pub fn digest(&self, algorithm: &str) -> Option<&str> {
+        match algorithm {
+            "md5" => Some(&self.md5),
+            "sha1" => Some(&self.sha1),
+            "sha256" => Some(&self.sha256),
+            "sha512" => Some(&self.sha512),
+            _ => None,
+        }
+    }
 }
 
 /// Acquires `descriptor` into `directory` and verifies every published integrity value.
@@ -79,21 +101,24 @@ pub fn acquire(
             actual: artifact.bytes,
         });
     }
-    verify(
-        "SHA-256",
-        &descriptor.file_name,
-        descriptor.sha256.as_deref(),
-        &artifact.sha256,
-    )?;
-    verify(
-        "SHA-512",
-        &descriptor.file_name,
-        descriptor.sha512.as_deref(),
-        &artifact.sha512,
-    )?;
+    for (algorithm, expected, actual) in [
+        ("SHA-512", &descriptor.sha512, &artifact.sha512),
+        ("SHA-256", &descriptor.sha256, &artifact.sha256),
+        ("SHA-1", &descriptor.sha1, &artifact.sha1),
+        ("MD5", &descriptor.md5, &artifact.md5),
+    ] {
+        verify(
+            algorithm,
+            &descriptor.file_name,
+            expected.as_deref(),
+            actual,
+        )?;
+    }
     Ok(AcquiredArtifact {
         path,
         size: artifact.bytes,
+        md5: artifact.md5,
+        sha1: artifact.sha1,
         sha256: artifact.sha256,
         sha512: artifact.sha512,
     })
@@ -167,6 +192,83 @@ impl From<ArtifactError> for AcquisitionError {
         match error {
             ArtifactError::Http(error) => Self::Http(error),
             ArtifactError::Io { path, source } => Self::Io { path, source },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+
+    use md5::Md5;
+    use sha1::{Digest as _, Sha1};
+
+    use super::{AcquisitionError, ArtifactDescriptor, acquire};
+    use crate::{HttpClient, HttpError, hashing::hex};
+
+    struct Serves(&'static [u8]);
+
+    impl HttpClient for Serves {
+        fn get(&self, url: &str, _: &[(&str, &str)], _: u64) -> Result<Vec<u8>, HttpError> {
+            Err(HttpError::Status {
+                url: url.to_owned(),
+                status: 404,
+            })
+        }
+
+        fn post_json(&self, url: &str, _: &[u8], _: u64) -> Result<Vec<u8>, HttpError> {
+            Err(HttpError::Status {
+                url: url.to_owned(),
+                status: 404,
+            })
+        }
+
+        fn download(&self, _: &str, sink: &mut dyn Write, _: u64) -> Result<u64, HttpError> {
+            sink.write_all(self.0).unwrap();
+            Ok(u64::try_from(self.0.len()).unwrap())
+        }
+    }
+
+    fn descriptor(name: &str) -> ArtifactDescriptor {
+        ArtifactDescriptor {
+            url: "https://example.test/mod.zip".to_owned(),
+            file_name: name.to_owned(),
+            limit: 1024,
+            size: None,
+            md5: None,
+            sha1: None,
+            sha256: None,
+            sha512: None,
+        }
+    }
+
+    #[test]
+    fn published_sha1_and_md5_digests_are_verified() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut published = descriptor("a.zip");
+        published.sha1 = Some(hex(&Sha1::digest(b"payload")).to_ascii_uppercase());
+        published.md5 = Some(hex(&Md5::digest(b"payload")));
+        let acquired = acquire(&Serves(b"payload"), &published, dir.path()).unwrap();
+        assert_eq!(
+            acquired.digest("sha1"),
+            published
+                .sha1
+                .map(|hash| hash.to_ascii_lowercase())
+                .as_deref()
+        );
+        assert_eq!(acquired.digest("md5"), published.md5.as_deref());
+
+        for (name, algorithm) in [("b.zip", "SHA-1"), ("c.zip", "MD5")] {
+            let mut wrong = descriptor(name);
+            if algorithm == "MD5" {
+                wrong.md5 = Some(hex(&Md5::digest(b"other")));
+            } else {
+                wrong.sha1 = Some(hex(&Sha1::digest(b"other")));
+            }
+            assert!(matches!(
+                acquire(&Serves(b"payload"), &wrong, dir.path()),
+                Err(AcquisitionError::HashMismatch { algorithm: found, .. }) if found == algorithm
+            ));
         }
     }
 }

@@ -273,6 +273,30 @@ version instead, because the official launcher downloads a vanilla jar over a mo
 vanilla version is only read. Entries from later mods in the profile's `order` win, and output
 bytes are deterministic, so redeploying unchanged inputs places nothing. _Implemented in M3._
 
+### Editions and storefronts
+
+Some games are sold as editions that mods target separately, such as a remaster alongside the
+original, or through storefronts whose builds differ, such as a sandboxed store build a script
+extender cannot load. These are neither loaders nor versions, so a plan declares them as lists of
+their own, and a loader may be limited to some of them (empty means all):
+
+```toml
+editions    = [{ id = "legendary", name = "Legendary Edition" }, { id = "special", name = "Special Edition" }]
+storefronts = [{ id = "steam", name = "Steam" }, { id = "gog", name = "GOG" }, { id = "xbox", name = "Xbox app" }]
+
+[[loaders]]
+id          = "skse"
+bootstrap   = "none"
+editions    = ["special"]
+storefronts = ["steam", "gog"]
+```
+
+An instance names at most one of each (`msbe instance add … --edition special --storefront gog`),
+which must be declared by the plan and supported by the profile's loader. Both are recorded in the
+lockfile's target, checked against a pack that declares them, and passed to providers in the
+`Target`, where a provider program translates them into its catalog's spellings
+([06 §6.4](06-providers-and-policy.md)). An instance that names neither is not filtered by them.
+
 The Profile's **Target** names one of these ([01](01-domain-model.md)), the solver
 filters candidates by it before version solving ([05 §5.2](05-solver.md)), and steps
 address the chosen loader's directories through `@loader.targets.*` rather than

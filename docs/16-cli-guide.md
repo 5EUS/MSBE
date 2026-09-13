@@ -87,6 +87,11 @@ Use `--store DIR` to choose a store shard explicitly. `--loader-version` and `--
 set defaults for the initial profile target; `--side` defaults to `client`. Use `instance
 set` to change the game version, or those defaults for legacy profiles.
 
+The game version is optional: without one, a provider that filters by game version offers
+releases for every version. For a game whose plan declares editions or storefronts, `--edition`
+and `--storefront` name the installation's; each must be declared by the plan and supported by
+the loader, and providers that list them filter by them.
+
 ```sh
 "$MSBE" instance set mc --game-version 1.21.1
 "$MSBE" instance list
@@ -178,7 +183,11 @@ Fabric/NeoForge dependency ranges embedded in artifacts are not yet read.
 "$MSBE" verify mc
 ```
 
-`update` applies only to Modrinth-provenanced mods and preserves the release channel.
+`update` applies to mods from a provider with an update protocol, such as Modrinth and
+Thunderstore, and preserves the release channel. A file its provider does not let MSBE download,
+such as one its author keeps off third-party tools, is never fetched: `add` and `update` fail
+with the policy exit code and name the page to download it from, and the saved file can then be
+added as a local file.
 `deploy --dry-run` reports placements, removals, unchanged files, and excluded archive
 contents. `verify` exits `7` if a deployed file is missing or has changed.
 
@@ -216,8 +225,8 @@ preview, rather than copied into the game's mod directory.
 
 | Command                                                                                                                                          | Status          | Notes                                                                       |
 | ------------------------------------------------------------------------------------------------------------------------------------------------ | --------------- | --------------------------------------------------------------------------- |
-| `instance add NAME --root DIR --plan FILE --loader ID [--loader-version VERSION] [--side client\|server] [--game-version VERSION] [--store DIR]` | **Implemented** | Register an existing game instance.                                         |
-| `instance set NAME [--game-version VERSION] [--loader-version VERSION] [--side client\|server]`                                                  | **Implemented** | Change instance facts and legacy-profile defaults.                          |
+| `instance add NAME --root DIR --plan FILE --loader ID [--loader-version VERSION] [--side client\|server] [--game-version VERSION] [--edition ID] [--storefront ID] [--store DIR]` | **Implemented** | Register an existing game instance.                                         |
+| `instance set NAME [--game-version VERSION] [--edition ID] [--storefront ID] [--loader-version VERSION] [--side client\|server]`                   | **Implemented** | Change instance facts and legacy-profile defaults.                          |
 | `instance list`                                                                                                                                  | **Implemented** | List registered instances.                                                  |
 | `instance remove NAME`                                                                                                                           | **Implemented** | Restore managed files and remove MSBE instance data; keeps the game folder. |
 | `profile new INSTANCE NAME [--from PROFILE]`                                                                                                     | **Implemented** | Create or copy a profile.                                                   |

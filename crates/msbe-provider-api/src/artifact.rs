@@ -17,6 +17,8 @@ use crate::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DownloadedArtifact {
     pub(crate) bytes: u64,
+    pub(crate) md5: String,
+    pub(crate) sha1: String,
     pub(crate) sha256: String,
     pub(crate) sha512: String,
 }
@@ -42,6 +44,8 @@ pub(crate) fn download(
         })?;
     Ok(DownloadedArtifact {
         bytes: sink.written(),
+        md5: sink.md5_hex(),
+        sha1: sink.sha1_hex(),
         sha256: sink.sha256_hex(),
         sha512: sink.sha512_hex(),
     })

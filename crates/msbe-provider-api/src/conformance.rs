@@ -10,7 +10,7 @@
 //! { "cases": [
 //!   { "operation": "probe", "name": "index", "input": { "entries": { "index.json": { "v": 1 } } } },
 //!   { "operation": "import", "name": "client", "input": { "entries": {} }, "target": { … } },
-//!   { "operation": "export", "name": "fabric", "lockfile": { … }, "files": [], "inclusion": { … } }
+//!   { "operation": "export", "name": "example", "lockfile": { … }, "files": [], "inclusion": { … } }
 //! ] }
 //! ```
 //!

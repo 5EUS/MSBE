@@ -660,6 +660,12 @@ pub struct ImportedTarget {
     pub game: Option<String>,
     /// Game version, when declared.
     pub game_version: Option<String>,
+    /// The plan's edition ID, when the format declares an edition and the codec can map it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edition: Option<String>,
+    /// The plan's storefront ID, when the format declares one and the codec can map it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storefront: Option<String>,
     /// Stable loader ID, when the codec can map it.
     pub loader: Option<String>,
     /// Loader version, when declared.

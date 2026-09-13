@@ -6,6 +6,10 @@
 runtime      = "catalog-v1"
 capabilities = ["search", "project", "releases", "release-project", "updates"]
 
+# Modrinth serves one game; its API names none, so the identifier is never sent.
+[games]
+minecraft = "minecraft"
+
 [provider]
 schema = 1
 id     = "modrinth"

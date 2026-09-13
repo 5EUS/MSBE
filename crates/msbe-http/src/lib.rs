@@ -18,8 +18,8 @@ use ureq::{
     tls::{Certificate, RootCerts, TlsConfig, TlsProvider},
 };
 
-/// The `User-Agent` every request carries. Modrinth requires one that identifies the
-/// application, not just the HTTP library.
+/// The `User-Agent` every request carries. Catalogs require one that identifies the application,
+/// not just the HTTP library.
 pub const USER_AGENT: &str = concat!(
     "5EUS/MSBE/",
     env!("CARGO_PKG_VERSION"),
@@ -338,7 +338,7 @@ mod tests {
         server.join().unwrap();
     }
 
-    /// Found against the real Modrinth CDN: a file whose size equals the limit was refused.
+    /// Found against a real CDN: a file whose size equals the limit was refused.
     #[test]
     fn a_body_of_exactly_the_limit_is_accepted_and_one_byte_more_is_not() {
         let client = loopback_client();
@@ -388,12 +388,12 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs network access to api.modrinth.com"]
-    fn modrinth_answers_over_https_with_the_system_trust_store() {
+    #[ignore = "needs network access to index.crates.io"]
+    fn a_public_host_answers_over_https_with_the_system_trust_store() {
         let client = UreqClient::connect().unwrap();
         let body = client
-            .get("https://api.modrinth.com/v2/project/sodium", &[], 1 << 20)
+            .get("https://index.crates.io/config.json", &[], 1 << 20)
             .unwrap();
-        assert!(String::from_utf8_lossy(&body).contains("sodium"));
+        assert!(String::from_utf8_lossy(&body).contains("\"dl\""));
     }
 }

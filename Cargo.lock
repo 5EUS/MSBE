@@ -1009,6 +1009,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "md-5"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69b6441f590336821bb897fb28fc622898ccceb1d6cea3fde5ea86b090c4de98"
+dependencies = [
+ "cfg-if",
+ "digest 0.11.3",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1172,11 +1182,13 @@ name = "msbe-provider-api"
 version = "0.0.0"
 dependencies = [
  "ed25519-dalek",
+ "md-5",
  "msbe-core",
  "msbe-fsops",
  "msbe-plan-schema",
  "serde",
  "serde_json",
+ "sha1",
  "sha2 0.11.0",
  "tempfile",
  "thiserror 2.0.20",
@@ -1202,6 +1214,7 @@ name = "msbe-providers"
 version = "0.0.0"
 dependencies = [
  "getrandom 0.4.3",
+ "md-5",
  "msbe-core",
  "msbe-fsops",
  "msbe-plan-schema",
@@ -1211,6 +1224,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "sha1",
  "sha2 0.11.0",
  "tempfile",
  "thiserror 2.0.20",
@@ -1761,6 +1775,17 @@ dependencies = [
  "ryu",
  "serde",
  "unsafe-libyaml",
+]
+
+[[package]]
+name = "sha1"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aacc4cc499359472b4abe1bf11d0b12e688af9a805fa5e3016f9a386dc2d0214"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.3.1",
+ "digest 0.11.3",
 ]
 
 [[package]]

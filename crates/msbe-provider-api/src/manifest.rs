@@ -153,8 +153,10 @@ impl Provider {
                 ManifestError::InvalidTermsUrl(self.policy.tos_url.clone(), error)
             })?;
         }
-        if !matches!(self.acquisition, Acquisition::DirectHttps) && self.metadata.is_some() {
-            return Err(ManifestError::UnsupportedAcquisition(self.id.clone()));
+        if let Acquisition::BrowserAssisted { scheme } = &self.acquisition
+            && !valid_handoff_scheme(scheme)
+        {
+            return Err(ManifestError::InvalidHandoffScheme(scheme.clone()));
         }
         Ok(())
     }
@@ -164,7 +166,7 @@ impl Provider {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SourceMatcher {
-    /// A provider-specific prefix such as `modrinth:`.
+    /// A provider-specific prefix such as `example:`.
     Prefixed {
         /// The prefix removed before passing the reference to the provider adapter.
         prefix: String,
@@ -221,11 +223,41 @@ pub struct Metadata {
 }
 
 /// The closed acquisition primitive declared by a provider.
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+///
+/// Only `direct_https` lets MSBE download a file. The others describe what the user does instead,
+/// so "MSBE cannot fetch this" is a normal, typed outcome (`docs/06-providers-and-policy.md` §6.1).
+///
+/// Variants are struct variants, even without fields, so an unknown field is refused.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Acquisition {
-    /// MSBE can fetch HTTPS artifacts after a reviewed adapter supplies their URLs and hashes.
-    DirectHttps,
+    /// MSBE can fetch HTTPS artifacts after a reviewed adapter supplies their URLs and hashes. A
+    /// file the provider marks non-distributable, or publishes no URL for, still needs the user.
+    DirectHttps {},
+    /// The provider only serves downloads through its website: the user downloads each file from
+    /// its page and adds the saved file.
+    UserAction {},
+    /// The user starts each download from its page, whose button hands mod managers a link with
+    /// this URI scheme, (§6.6).
+    BrowserAssisted {
+        /// The URI scheme of the handed-over link, lowercase and without `://`.
+        scheme: String,
+    },
+}
+
+/// Whether `scheme` can name a provider handoff link: a lowercase URI scheme that is not a web,
+/// file or script scheme a page could abuse.
+fn valid_handoff_scheme(scheme: &str) -> bool {
+    let mut bytes = scheme.bytes();
+    bytes.next().is_some_and(|first| first.is_ascii_lowercase())
+        && bytes.all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'+' | b'-' | b'.')
+        })
+        && scheme.len() <= 32
+        && !matches!(
+            scheme,
+            "http" | "https" | "file" | "ftp" | "data" | "javascript" | "blob" | "about"
+        )
 }
 
 /// Policy data declared with a provider definition.
@@ -270,9 +302,9 @@ pub enum ManifestError {
     /// Provider terms are not an absolute HTTPS URL with a host.
     #[error("provider terms URL {0:?} is invalid: {1}")]
     InvalidTermsUrl(String, &'static str),
-    /// The manifest selects an acquisition primitive not available in this release.
-    #[error("provider {0:?} selects an unsupported acquisition primitive")]
-    UnsupportedAcquisition(String),
+    /// A browser-assisted provider names a scheme that cannot be a handoff link.
+    #[error("provider handoff scheme {0:?} must be a lowercase URI scheme other than a web scheme")]
+    InvalidHandoffScheme(String),
     /// Two documents claim the same stable identifier.
     #[error("duplicate provider id {0:?}")]
     DuplicateId(String),
@@ -303,7 +335,7 @@ fn validate_text(field: &'static str, value: &str) -> Result<(), ManifestError> 
     }
 }
 
-fn validate_https_url(url: &str) -> Result<(), &'static str> {
+pub(crate) fn validate_https_url(url: &str) -> Result<(), &'static str> {
     let authority = url.strip_prefix("https://").ok_or("must use https")?;
     let host = authority
         .split(['/', '?', '#'])
@@ -405,6 +437,52 @@ mod tests {
         assert!(matches!(
             Catalog::from_toml(&[&malformed_terms]),
             Err(ManifestError::InvalidTermsUrl(_, "must use https"))
+        ));
+    }
+
+    #[test]
+    fn acquisition_names_what_the_user_does_when_msbe_cannot_download() {
+        let manifest = |acquisition: &str| {
+            format!(
+                r#"
+                schema = 1
+                id = "example"
+                name = "Example"
+                [source]
+                type = "prefixed"
+                prefix = "example:"
+                [metadata]
+                api_base = "https://api.example.test"
+                [acquisition]
+                {acquisition}
+                [policy]
+                requires_auth = false
+                respects_distribution_flag = true
+                tos_url = ""
+                ack_required = false
+            "#
+            )
+        };
+        for accepted in [
+            "type = \"user_action\"",
+            "type = \"browser_assisted\"\nscheme = \"handoff\"",
+        ] {
+            assert!(
+                Catalog::from_toml(&[&manifest(accepted)]).is_ok(),
+                "{accepted}"
+            );
+        }
+        for scheme in ["https", "Handoff", "", "javascript", "a/b"] {
+            assert!(matches!(
+                Catalog::from_toml(&[&manifest(&format!(
+                    "type = \"browser_assisted\"\nscheme = \"{scheme}\""
+                ))]),
+                Err(ManifestError::InvalidHandoffScheme(_))
+            ));
+        }
+        assert!(matches!(
+            Catalog::from_toml(&[&manifest("type = \"user_action\"\nscheme = \"handoff\"")]),
+            Err(ManifestError::Parse(_))
         ));
     }
 

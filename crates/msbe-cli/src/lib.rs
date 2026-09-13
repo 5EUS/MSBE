@@ -486,6 +486,13 @@ enum InstanceCommand {
         /// The game version, such as 1.21.1. Needed by providers that filter by game version.
         #[arg(long)]
         game_version: Option<String>,
+        /// The installation's edition, as declared by the plan. Needed by providers that list a
+        /// game's editions separately.
+        #[arg(long)]
+        edition: Option<String>,
+        /// The storefront the installation came from, as declared by the plan.
+        #[arg(long)]
+        storefront: Option<String>,
         /// The store shard. Defaults to .msbe/store beside the game directory, which keeps it
         /// on the same volume.
         #[arg(long)]
@@ -498,6 +505,12 @@ enum InstanceCommand {
         /// The game version providers should match, such as 1.21.1.
         #[arg(long)]
         game_version: Option<String>,
+        /// The installation's edition, as declared by the plan.
+        #[arg(long)]
+        edition: Option<String>,
+        /// The storefront the installation came from, as declared by the plan.
+        #[arg(long)]
+        storefront: Option<String>,
         /// The loader version providers should match, when they publish loader-version metadata.
         #[arg(long)]
         loader_version: Option<String>,
@@ -630,10 +643,6 @@ enum CliError {
     },
     #[error("pass exactly one of --bad or --good")]
     BisectVerdict,
-    #[error(
-        "instance {0} has no game version; set one with `msbe instance set {0} --game-version <version>`"
-    )]
-    GameVersionRequired(Name),
     #[error("cannot create scratch space for downloads: {0}")]
     Scratch(#[source] io::Error),
     #[error("cannot read config {}: {source}", .path.display())]
@@ -788,6 +797,7 @@ where
             drop(report(&error, console.err));
             match &error {
                 CliError::Instance(InstanceError::Conflicts(_)) => exit::CONFLICT,
+                CliError::Adapter(AdapterError::ActionRequired { .. }) => exit::POLICY,
                 CliError::Pack(error) => pack_exit(error.code()),
                 _ => exit::FAILURE,
             }
@@ -1669,6 +1679,8 @@ fn instance_command(
             loader_version,
             side,
             game_version,
+            edition,
+            storefront,
             store,
         } => {
             let name = Name::new(name)?;
@@ -1682,6 +1694,8 @@ fn instance_command(
                     loader_version: loader_version.as_deref(),
                     side: (*side).into(),
                     game_version: game_version.as_deref(),
+                    edition: edition.as_deref(),
+                    storefront: storefront.as_deref(),
                     store: store.as_deref(),
                 },
             )?;
@@ -1699,12 +1713,21 @@ fn instance_command(
         InstanceCommand::Set {
             name,
             game_version,
+            edition,
+            storefront,
             loader_version,
             side,
         } => {
             let mut instance = open(home, name, console)?;
             if let Some(game_version) = game_version {
                 instance.set_game_version(Some(game_version))?;
+            }
+            if edition.is_some() || storefront.is_some() {
+                let config = instance.config().clone();
+                instance.set_installation(
+                    edition.as_deref().or(config.edition.as_deref()),
+                    storefront.as_deref().or(config.storefront.as_deref()),
+                )?;
             }
             if loader_version.is_some() || side.is_some() {
                 let current_loader_version = instance.config().loader_version.clone();
@@ -2472,6 +2495,8 @@ fn target(instance: &Instance, profile: &Name) -> Result<Target, CliError> {
     let profile_target = instance.profile_target(profile)?;
     Ok(Target {
         game: instance.plan().id.clone(),
+        edition: instance.config().edition.clone(),
+        storefront: instance.config().storefront.clone(),
         loader: profile_target.loader.clone(),
         provides: instance.target_provides(&profile_target),
         loader_version: profile_target.loader_version,
@@ -2676,6 +2701,12 @@ fn print_settings(out: &mut dyn Write, status: &Status) -> io::Result<()> {
         "  game version  {}",
         status.game_version.as_deref().unwrap_or("not set")
     )?;
+    if let Some(edition) = &status.edition {
+        writeln!(out, "  edition       {edition}")?;
+    }
+    if let Some(storefront) = &status.storefront {
+        writeln!(out, "  storefront    {storefront}")?;
+    }
     writeln!(
         out,
         "  store         {} ({})",

@@ -1,17 +1,27 @@
-# Thunderstore catalog program. Communities are provider-side spellings of MSBE games.
-runtime = "catalog-v1"
+# Thunderstore, as a provider program for MSBE's reviewed catalog-v1 runtime.
+# See docs/06-providers-and-policy.md §6.4 for the vocabulary.
+#
+# A package is `Namespace-Name`, each part letters, digits and underscores, and one package can be
+# listed in several communities. The package endpoint carries only a package's latest version, with
+# its dependencies, so that is the one release this program lists: resolution and updates move to
+# it, and an older version cannot be pinned. Dependencies are `Namespace-Name-1.2.3` text, whose
+# version is the minimum the author built against. Thunderstore publishes no digests, so downloads
+# are checked only for a safe name and HTTPS.
+
+runtime      = "catalog-v1"
 capabilities = ["project", "releases", "updates"]
 
+# MSBE plan ids, and the Thunderstore community each is listed in.
 [games]
 valheim = "valheim"
 
 [provider]
 schema = 1
-id = "thunderstore"
-name = "Thunderstore"
+id     = "thunderstore"
+name   = "Thunderstore"
 
 [provider.source]
-type = "prefixed"
+type   = "prefixed"
 prefix = "thunderstore:"
 
 [provider.metadata]
@@ -21,38 +31,44 @@ api_base = "https://thunderstore.io"
 type = "direct_https"
 
 [provider.policy]
-requires_auth = false
-respects_distribution_flag = true
-tos_url = "https://thunderstore.io/package/terms-of-service/"
-ack_required = false
+requires_auth              = false
+respects_distribution_flag = false
+tos_url                    = ""
+ack_required               = false
 
 [routes]
-# Thunderstore's community package endpoint identifies packages by UUID.
-project = "/c/valheim/api/v1/package/{reference}"
-releases = "/c/{game}/api/v1/package/{project}"
+reference = { separator = "-", segments = 2 }
+project   = "/api/experimental/package/{reference}/"
+releases  = "/api/experimental/package/{project}/"
 
 [releases]
 order = "semver"
 
+# One request per installed package; Thunderstore has no bulk or hash lookup.
 [updates]
 type = "releases-v1"
 
+[mappings]
+releases = { single = "/latest" }
+
 [mappings.project]
-id = "/uuid4"
+id    = "/full_name"
+slug  = "/full_name"
 title = "/name"
-slug = "/full_name"
+games = { each = "/community_listings", value = "/community" }
 
 [mappings.release]
-id = "/uuid4"
-number = "/version_number"
-published = "/date_created"
-files = "/versions"
+id           = "/full_name"
+number       = "/version_number"
+published    = "/date_created"
+files        = { single = "" }
 dependencies = "/dependencies"
 
+# A version is its own file: a zip served under the version's full name.
 [mappings.release.file]
-url = "/download_url"
-name = "/full_name"
+url       = "/download_url"
+name      = "/full_name"
+extension = "zip"
 
 [mappings.release.dependency]
-project = "/name"
-kind = "/dependency_type"
+text = { separator = "-" }

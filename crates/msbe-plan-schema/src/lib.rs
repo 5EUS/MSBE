@@ -31,6 +31,14 @@ pub struct Plan {
     /// Installation files that distinguish compatible game editions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fingerprint: Option<InstallationFingerprint>,
+    /// Editions of the game that change which mods fit an installation, such as a remaster sold
+    /// alongside the original. An instance names at most one; empty means the game has none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub editions: Vec<Variant>,
+    /// Storefronts whose builds change which mods fit an installation, such as a store that ships
+    /// a sandboxed build. An instance names at most one; empty means builds do not differ.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub storefronts: Vec<Variant>,
     /// Installation-owned inputs that deployment derivations may read.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub environment: Vec<EnvironmentInput>,
@@ -73,12 +81,26 @@ impl Plan {
             }
         }
 
+        let editions = validate_variants(EDITION, &self.editions)?;
+        let storefronts = validate_variants(STOREFRONT, &self.storefronts)?;
         for loader in &self.loaders {
             require_text("loader id", &loader.id)?;
             if !loader_ids.insert(&loader.id) {
                 return Err(ValidationError::DuplicateLoader(loader.id.clone()));
             }
             loader.validate(&component_ids)?;
+            for (kind, limit, declared) in [
+                (EDITION, &loader.editions, &editions),
+                (STOREFRONT, &loader.storefronts, &storefronts),
+            ] {
+                if let Some(unknown) = limit.iter().find(|id| !declared.contains(id)) {
+                    return Err(ValidationError::UnknownLoaderVariant {
+                        loader: loader.id.clone(),
+                        kind,
+                        id: unknown.clone(),
+                    });
+                }
+            }
         }
 
         if let Some(fingerprint) = &self.fingerprint {
@@ -111,6 +133,108 @@ impl Plan {
         }
         self.deploy.validate(&self.loaders)
     }
+
+    /// Checks an installation's edition and storefront: each must be one the plan declares, and one
+    /// `loader` supports. An installation that names neither is accepted, since nothing is known
+    /// against it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InstallationError`] naming the first value the plan or the loader rules out.
+    pub fn check_installation(
+        &self,
+        loader: &Loader,
+        edition: Option<&str>,
+        storefront: Option<&str>,
+    ) -> Result<(), InstallationError> {
+        for (kind, value, declared, limit) in [
+            (EDITION, edition, &self.editions, &loader.editions),
+            (
+                STOREFRONT,
+                storefront,
+                &self.storefronts,
+                &loader.storefronts,
+            ),
+        ] {
+            let Some(value) = value else {
+                continue;
+            };
+            if !declared.iter().any(|variant| variant.id == value) {
+                return Err(InstallationError::Unknown {
+                    plan: self.id.clone(),
+                    kind,
+                    id: value.to_owned(),
+                });
+            }
+            if !admits(limit, value) {
+                return Err(InstallationError::Unsupported {
+                    loader: loader.id.clone(),
+                    kind,
+                    id: value.to_owned(),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+/// What an edition is called in messages.
+const EDITION: &str = "edition";
+/// What a storefront is called in messages.
+const STOREFRONT: &str = "storefront";
+
+/// One edition or storefront a plan declares.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Variant {
+    /// The stable identifier instances and provider programs use, such as `special`.
+    pub id: String,
+    /// The name displayed to users.
+    pub name: String,
+}
+
+/// Validates one kind of variant list and returns its ids.
+fn validate_variants<'a>(
+    kind: &'static str,
+    variants: &'a [Variant],
+) -> Result<BTreeSet<&'a String>, ValidationError> {
+    let mut ids = BTreeSet::new();
+    for variant in variants {
+        validate_identifier(kind, &variant.id)?;
+        require_text(kind, &variant.name)?;
+        if !ids.insert(&variant.id) {
+            return Err(ValidationError::DuplicateVariant {
+                kind,
+                id: variant.id.clone(),
+            });
+        }
+    }
+    Ok(ids)
+}
+
+/// Why an installation's edition or storefront does not fit a plan.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum InstallationError {
+    /// The plan does not declare the value.
+    #[error("plan {plan} declares no {kind} {id:?}")]
+    Unknown {
+        /// The plan.
+        plan: String,
+        /// `edition` or `storefront`.
+        kind: &'static str,
+        /// The value.
+        id: String,
+    },
+    /// The loader is limited to other values.
+    #[error("loader {loader} does not support {kind} {id:?}")]
+    Unsupported {
+        /// The loader.
+        loader: String,
+        /// `edition` or `storefront`.
+        kind: &'static str,
+        /// The value.
+        id: String,
+    },
 }
 
 /// Installation identity fields a plan requires before it can reproduce environment-bound output.
@@ -243,7 +367,7 @@ impl Deploy {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Loader {
-    /// The stable loader identifier, such as `fabric` or `neoforge`.
+    /// The stable loader identifier, such as a mod loader's name, or `none`.
     pub id: String,
     /// Virtual loader APIs this loader satisfies.
     #[serde(default)]
@@ -256,6 +380,13 @@ pub struct Loader {
     /// The sides this loader supports.
     #[serde(default)]
     pub sides: Vec<Side>,
+    /// The editions this loader supports, such as a script extender built for one edition. Empty
+    /// means every edition.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub editions: Vec<String>,
+    /// The storefronts whose builds this loader supports. Empty means every storefront.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub storefronts: Vec<String>,
 }
 
 impl Loader {
@@ -545,7 +676,7 @@ impl PlaceStep {
     }
 }
 
-/// Container injection settings for a [`Step::Inject`], such as legacy Minecraft jarmods.
+/// Container injection settings for a [`Step::Inject`], such as mods patched into a game's own archive.
 ///
 /// The container starts as `base` was before MSBE changed anything. Every mod's files are then
 /// written into it in profile order, so a later mod wins an entry two mods ship, and the
@@ -935,6 +1066,24 @@ pub enum ValidationError {
     /// A step is limited to a loader the plan does not declare.
     #[error("a step is limited to loader {0:?}, which the plan does not declare")]
     UnknownStepLoader(String),
+    /// Two editions, or two storefronts, share an identifier.
+    #[error("duplicate {kind} {id:?}")]
+    DuplicateVariant {
+        /// `edition` or `storefront`.
+        kind: &'static str,
+        /// The repeated identifier.
+        id: String,
+    },
+    /// A loader is limited to an edition or storefront the plan does not declare.
+    #[error("loader {loader:?} is limited to {kind} {id:?}, which the plan does not declare")]
+    UnknownLoaderVariant {
+        /// The loader.
+        loader: String,
+        /// `edition` or `storefront`.
+        kind: &'static str,
+        /// The undeclared identifier.
+        id: String,
+    },
     /// A template uses a placeholder other than `{game_version}`.
     #[error("invalid template {0:?}: only {{game_version}} may appear in braces")]
     InvalidTemplate(String),
@@ -985,30 +1134,34 @@ mod tests {
 
     use super::{
         Deploy, EditJsonStep, EmitKind, EnvironmentInput, ExtensionCapability,
-        ExtensionDeclaration, Hygiene, InjectStep, InstallationFingerprint, Loader, NamedPath,
-        PlaceStep, Plan, RunExtensionStep, SCHEMA_VERSION, Side, Step, ValidationError,
-        matches_glob,
+        ExtensionDeclaration, Hygiene, InjectStep, InstallationError, InstallationFingerprint,
+        Loader, NamedPath, PlaceStep, Plan, RunExtensionStep, SCHEMA_VERSION, Side, Step,
+        ValidationError, Variant, matches_glob,
     };
 
-    fn minecraft_plan() -> Plan {
+    fn example_plan() -> Plan {
         Plan {
             schema: SCHEMA_VERSION,
-            id: "minecraft".to_owned(),
-            name: "Minecraft".to_owned(),
+            id: "example".to_owned(),
+            name: "Example".to_owned(),
             version: "1.0.0".to_owned(),
             fingerprint: None,
+            editions: Vec::new(),
+            storefronts: Vec::new(),
             environment: Vec::new(),
             extensions: Vec::new(),
             deploy: Deploy::default(),
             loaders: vec![Loader {
-                id: "fabric".to_owned(),
+                id: "modern".to_owned(),
                 provides: Vec::new(),
-                bootstrap: "mc.fabric-installer".to_owned(),
+                bootstrap: "example.installer".to_owned(),
                 targets: vec![NamedPath {
                     name: "mods".to_owned(),
                     path: "mods".to_owned(),
                 }],
                 sides: vec![Side::Client, Side::Server],
+                editions: Vec::new(),
+                storefronts: Vec::new(),
             }],
             components: Vec::new(),
             steps: vec![
@@ -1032,13 +1185,15 @@ mod tests {
     }
 
     fn jarmod_plan() -> Plan {
-        let mut plan = minecraft_plan();
+        let mut plan = example_plan();
         plan.loaders.push(Loader {
             id: "jarmod".to_owned(),
             provides: Vec::new(),
             bootstrap: "none".to_owned(),
             targets: Vec::new(),
             sides: vec![Side::Client],
+            editions: Vec::new(),
+            storefronts: Vec::new(),
         });
         plan.steps.push(Step::Inject(InjectStep {
             id: Some("inject-client".to_owned()),
@@ -1060,8 +1215,8 @@ mod tests {
     }
 
     #[test]
-    fn serializes_and_validates_a_modern_minecraft_plan() {
-        let plan = minecraft_plan();
+    fn serializes_and_validates_a_modern_example_plan() {
+        let plan = example_plan();
         plan.validate().unwrap();
         let json = serde_json::to_string(&plan).unwrap();
         assert_eq!(serde_json::from_str::<Plan>(&json).unwrap(), plan);
@@ -1083,8 +1238,8 @@ mod tests {
         plan.environment = vec![scoped(&["jarmod"])];
         plan.validate().unwrap();
         assert!(scoped(&["jarmod"]).applies_to("jarmod"));
-        assert!(!scoped(&["jarmod"]).applies_to("fabric"));
-        assert!(scoped(&[]).applies_to("fabric"));
+        assert!(!scoped(&["jarmod"]).applies_to("modern"));
+        assert!(scoped(&[]).applies_to("modern"));
 
         plan.environment = vec![scoped(&["unknown"])];
         assert_eq!(
@@ -1105,7 +1260,7 @@ mod tests {
     }
 
     fn extension_plan() -> Plan {
-        let mut plan = minecraft_plan();
+        let mut plan = example_plan();
         plan.extensions = vec![ExtensionDeclaration {
             id: "installer".to_owned(),
             path: "extensions/installer.wasm".to_owned(),
@@ -1211,25 +1366,100 @@ mod tests {
     }
 
     #[test]
+    fn editions_and_storefronts_are_declared_and_limit_loaders() {
+        let mut plan = example_plan();
+        plan.editions = vec![
+            Variant {
+                id: "original".to_owned(),
+                name: "Original".to_owned(),
+            },
+            Variant {
+                id: "remaster".to_owned(),
+                name: "Remaster".to_owned(),
+            },
+        ];
+        plan.storefronts = vec![Variant {
+            id: "sandboxed".to_owned(),
+            name: "Sandboxed store".to_owned(),
+        }];
+        if let Some(loader) = plan.loaders.first_mut() {
+            loader.editions = vec!["remaster".to_owned()];
+        }
+        plan.validate().unwrap();
+        let loader = plan.loaders.first().unwrap();
+        assert!(plan.check_installation(loader, None, None).is_ok());
+        assert!(
+            plan.check_installation(loader, Some("remaster"), Some("sandboxed"))
+                .is_ok()
+        );
+        assert!(matches!(
+            plan.check_installation(loader, Some("original"), None),
+            Err(InstallationError::Unsupported {
+                kind: "edition",
+                ..
+            })
+        ));
+        assert!(matches!(
+            plan.check_installation(loader, None, Some("other")),
+            Err(InstallationError::Unknown {
+                kind: "storefront",
+                ..
+            })
+        ));
+
+        let mut undeclared = plan.clone();
+        if let Some(loader) = undeclared.loaders.first_mut() {
+            loader.storefronts = vec!["other".to_owned()];
+        }
+        assert!(matches!(
+            undeclared.validate(),
+            Err(ValidationError::UnknownLoaderVariant {
+                kind: "storefront",
+                ..
+            })
+        ));
+        let mut duplicate = plan.clone();
+        duplicate.editions.push(Variant {
+            id: "original".to_owned(),
+            name: "Again".to_owned(),
+        });
+        assert!(matches!(
+            duplicate.validate(),
+            Err(ValidationError::DuplicateVariant { .. })
+        ));
+        let mut malformed = plan;
+        malformed.storefronts = vec![Variant {
+            id: "game pass".to_owned(),
+            name: "Game Pass".to_owned(),
+        }];
+        assert!(matches!(
+            malformed.validate(),
+            Err(ValidationError::InvalidIdentifier { .. })
+        ));
+    }
+
+    #[test]
     fn rejects_unsafe_deployment_paths() {
-        let mut plan = minecraft_plan();
+        let mut plan = example_plan();
         plan.loaders.clear();
         plan.loaders.push(Loader {
-            id: "fabric".to_owned(),
+            id: "modern".to_owned(),
             provides: Vec::new(),
-            bootstrap: "mc.fabric-installer".to_owned(),
+            bootstrap: "example.installer".to_owned(),
             targets: vec![NamedPath {
                 name: "mods".to_owned(),
                 path: "../mods".to_owned(),
             }],
             sides: vec![Side::Client],
+            editions: Vec::new(),
+            storefronts: Vec::new(),
         });
         assert!(plan.validate().is_err());
     }
 
     #[test]
     fn mutable_patterns_are_relative_and_reference_only_declared_targets() {
-        let mut plan = minecraft_plan();
+        let mut plan = example_plan();
         plan.deploy.mutable = vec![
             "config/**".to_owned(),
             "@loader.targets.mods/*.cfg".to_owned(),
@@ -1244,7 +1474,7 @@ mod tests {
             "@loader.targets.config/**",
             "@paths.mods/**",
         ] {
-            let mut plan = minecraft_plan();
+            let mut plan = example_plan();
             plan.deploy.mutable = vec![bad.to_owned()];
             assert!(
                 matches!(
@@ -1258,7 +1488,7 @@ mod tests {
 
     #[test]
     fn rejects_unknown_deployment_target_namespaces() {
-        let mut plan = minecraft_plan();
+        let mut plan = example_plan();
         plan.steps.clear();
         plan.steps.push(Step::Place(PlaceStep {
             loaders: Vec::new(),
@@ -1273,7 +1503,7 @@ mod tests {
 
     #[test]
     fn merge_config_paths_must_be_safe_and_relative() {
-        let mut plan = minecraft_plan();
+        let mut plan = example_plan();
         plan.steps.push(Step::MergeConfig(super::MergeConfigStep {
             loaders: Vec::new(),
             source: "config/options.toml".to_owned(),
@@ -1298,7 +1528,7 @@ mod tests {
         let applies: Vec<(bool, bool)> = plan
             .steps
             .iter()
-            .map(|step| (step.applies_to("fabric"), step.applies_to("jarmod")))
+            .map(|step| (step.applies_to("modern"), step.applies_to("jarmod")))
             .collect();
         assert_eq!(
             applies,

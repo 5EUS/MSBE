@@ -219,9 +219,11 @@ impl Resolver<'_> {
         let mut projects = BTreeMap::new();
         let mut graph = CandidateGraph::default();
         for request in requests {
-            let project = self
-                .releases_of(&request.provider)?
-                .project(self.http, &request.reference)?;
+            let project = self.releases_of(&request.provider)?.project(
+                self.http,
+                &request.reference,
+                self.target,
+            )?;
             if !self.target.supports_side(project.client, project.server) {
                 return Err(ResolveError::UnsupportedSide {
                     project: project.label().to_owned(),
@@ -289,7 +291,7 @@ impl Resolver<'_> {
         let project = if let Some(project) = projects.get(package) {
             project.clone()
         } else {
-            match releases.project(self.http, &package.project) {
+            match releases.project(self.http, &package.project, self.target) {
                 Ok(project) => {
                     projects.insert(package.clone(), project.clone());
                     project
@@ -472,10 +474,11 @@ impl Resolver<'_> {
     ) -> Result<Option<PackageId>, ResolveError> {
         Ok(match (&dependency.project, &dependency.release) {
             (Some(project), _) => Some(project.clone()),
-            (None, Some(release)) => Some(
-                self.releases_of(&declaring.provider)?
-                    .release_project(self.http, release)?,
-            ),
+            (None, Some(release)) => Some(self.releases_of(&declaring.provider)?.release_project(
+                self.http,
+                release,
+                self.target,
+            )?),
             (None, None) => None,
         })
     }
@@ -623,7 +626,9 @@ mod tests {
     use crate::{
         Adapter, AdapterError, Availability, EndpointError, HttpClient, HttpError, Overlay,
         Releases, Target,
-        model::{Channel, Dependency, DependencyKind, Project, Release, ReleaseFile, Request},
+        model::{
+            Channel, Dependency, DependencyKind, Download, Project, Release, ReleaseFile, Request,
+        },
     };
 
     /// Fake adapters answer from memory, so no request ever reaches this.
@@ -666,10 +671,13 @@ mod tests {
 
     fn target() -> Target {
         Target {
+            game: "game".to_owned(),
+            edition: None,
+            storefront: None,
             loader: "loader".to_owned(),
             provides: Vec::new(),
             loader_version: None,
-            game_version: "1.0".to_owned(),
+            game_version: Some("1.0".to_owned()),
             side: Side::Client,
         }
     }
@@ -697,9 +705,13 @@ mod tests {
                 channel: Channel::Release,
                 published: "2026-09-01T00:00:00Z".to_owned(),
                 files: vec![ReleaseFile {
-                    url: format!("https://files.test/{project}.jar"),
+                    download: Download::Direct {
+                        url: format!("https://files.test/{project}.jar"),
+                    },
                     name: format!("{project}.jar"),
                     size: None,
+                    md5: None,
+                    sha1: None,
                     sha256: None,
                     sha512: None,
                     primary: true,
@@ -735,7 +747,12 @@ mod tests {
     }
 
     impl Releases for Memory {
-        fn project(&self, _: &dyn HttpClient, reference: &str) -> Result<Project, AdapterError> {
+        fn project(
+            &self,
+            _: &dyn HttpClient,
+            reference: &str,
+            _: &Target,
+        ) -> Result<Project, AdapterError> {
             let release = self
                 .releases
                 .get(reference)
@@ -762,6 +779,7 @@ mod tests {
             &self,
             _: &dyn HttpClient,
             release: &str,
+            _: &Target,
         ) -> Result<PackageId, AdapterError> {
             Err(not_found(release))
         }

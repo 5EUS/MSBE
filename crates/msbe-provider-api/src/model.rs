@@ -3,6 +3,8 @@
 //! Command and UI layers only ever see these. Each adapter keeps its wire formats private and
 //! converts at its own boundary, so adding a provider adds no type its callers must learn.
 
+use std::fmt;
+
 use msbe_core::solver::PackageId;
 use serde::Serialize;
 
@@ -114,18 +116,99 @@ pub enum Channel {
 /// A downloadable file of a release.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReleaseFile {
-    /// Where to download it.
-    pub url: String,
+    /// How the file can be obtained.
+    pub download: Download,
     /// The single file name to save it under.
     pub name: String,
     /// Its size in bytes, when the provider publishes it.
     pub size: Option<u64>,
+    /// Its MD5 as hex, when the provider publishes it.
+    pub md5: Option<String>,
+    /// Its SHA-1 as hex, when the provider publishes it.
+    pub sha1: Option<String>,
     /// Its SHA-256 as hex, when the provider publishes it.
     pub sha256: Option<String>,
     /// Its SHA-512 as hex, when the provider publishes it.
     pub sha512: Option<String>,
     /// Whether it is the release's main file.
     pub primary: bool,
+}
+
+/// How a release file can be obtained. Only [`Download::Direct`] is fetched by MSBE; the others
+/// are normal outcomes that need the user, not errors to work around.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Download {
+    /// MSBE downloads the file from an HTTPS URL.
+    Direct {
+        /// Where to download it.
+        url: String,
+    },
+    /// MSBE may not download the file: the user downloads it from a web page and adds the saved
+    /// file.
+    UserAction {
+        /// The page the user downloads the file from.
+        page: String,
+        /// Why MSBE cannot download it.
+        reason: ActionReason,
+    },
+    /// The user starts the download from a web page, whose button hands a mod manager a link with a
+    /// provider-specific URI scheme.
+    BrowserAssisted {
+        /// The page the user starts the download from.
+        page: String,
+        /// The URI scheme of the link the page hands over.
+        scheme: String,
+    },
+}
+
+impl Download {
+    /// The HTTPS URL MSBE may download from, if it may download at all.
+    pub fn url(&self) -> Option<&str> {
+        match self {
+            Self::Direct { url } => Some(url),
+            Self::UserAction { .. } | Self::BrowserAssisted { .. } => None,
+        }
+    }
+}
+
+impl fmt::Display for Download {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Direct { url } => write!(formatter, "download it from {url}"),
+            Self::UserAction { page, reason } => write!(
+                formatter,
+                "{reason}; download it from {page}, then add the saved file"
+            ),
+            Self::BrowserAssisted { page, scheme } => write!(
+                formatter,
+                "the provider hands downloads to mod managers as {scheme}:// links, which this \
+                 build cannot receive yet; download it from {page}, then add the saved file"
+            ),
+        }
+    }
+}
+
+/// Why MSBE may not download a file itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionReason {
+    /// The author does not allow third-party tools to download it.
+    DistributionForbidden,
+    /// The provider publishes no download URL for it.
+    NoDownloadUrl,
+    /// The provider only serves downloads through its website.
+    WebsiteOnly,
+}
+
+impl fmt::Display for ActionReason {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::DistributionForbidden => "its author does not allow third-party downloads",
+            Self::NoDownloadUrl => "its provider publishes no download URL",
+            Self::WebsiteOnly => "its provider only serves downloads through its website",
+        })
+    }
 }
 
 /// A release's relationship to another project.

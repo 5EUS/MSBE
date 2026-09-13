@@ -155,6 +155,8 @@ impl PackCodec for NativeCodec {
             target: ImportedTarget {
                 game: Some(lockfile.plan.id.clone()),
                 game_version: lockfile.target.game_version.clone(),
+                edition: lockfile.target.edition.clone(),
+                storefront: lockfile.target.storefront.clone(),
                 loader: Some(lockfile.target.loader.clone()),
                 loader_version: lockfile.target.loader_version.clone(),
             },
@@ -505,6 +507,8 @@ mod tests {
             }],
             target: LockedTarget {
                 game_version: Some("2.0".to_owned()),
+                edition: None,
+                storefront: None,
                 loader: "example-loader".to_owned(),
                 loader_version: Some("3.0".to_owned()),
                 side: Side::Client,

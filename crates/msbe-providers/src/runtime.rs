@@ -2,9 +2,10 @@
 //!
 //! `direct-url-v1` turns one pinned HTTPS URL into a file. `catalog-v1` serves search, projects,
 //! releases, the project a release belongs to, and update checks from a JSON catalog, through only
-//! the routes, parameters and JSON pointers a program declares (`docs/06-providers-and-policy.md`
-//! §6.4). Everything else is fixed here and reviewed with MSBE: how target facts are encoded, how
-//! releases are filtered and ordered, and which release may replace an installed one.
+//! the games, translations, routes, pages, parameters and JSON pointers a program declares
+//! (`docs/06-providers-and-policy.md` §6.4). Everything else is fixed here and reviewed with MSBE:
+//! how target facts are translated and encoded, how releases are filtered and ordered, how a file
+//! can be obtained, and which release may replace an installed one.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -13,16 +14,18 @@ use std::{
 };
 
 use msbe_provider_api::{
-    Adapter, AdapterError, Availability, Capability, HttpClient, JsonEndpoint, PackageId,
-    Provenance, ProviderProgram, Releases, RuntimeKind, Search, Target, Update, UpdateCheck,
-    Updates,
+    AcquiredArtifact, Adapter, AdapterError, Availability, Capability, HttpClient, JsonEndpoint,
+    PackageId, Provenance, ProviderProgram, Releases, RuntimeKind, Search, Target, Update,
+    UpdateCheck, Updates,
+    manifest::Acquisition,
     model::{
-        Channel, Dependency, DependencyKind, Project, Release, ReleaseFile, Request, SearchResult,
-        Selection,
+        ActionReason, Channel, Dependency, DependencyKind, Download, Project, Release, ReleaseFile,
+        Request, SearchResult, Selection,
     },
     program::{
-        ChannelMapping, DependencyMapping, Facets, FileMapping, ObjectMapping, ReleaseOrder,
-        ReleasesRequest, TargetFact, UpdateProtocol,
+        ChannelMapping, DependencyMapping, EachSelector, Encoding, Facets, HashAlgorithm, Items,
+        ObjectMapping, QueryParameter, ReleaseOrder, Selector, TargetFact, UpdateFields,
+        UpdateProtocol,
     },
 };
 use semver::Version;
@@ -49,31 +52,33 @@ impl ProgramAdapter {
         self.program.capabilities.contains(&capability)
     }
 
-    fn catalog<'a>(&'a self, http: &'a dyn HttpClient) -> Result<Catalog<'a>, AdapterError> {
+    /// The catalog, as seen for `target`. Refuses a game, or edition of one, the program does not
+    /// serve before any request is made.
+    fn catalog<'a>(
+        &'a self,
+        http: &'a dyn HttpClient,
+        target: &'a Target,
+    ) -> Result<Catalog<'a>, AdapterError> {
         let base = self
             .program
             .provider
             .api_base()
             .ok_or_else(|| specific(RuntimeError::MissingMetadata))?;
+        let game = self
+            .program
+            .game_id(&target.game, target.edition.as_deref())
+            .ok_or_else(|| {
+                specific(RuntimeError::UnsupportedGame {
+                    provider: self.program.provider.name.clone(),
+                    game: target.game.clone(),
+                    edition: target.edition.clone(),
+                })
+            })?;
         Ok(Catalog {
             program: &self.program,
             endpoint: JsonEndpoint::new(http, base, JSON_LIMIT),
-        })
-    }
-
-    /// `raw`, when it is a reference this runtime accepts and so safe as one route segment.
-    fn reference<'r>(&self, raw: &'r str) -> Result<&'r str, AdapterError> {
-        if is_reference(raw) {
-            Ok(raw)
-        } else {
-            Err(self.invalid_reference(raw))
-        }
-    }
-
-    fn invalid_reference(&self, raw: &str) -> AdapterError {
-        specific(RuntimeError::InvalidReference {
-            provider: self.program.provider.name.clone(),
-            reference: raw.to_owned(),
+            target,
+            game,
         })
     }
 }
@@ -94,8 +99,10 @@ impl Adapter for ProgramAdapter {
                     .map_or((reference, None), |(project, version)| {
                         (project, Some(version))
                     });
-                if !is_reference(project) || version.is_some_and(|version| !is_reference(version)) {
-                    return Err(self.invalid_reference(reference));
+                if route_segments(&self.program, project).is_none()
+                    || version.is_some_and(|version| !is_reference(version))
+                {
+                    return Err(invalid_reference(&self.program, reference));
                 }
                 Ok(Request::Project {
                     reference: project.to_owned(),
@@ -116,6 +123,31 @@ impl Adapter for ProgramAdapter {
     fn as_updates(&self) -> Option<&dyn Updates> {
         (self.has(Capability::Updates) && self.program.updates.is_some()).then_some(self)
     }
+
+    /// Records the strong digests, plus the one the update protocol looks files up by, so a file
+    /// installed from a catalog that publishes only a weak digest can still be found again.
+    fn provenance(&self, release: &Release, acquired: &AcquiredArtifact) -> Provenance {
+        let mut hashes = BTreeMap::from([
+            ("sha256".to_owned(), acquired.sha256.clone()),
+            ("sha512".to_owned(), acquired.sha512.clone()),
+        ]);
+        if let Some(algorithm) = self
+            .program
+            .updates
+            .as_ref()
+            .and_then(UpdateProtocol::algorithm)
+            && let Some(digest) = acquired.digest(algorithm.as_str())
+        {
+            hashes.insert(algorithm.as_str().to_owned(), digest.to_owned());
+        }
+        Provenance {
+            provider: release.project.provider.clone(),
+            project: release.project.project.clone(),
+            version: release.id.clone(),
+            version_number: release.number.clone(),
+            hashes,
+        }
+    }
 }
 
 impl Search for ProgramAdapter {
@@ -126,7 +158,7 @@ impl Search for ProgramAdapter {
         target: &Target,
         limit: u8,
     ) -> Result<Vec<SearchResult>, AdapterError> {
-        let catalog = self.catalog(http)?;
+        let catalog = self.catalog(http, target)?;
         let request = &self.program.search;
         let limit = request
             .maximum
@@ -135,23 +167,27 @@ impl Search for ProgramAdapter {
         let facets = request
             .facets
             .as_ref()
-            .map(|facets| (facets.parameter.as_str(), facet_groups(facets, target)));
+            .map(|facets| (facets.parameter.as_str(), catalog.facet_groups(facets)));
+        let filters = catalog.parameters(&request.parameters);
         let mut parameters = vec![(request.query.as_str(), query)];
         if let Some((parameter, groups)) = &facets {
             parameters.push((parameter, groups.as_str()));
         }
+        parameters.extend(
+            filters
+                .iter()
+                .map(|(name, value)| (name.as_str(), value.as_str())),
+        );
         parameters.push((request.limit.as_str(), limit.as_str()));
-        let body = catalog.get(
-            required_route(self.program.routes.search.as_deref())?,
-            &parameters,
-        )?;
+        let route = catalog.route(required_route(self.program.routes.search.as_deref())?, None)?;
+        let body = catalog.get(&route, &parameters)?;
         let mappings = &self.program.mappings;
         let hit = mappings.hit.as_ref().unwrap_or(&mappings.project);
         let mut results = Vec::new();
         for item in required_items(&body, mappings.search_items.as_deref())? {
             let client = availability(item, hit.client.as_deref());
             let server = availability(item, hit.server.as_deref());
-            if target.supports_side(client, server) {
+            if target.supports_side(client, server) && catalog.listed_for_game(item, hit)? {
                 results.push(catalog.search_result(item, hit)?);
             }
         }
@@ -160,15 +196,27 @@ impl Search for ProgramAdapter {
 }
 
 impl Releases for ProgramAdapter {
-    fn project(&self, http: &dyn HttpClient, reference: &str) -> Result<Project, AdapterError> {
-        let reference = self.reference(reference)?;
-        let catalog = self.catalog(http)?;
-        let route = interpolate(
+    fn project(
+        &self,
+        http: &dyn HttpClient,
+        reference: &str,
+        target: &Target,
+    ) -> Result<Project, AdapterError> {
+        let catalog = self.catalog(http, target)?;
+        let segments = catalog.segments(reference)?;
+        let route = catalog.route(
             required_route(self.program.routes.project.as_deref())?,
-            "reference",
-            reference,
+            Some(("reference", &segments)),
         )?;
-        catalog.project(&catalog.get(&route, &[])?)
+        let body = catalog.get(&route, &[])?;
+        let project = catalog.project(&body)?;
+        if !catalog.listed_for_game(&body, &self.program.mappings.project)? {
+            return Err(specific(RuntimeError::ProjectNotForGame {
+                project: project.label().to_owned(),
+                game: target.game.clone(),
+            }));
+        }
+        Ok(project)
     }
 
     fn releases(
@@ -177,56 +225,31 @@ impl Releases for ProgramAdapter {
         project: &str,
         target: &Target,
     ) -> Result<Vec<Release>, AdapterError> {
-        let project = self.reference(project)?;
-        let catalog = self.catalog(http)?;
-        let route = interpolate_game(
-            required_route(self.program.routes.releases.as_deref())?,
-            &self.program.games,
-            &target.game,
-        )?;
-        let route = interpolate(&route, "project", project)?;
-        let parameters = release_parameters(&self.program.releases, target);
-        let parameters: Vec<(&str, &str)> = parameters
-            .iter()
-            .map(|(name, value)| (name.as_str(), value.as_str()))
-            .collect();
-        let body = catalog.get(&route, &parameters)?;
-        let listed = body
-            .as_array()
-            .ok_or_else(|| specific(RuntimeError::ExpectedArray))?;
-        let mut releases = Vec::new();
-        for value in listed {
-            if catalog.supports(value, target)? {
-                releases.push(catalog.release(value, Some(project))?);
-            }
-        }
-        match self.program.releases.order {
-            ReleaseOrder::NewestFirst => releases.sort_by(|a, b| b.published.cmp(&a.published)),
-            ReleaseOrder::Semver => releases.sort_by(|a, b| {
-                Version::parse(&b.number)
-                    .ok()
-                    .cmp(&Version::parse(&a.number).ok())
-                    .then_with(|| b.published.cmp(&a.published))
-            }),
-            ReleaseOrder::Listed => {}
-        }
-        Ok(releases)
+        Ok(self
+            .catalog(http, target)?
+            .listing(project)?
+            .into_iter()
+            .filter(|listed| listed.fits)
+            .map(|listed| listed.release)
+            .collect())
     }
 
     fn release_project(
         &self,
         http: &dyn HttpClient,
         release: &str,
+        target: &Target,
     ) -> Result<PackageId, AdapterError> {
         if !self.has(Capability::ReleaseProject) {
             return Err(specific(RuntimeError::UnsupportedReleaseProject));
         }
-        let release = self.reference(release)?;
-        let catalog = self.catalog(http)?;
-        let route = interpolate(
+        if !is_reference(release) {
+            return Err(invalid_reference(&self.program, release));
+        }
+        let catalog = self.catalog(http, target)?;
+        let route = catalog.route(
             required_route(self.program.routes.release.as_deref())?,
-            "release",
-            release,
+            Some(("release", release)),
         )?;
         let body = catalog.get(&route, &[])?;
         Ok(catalog.package(required_text(
@@ -248,25 +271,54 @@ impl Updates for ProgramAdapter {
             .updates
             .as_ref()
             .ok_or_else(|| specific(RuntimeError::NoUpdateProtocol))?;
-        let catalog = self.catalog(http)?;
-        match protocol.kind {
-            msbe_provider_api::program::UpdateProtocolKind::HashLookupV1 => {
-                catalog.check_updates(protocol, installed, target)
-            }
-            msbe_provider_api::program::UpdateProtocolKind::ReleasesV1 => {
-                catalog.check_release_updates(installed, target)
-            }
+        let catalog = self.catalog(http, target)?;
+        match protocol {
+            UpdateProtocol::HashLookupV1 {
+                algorithm,
+                listed,
+                latest,
+                fields,
+            } => catalog.check_by_hash(
+                &HashLookup {
+                    algorithm: *algorithm,
+                    listed,
+                    latest,
+                    fields,
+                },
+                installed,
+            ),
+            UpdateProtocol::ReleasesV1 {} => installed
+                .iter()
+                .map(|provenance| catalog.check_by_releases(provenance))
+                .collect(),
         }
     }
 }
 
-/// One catalog program's view of its API, for one operation.
+/// The slots of a `hash-lookup-v1` protocol.
+struct HashLookup<'a> {
+    algorithm: HashAlgorithm,
+    listed: &'a str,
+    latest: &'a str,
+    fields: &'a UpdateFields,
+}
+
+/// A listed release, and whether it supports the target.
+struct Listed {
+    release: Release,
+    fits: bool,
+}
+
+/// One catalog program's view of its API, for one operation against one target.
 struct Catalog<'a> {
     program: &'a ProviderProgram,
     endpoint: JsonEndpoint<'a>,
+    target: &'a Target,
+    /// The catalog's identifier for the target's game.
+    game: &'a str,
 }
 
-impl Catalog<'_> {
+impl<'a> Catalog<'a> {
     fn get(&self, route: &str, query: &[(&str, &str)]) -> Result<Value, AdapterError> {
         Ok(self.endpoint.get(route, query)?)
     }
@@ -283,11 +335,156 @@ impl Catalog<'_> {
             .collect())
     }
 
+    /// `template` with `{game}` and the one named placeholder filled in. `value` must already be
+    /// safe as route segments.
+    fn route(
+        &self,
+        template: &str,
+        placeholder: Option<(&str, &str)>,
+    ) -> Result<String, AdapterError> {
+        let route = template.replacen("{game}", self.game, 1);
+        match placeholder {
+            Some((name, value)) => interpolate(&route, name, value),
+            None => Ok(route),
+        }
+    }
+
+    /// `raw`, a project reference or id, as route segments.
+    fn segments(&self, raw: &str) -> Result<String, AdapterError> {
+        route_segments(self.program, raw).ok_or_else(|| invalid_reference(self.program, raw))
+    }
+
     fn package(&self, project: String) -> PackageId {
         PackageId {
             provider: self.program.provider.id.clone(),
             project,
         }
+    }
+
+    /// The catalog's spellings of the target's values for `fact`: `None` when the target has no
+    /// such fact, and empty when the catalog has a spelling for none of them.
+    fn fact(&self, fact: TargetFact) -> Option<Vec<&'a str>> {
+        let target = self.target;
+        let values: Vec<&'a str> = match fact {
+            TargetFact::Game => return Some(vec![self.game]),
+            TargetFact::Loaders => target.loader_ids().collect(),
+            TargetFact::GameVersion => vec![target.game_version.as_deref()?],
+            TargetFact::Edition => vec![target.edition.as_deref()?],
+            TargetFact::Storefront => vec![target.storefront.as_deref()?],
+        };
+        Some(match self.program.translate.table(fact) {
+            Some(table) if !table.is_empty() => distinct(
+                values
+                    .into_iter()
+                    .filter_map(|value| table.get(value).map(String::as_str)),
+            ),
+            _ => values,
+        })
+    }
+
+    /// A parameter's values: its own spellings of MSBE's values when it declares them, else the
+    /// program's.
+    fn parameter_values(
+        &self,
+        parameter: &'a QueryParameter,
+        fact: TargetFact,
+    ) -> Option<Vec<&'a str>> {
+        if parameter.values.is_empty() {
+            return self.fact(fact);
+        }
+        let target = self.target;
+        let values: Vec<&'a str> = match fact {
+            TargetFact::Game => vec![target.game.as_str()],
+            TargetFact::Loaders => target.loader_ids().collect(),
+            TargetFact::GameVersion => vec![target.game_version.as_deref()?],
+            TargetFact::Edition => vec![target.edition.as_deref()?],
+            TargetFact::Storefront => vec![target.storefront.as_deref()?],
+        };
+        Some(distinct(values.into_iter().filter_map(|value| {
+            parameter.values.get(value).map(String::as_str)
+        })))
+    }
+
+    /// `parameters` for the target, encoded. A fact the target lacks, or has no spelling for, is
+    /// not sent.
+    fn parameters(&self, parameters: &'a [QueryParameter]) -> Vec<(String, String)> {
+        let mut encoded = Vec::new();
+        for parameter in parameters {
+            let name = parameter.name.clone();
+            if let Some(literal) = &parameter.literal {
+                encoded.push((name, literal.clone()));
+                continue;
+            }
+            let Some(values) = parameter
+                .target
+                .and_then(|fact| self.parameter_values(parameter, fact))
+                .filter(|values| !values.is_empty())
+            else {
+                continue;
+            };
+            match (parameter.encoding, values.as_slice()) {
+                (Encoding::JsonArray, _) => {
+                    encoded.push((name, serde_json::to_string(&values).unwrap_or_default()));
+                }
+                (Encoding::Comma, _) => encoded.push((name, values.join(","))),
+                (Encoding::Repeated, _) => encoded.extend(
+                    values
+                        .iter()
+                        .map(|value| (name.clone(), (*value).to_owned())),
+                ),
+                (Encoding::Single, [value]) => encoded.push((name, (*value).to_owned())),
+                (Encoding::Single, _) => {}
+            }
+        }
+        encoded
+    }
+
+    /// The facet groups for the target, as a JSON array of arrays of strings.
+    fn facet_groups(&self, facets: &Facets) -> String {
+        let groups: Vec<Vec<String>> = facets
+            .groups
+            .iter()
+            .map(|group| {
+                group
+                    .iter()
+                    .flat_map(|template| self.expand(template))
+                    .collect::<Vec<_>>()
+            })
+            .filter(|group| !group.is_empty())
+            .collect();
+        serde_json::to_string(&groups).unwrap_or_default()
+    }
+
+    /// A facet template once per value of the fact it names, or as it is when it names none.
+    fn expand(&self, template: &str) -> Vec<String> {
+        for (marker, fact) in [
+            ("{game}", TargetFact::Game),
+            ("{game_version}", TargetFact::GameVersion),
+            ("{loader}", TargetFact::Loaders),
+            ("{edition}", TargetFact::Edition),
+            ("{storefront}", TargetFact::Storefront),
+        ] {
+            if template.contains(marker) {
+                return self
+                    .fact(fact)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|value| template.replace(marker, value))
+                    .collect();
+            }
+        }
+        vec![template.to_owned()]
+    }
+
+    /// Whether the object in `value` is listed for the target's game, when the mapping says where
+    /// its games are.
+    fn listed_for_game(&self, value: &Value, map: &ObjectMapping) -> Result<bool, AdapterError> {
+        let Some(selector) = &map.games else {
+            return Ok(true);
+        };
+        Ok(select_strings(value, selector)?
+            .iter()
+            .any(|game| game == self.game))
     }
 
     fn project(&self, value: &Value) -> Result<Project, AdapterError> {
@@ -326,19 +523,87 @@ impl Catalog<'_> {
         })
     }
 
-    /// Whether the release in `value` supports the target's game version, loaders, and loader
-    /// version. A release that declares no versions for the target's loaders accepts any.
-    fn supports(&self, value: &Value, target: &Target) -> Result<bool, AdapterError> {
+    /// Every release of `project` the catalog lists, in the program's order, each marked with
+    /// whether it supports the target.
+    fn listing(&self, project: &str) -> Result<Vec<Listed>, AdapterError> {
+        let segments = self.segments(project)?;
+        let route = self.route(
+            required_route(self.program.routes.releases.as_deref())?,
+            Some(("project", &segments)),
+        )?;
+        let parameters = self.parameters(&self.program.releases.query);
+        let parameters: Vec<(&str, &str)> = parameters
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.as_str()))
+            .collect();
+        let body = self.get(&route, &parameters)?;
+        let values = match &self.program.mappings.releases {
+            Some(items) => select_items(&body, items)?,
+            None => body
+                .as_array()
+                .ok_or_else(|| specific(RuntimeError::ExpectedArray))?
+                .iter()
+                .collect(),
+        };
+        let mut listed = values
+            .into_iter()
+            .map(|value| {
+                Ok(Listed {
+                    fits: self.supports(value)?,
+                    release: self.release(value, Some(project))?,
+                })
+            })
+            .collect::<Result<Vec<_>, AdapterError>>()?;
+        match self.program.releases.order {
+            ReleaseOrder::Listed => {}
+            ReleaseOrder::NewestFirst => {
+                listed.sort_by(|a, b| b.release.published.cmp(&a.release.published));
+            }
+            ReleaseOrder::Semver => {
+                listed.sort_by(|a, b| semver_key(&b.release).cmp(&semver_key(&a.release)));
+            }
+        }
+        Ok(listed)
+    }
+
+    /// Whether `candidate` is newer than `installed`, by the program's release order.
+    fn newer(&self, candidate: &Release, installed: &Release) -> bool {
+        if self.program.releases.order == ReleaseOrder::Semver
+            && let (Some(candidate), Some(installed)) = (
+                parse_version(&candidate.number),
+                parse_version(&installed.number),
+            )
+        {
+            return candidate > installed;
+        }
+        candidate.published > installed.published
+    }
+
+    /// Whether the release in `value` supports the target's game version, loaders, loader version,
+    /// edition and storefront, in the catalog's spellings. A compatibility list that is unmapped
+    /// does not constrain a release; see [`msbe_provider_api::ReleaseMapping`].
+    fn supports(&self, value: &Value) -> Result<bool, AdapterError> {
         let map = &self.program.mappings.release;
-        let game_versions = strings(value, map.game_versions.as_deref())?;
-        let loaders = strings(value, map.loaders.as_deref())?;
-        let loader_ids: Vec<&str> = target.loader_ids().collect();
+        let lists = |selector: Option<&Selector>, fact, empty_supports| {
+            let (Some(selector), Some(wanted)) = (selector, self.fact(fact)) else {
+                return Ok::<bool, AdapterError>(true);
+            };
+            let declared = select_strings(value, selector)?;
+            Ok(if declared.is_empty() {
+                empty_supports
+            } else {
+                declared
+                    .iter()
+                    .any(|declared| wanted.contains(&declared.as_str()))
+            })
+        };
+        let loader_ids = self.fact(TargetFact::Loaders).unwrap_or_default();
         let declared = map
             .loader_versions
             .as_deref()
             .and_then(|pointer| value.pointer(pointer))
             .and_then(Value::as_object);
-        let version_matches = match (target.loader_version.as_deref(), declared) {
+        let version_matches = match (self.target.loader_version.as_deref(), declared) {
             (Some(wanted), Some(declared)) => {
                 let versions: Vec<&str> = loader_ids
                     .iter()
@@ -351,14 +616,13 @@ impl Catalog<'_> {
             }
             _ => true,
         };
-        Ok(map.game_versions.is_none()
-            || target.game_version.as_ref().is_none_or(|wanted| {
-                game_versions.is_empty() || game_versions.iter().any(|version| version == wanted)
-            }) && (map.loaders.is_none()
-                || loaders
-                    .iter()
-                    .any(|loader| loader_ids.contains(&loader.as_str())))
-                && version_matches)
+        Ok(
+            lists(map.game_versions.as_ref(), TargetFact::GameVersion, true)?
+                && lists(map.loaders.as_ref(), TargetFact::Loaders, false)?
+                && lists(map.editions.as_ref(), TargetFact::Edition, true)?
+                && lists(map.storefronts.as_ref(), TargetFact::Storefront, true)?
+                && version_matches,
+        )
     }
 
     /// The release in `value`, which belongs to `listed` when the program does not map a release's
@@ -371,18 +635,23 @@ impl Catalog<'_> {
                 .map(str::to_owned)
                 .ok_or_else(|| specific(RuntimeError::MissingMapping))?,
         };
-        let files = required_items(value, map.files.as_deref())
-            .or_else(|error| absent_as_empty(value, map.files.as_deref(), error))?
-            .iter()
-            .map(|file_value| file(file_value, &map.file))
-            .collect::<Result<_, _>>()?;
+        let id = required_text(value, map.id.as_deref())?;
+        let files = select_items(
+            value,
+            map.files
+                .as_ref()
+                .ok_or_else(|| specific(RuntimeError::MissingMapping))?,
+        )?
+        .into_iter()
+        .map(|file| self.file(file, &project, &id))
+        .collect::<Result<_, _>>()?;
         let dependencies = required_items(value, map.dependencies.as_deref())
             .or_else(|error| absent_as_empty(value, map.dependencies.as_deref(), error))?
             .iter()
             .map(|dependency| self.dependency(dependency, &map.dependency))
-            .collect();
+            .collect::<Result<_, _>>()?;
         Ok(Release {
-            id: required_text(value, map.id.as_deref())?,
+            id,
             project: self.package(project),
             number: required_text(value, map.number.as_deref())?,
             channel: channel(value, map.channel.as_ref()),
@@ -392,20 +661,154 @@ impl Catalog<'_> {
         })
     }
 
-    fn dependency(&self, value: &Value, mapping: &DependencyMapping) -> Dependency {
-        let kind = match optional_text(value, mapping.kind.as_deref()).as_deref() {
-            Some("required") => DependencyKind::Required,
-            Some("optional") => DependencyKind::Optional,
-            Some("incompatible") => DependencyKind::Incompatible,
-            Some("embedded") => DependencyKind::Embedded,
-            _ => DependencyKind::Unknown,
+    fn file(
+        &self,
+        value: &Value,
+        project: &str,
+        release: &str,
+    ) -> Result<ReleaseFile, AdapterError> {
+        let mapping = &self.program.mappings.release.file;
+        let mut name = required_text(value, mapping.name.as_deref())?;
+        if let Some(extension) = &mapping.extension {
+            let suffix = format!(".{extension}");
+            if !name
+                .to_ascii_lowercase()
+                .ends_with(&suffix.to_ascii_lowercase())
+            {
+                name.push_str(&suffix);
+            }
+        }
+        Ok(ReleaseFile {
+            download: self.download(value, project, release)?,
+            name,
+            size: mapping
+                .size
+                .as_deref()
+                .and_then(|pointer| value.pointer(pointer))
+                .and_then(Value::as_u64),
+            md5: select_text(value, mapping.md5.as_ref()),
+            sha1: select_text(value, mapping.sha1.as_ref()),
+            sha256: select_text(value, mapping.sha256.as_ref()),
+            sha512: select_text(value, mapping.sha512.as_ref()),
+            primary: mapping.primary.as_deref().is_none_or(|pointer| {
+                value
+                    .pointer(pointer)
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+            }),
+        })
+    }
+
+    /// How the file in `value` can be obtained, under the provider's acquisition primitive and the
+    /// file's own distribution flag and download URL.
+    fn download(
+        &self,
+        value: &Value,
+        project: &str,
+        release: &str,
+    ) -> Result<Download, AdapterError> {
+        let mapping = &self.program.mappings.release.file;
+        let user_action = |reason| {
+            Ok(Download::UserAction {
+                page: self.page(project, release)?,
+                reason,
+            })
         };
-        Dependency {
+        match &self.program.provider.acquisition {
+            Acquisition::UserAction {} => user_action(ActionReason::WebsiteOnly),
+            Acquisition::BrowserAssisted { scheme } => Ok(Download::BrowserAssisted {
+                page: self.page(project, release)?,
+                scheme: scheme.clone(),
+            }),
+            Acquisition::DirectHttps {} => {
+                let forbidden = mapping
+                    .distributable
+                    .as_deref()
+                    .and_then(|pointer| value.pointer(pointer))
+                    .is_some_and(|flag| *flag != Value::Bool(true));
+                if forbidden {
+                    return user_action(ActionReason::DistributionForbidden);
+                }
+                match mapping.url.as_deref().map(|pointer| value.pointer(pointer)) {
+                    Some(Some(Value::String(url))) => Ok(Download::Direct { url: url.clone() }),
+                    Some(None | Some(Value::Null)) if !self.program.pages.is_empty() => {
+                        user_action(ActionReason::NoDownloadUrl)
+                    }
+                    _ => Err(required_text(value, mapping.url.as_deref())
+                        .err()
+                        .unwrap_or_else(|| specific(RuntimeError::ExpectedText))),
+                }
+            }
+        }
+    }
+
+    /// The page for one release of `project`, preferring the release page.
+    fn page(&self, project: &str, release: &str) -> Result<String, AdapterError> {
+        let pages = &self.program.pages;
+        let (template, release) = match (&pages.release, &pages.project) {
+            (Some(template), _) => (template, Some(release)),
+            (None, Some(template)) => (template, None),
+            (None, None) => return Err(specific(RuntimeError::MissingPage)),
+        };
+        let mut page = template.replacen("{game}", self.game, 1);
+        if page.contains("{project}") {
+            page = page.replacen("{project}", &self.segments(project)?, 1);
+        }
+        if let Some(release) = release {
+            if !is_reference(release) {
+                return Err(invalid_reference(self.program, release));
+            }
+            page = page.replacen("{release}", release, 1);
+        }
+        Ok(page)
+    }
+
+    fn dependency(
+        &self,
+        value: &Value,
+        mapping: &DependencyMapping,
+    ) -> Result<Dependency, AdapterError> {
+        if let Some(text) = &mapping.text {
+            let raw = value
+                .as_str()
+                .ok_or_else(|| specific(RuntimeError::ExpectedText))?;
+            let project = raw
+                .rsplit_once(text.separator.as_str())
+                .map(|(project, _)| project)
+                .filter(|project| route_segments(self.program, project).is_some())
+                .ok_or_else(|| specific(RuntimeError::InvalidDependency(raw.to_owned())))?;
+            return Ok(Dependency {
+                project: Some(self.package(project.to_owned())),
+                release: None,
+                kind: DependencyKind::Required,
+            });
+        }
+        let named = optional_text(value, mapping.kind.as_deref());
+        let named = named.as_deref();
+        let kind = match &mapping.kinds {
+            None => match named {
+                Some("required") => DependencyKind::Required,
+                Some("optional") => DependencyKind::Optional,
+                Some("incompatible") => DependencyKind::Incompatible,
+                Some("embedded") => DependencyKind::Embedded,
+                _ => DependencyKind::Unknown,
+            },
+            Some(kinds) => [
+                (&kinds.required, DependencyKind::Required),
+                (&kinds.optional, DependencyKind::Optional),
+                (&kinds.incompatible, DependencyKind::Incompatible),
+                (&kinds.embedded, DependencyKind::Embedded),
+            ]
+            .into_iter()
+            .find(|(name, _)| name.is_some() && name.as_deref() == named)
+            .map_or(DependencyKind::Unknown, |(_, kind)| kind),
+        };
+        Ok(Dependency {
             project: optional_text(value, mapping.project.as_deref())
                 .map(|project| self.package(project)),
             release: optional_text(value, mapping.release.as_deref()),
             kind,
-        }
+        })
     }
 
     /// Checks installed files for releases to replace them with, answering in the order
@@ -415,28 +818,13 @@ impl Catalog<'_> {
     /// newer than the installed release, unless the installed release does not support the target;
     /// then the newest compatible release on its channel is offered, even if it is older. Costs
     /// one request for the installed releases and one per channel in use.
-    fn check_updates(
+    fn check_by_hash(
         &self,
-        protocol: &UpdateProtocol,
+        protocol: &HashLookup<'_>,
         installed: &[&Provenance],
-        target: &Target,
     ) -> Result<Vec<UpdateCheck>, AdapterError> {
-        let algorithm = protocol
-            .algorithm
-            .ok_or_else(|| specific(RuntimeError::InvalidUpdateProtocol))?
-            .as_str();
-        let listed_route = protocol
-            .listed
-            .as_deref()
-            .ok_or_else(|| specific(RuntimeError::InvalidUpdateProtocol))?;
-        let latest_route = protocol
-            .latest
-            .as_deref()
-            .ok_or_else(|| specific(RuntimeError::InvalidUpdateProtocol))?;
-        let fields = protocol
-            .fields
-            .as_ref()
-            .ok_or_else(|| specific(RuntimeError::InvalidUpdateProtocol))?;
+        let algorithm = protocol.algorithm.as_str();
+        let fields = protocol.fields;
         let requested: Vec<String> = installed
             .iter()
             .filter_map(|provenance| provenance.hashes.get(algorithm))
@@ -447,7 +835,7 @@ impl Catalog<'_> {
         }
         let unique: BTreeSet<&str> = requested.iter().map(String::as_str).collect();
         let listed = self.post(
-            listed_route,
+            &self.route(protocol.listed, None)?,
             Map::from_iter([
                 (
                     fields.hashes.clone(),
@@ -471,86 +859,30 @@ impl Catalog<'_> {
                 .or_default()
                 .push(hash);
         }
-        let loaders: Vec<&str> = target.loader_ids().collect();
+        let latest_route = self.route(protocol.latest, None)?;
+        let loaders = self.fact(TargetFact::Loaders).unwrap_or_default();
+        let game_versions = self
+            .fact(TargetFact::GameVersion)
+            .filter(|versions| !versions.is_empty());
         let mut latest = BTreeMap::new();
         for (channels, hashes) in groups {
-            latest.extend(
-                self.post(
-                    latest_route,
-                    Map::from_iter([
-                        (fields.hashes.clone(), Value::from(hashes)),
-                        (fields.algorithm.clone(), Value::from(algorithm)),
-                        (fields.loaders.clone(), Value::from(loaders.clone())),
-                        (
-                            fields.game_versions.clone(),
-                            Value::from(
-                                target
-                                    .game_version
-                                    .iter()
-                                    .map(String::as_str)
-                                    .collect::<Vec<_>>(),
-                            ),
-                        ),
-                        (fields.channels.clone(), Value::from(channels)),
-                    ]),
-                )?,
-            );
+            let mut body = Map::from_iter([
+                (fields.hashes.clone(), Value::from(hashes)),
+                (fields.algorithm.clone(), Value::from(algorithm)),
+                (fields.loaders.clone(), Value::from(loaders.clone())),
+                (fields.channels.clone(), Value::from(channels)),
+            ]);
+            if let Some(versions) = &game_versions {
+                body.insert(fields.game_versions.clone(), Value::from(versions.clone()));
+            }
+            latest.extend(self.post(&latest_route, body)?);
         }
 
         requested
             .iter()
             .map(|hash| match listed.get(hash) {
-                Some(release) => self.decide(release, latest.get(hash), target),
+                Some(release) => self.decide(release, latest.get(hash)),
                 None => Ok(UpdateCheck::Unlisted),
-            })
-            .collect()
-    }
-
-    fn check_release_updates(
-        &self,
-        installed: &[&Provenance],
-        target: &Target,
-    ) -> Result<Vec<UpdateCheck>, AdapterError> {
-        installed
-            .iter()
-            .map(|provenance| {
-                let route = interpolate_game(
-                    required_route(self.program.routes.releases.as_deref())?,
-                    &self.program.games,
-                    &target.game,
-                )?;
-                let route = interpolate(&route, "project", &provenance.project)?;
-                let body = self.get(&route, &[])?;
-                let listed = body
-                    .as_array()
-                    .ok_or_else(|| specific(RuntimeError::ExpectedArray))?;
-                let mut releases: Vec<Release> = listed
-                    .iter()
-                    .filter(|value| self.supports(value, target).unwrap_or(false))
-                    .filter_map(|value| self.release(value, Some(&provenance.project)).ok())
-                    .collect();
-                releases.sort_by(|a, b| {
-                    Version::parse(&b.number)
-                        .ok()
-                        .cmp(&Version::parse(&a.number).ok())
-                });
-                let Some(latest) = releases.first() else {
-                    return Ok(UpdateCheck::Unlisted);
-                };
-                if latest.number == provenance.version_number {
-                    return Ok(UpdateCheck::Current);
-                }
-                let file = latest
-                    .primary_file()
-                    .cloned()
-                    .ok_or_else(|| AdapterError::NoFiles {
-                        project: latest.project.clone(),
-                        release: latest.id.clone(),
-                    })?;
-                Ok(UpdateCheck::Available(Box::new(Update {
-                    release: latest.clone(),
-                    file,
-                })))
             })
             .collect()
     }
@@ -560,15 +892,14 @@ impl Catalog<'_> {
         &self,
         installed: &Value,
         latest: Option<&Value>,
-        target: &Target,
     ) -> Result<UpdateCheck, AdapterError> {
         let map = &self.program.mappings.release;
-        let fits = self.supports(installed, target)?;
+        let fits = self.supports(installed)?;
         let mut replacement = None;
         if let Some(candidate) = latest
             && required_text(candidate, map.id.as_deref())?
                 != required_text(installed, map.id.as_deref())?
-            && self.supports(candidate, target)?
+            && self.supports(candidate)?
             && (!fits
                 || required_text(candidate, map.published.as_deref())?
                     > required_text(installed, map.published.as_deref())?)
@@ -576,89 +907,99 @@ impl Catalog<'_> {
             replacement = Some(candidate);
         }
         Ok(match replacement {
-            Some(candidate) => {
-                let release = self.release(candidate, None)?;
-                let file =
-                    release
-                        .primary_file()
-                        .cloned()
-                        .ok_or_else(|| AdapterError::NoFiles {
-                            project: release.project.clone(),
-                            release: release.id.clone(),
-                        })?;
-                UpdateCheck::Available(Box::new(Update { release, file }))
-            }
+            Some(candidate) => available(self.release(candidate, None)?)?,
             None if fits => UpdateCheck::Current,
             None => UpdateCheck::Incompatible,
         })
     }
-}
 
-/// The facet groups for `target`, as a JSON array of arrays of strings.
-fn facet_groups(facets: &Facets, target: &Target) -> String {
-    let groups: Vec<Vec<String>> = facets
-        .groups
-        .iter()
-        .map(|group| {
-            group
-                .iter()
-                .flat_map(|template| {
-                    if template.contains("{game}") {
-                        vec![template.replace("{game}", &target.game)]
-                    } else if template.contains("{loader}") {
-                        target
-                            .loader_ids()
-                            .map(|loader| template.replace("{loader}", loader))
-                            .collect()
-                    } else if let Some(game_version) = &target.game_version {
-                        vec![template.replace("{game_version}", game_version)]
-                    } else {
-                        Vec::new()
-                    }
-                })
-                .collect::<Vec<_>>()
-        })
-        .filter(|group| !group.is_empty())
-        .collect();
-    serde_json::to_string(&groups).unwrap_or_default()
-}
-
-/// A release listing's query parameters for `target`.
-fn release_parameters(request: &ReleasesRequest, target: &Target) -> Vec<(String, String)> {
-    request
-        .query
-        .iter()
-        .filter_map(|parameter| {
-            let values: Vec<&str> = match parameter.target {
-                Some(TargetFact::Game) => vec![target.game.as_str()],
-                Some(TargetFact::Loaders) => target.loader_ids().collect(),
-                Some(TargetFact::GameVersion) => {
-                    target.game_version.iter().map(String::as_str).collect()
-                }
-                None => Vec::new(),
+    /// Checks one installed file under the `releases-v1` protocol, by listing its project's
+    /// releases.
+    ///
+    /// The rules are those of `hash-lookup-v1`: a file stays on its channel or moves to a more
+    /// stable one, and moves to a release that is not newer only to regain compatibility. A catalog
+    /// that no longer lists the installed release is compared by version number, when the program
+    /// orders releases by semantic version; otherwise the file is unlisted.
+    fn check_by_releases(&self, installed: &Provenance) -> Result<UpdateCheck, AdapterError> {
+        let listed = self.listing(&installed.project)?;
+        let current = listed
+            .iter()
+            .find(|listed| listed.release.id == installed.version);
+        let Some(current) = current else {
+            let Some(installed_version) = parse_version(&installed.version_number)
+                .filter(|_| self.program.releases.order == ReleaseOrder::Semver)
+            else {
+                return Ok(UpdateCheck::Unlisted);
             };
-            if parameter.target.is_some() && values.is_empty() {
-                return None;
-            }
-            let values: Vec<&str> = values
-                .into_iter()
-                .filter_map(|value| {
-                    parameter
-                        .values
-                        .get(value)
-                        .map_or(Some(value), |mapped| Some(mapped.as_str()))
-                })
-                .collect();
-            if parameter.target.is_some() && values.is_empty() {
-                return None;
-            }
-            let value = parameter
-                .literal
-                .clone()
-                .unwrap_or_else(|| serde_json::to_string(&values).unwrap_or_default());
-            Some((parameter.name.clone(), value))
-        })
-        .collect()
+            let newer = listed.iter().find(|listed| {
+                listed.fits
+                    && parse_version(&listed.release.number)
+                        .is_some_and(|version| version > installed_version)
+            });
+            return match newer {
+                Some(listed) => available(listed.release.clone()),
+                None if listed.is_empty() => Ok(UpdateCheck::Unlisted),
+                None => Ok(UpdateCheck::Current),
+            };
+        };
+        let mut candidates = listed.iter().filter(|candidate| {
+            candidate.fits
+                && candidate.release.id != current.release.id
+                && at_least_as_stable(candidate.release.channel, current.release.channel)
+        });
+        let replacement = if current.fits {
+            candidates.find(|candidate| self.newer(&candidate.release, &current.release))
+        } else {
+            candidates.next()
+        };
+        match replacement {
+            Some(candidate) => available(candidate.release.clone()),
+            None if current.fits => Ok(UpdateCheck::Current),
+            None => Ok(UpdateCheck::Incompatible),
+        }
+    }
+}
+
+/// An update to `release`'s primary file.
+fn available(release: Release) -> Result<UpdateCheck, AdapterError> {
+    let file = release
+        .primary_file()
+        .cloned()
+        .ok_or_else(|| AdapterError::NoFiles {
+            project: release.project.clone(),
+            release: release.id.clone(),
+        })?;
+    Ok(UpdateCheck::Available(Box::new(Update { release, file })))
+}
+
+/// `values` without repeats, in their first order.
+fn distinct<'v>(values: impl Iterator<Item = &'v str>) -> Vec<&'v str> {
+    let mut seen = BTreeSet::new();
+    values.filter(|value| seen.insert(*value)).collect()
+}
+
+/// A release's number as a semantic version, ignoring a leading `v`.
+fn parse_version(number: &str) -> Option<Version> {
+    Version::parse(number.strip_prefix(['v', 'V']).unwrap_or(number)).ok()
+}
+
+/// Orders releases by semantic version, then publication; releases without one sort lowest.
+fn semver_key(release: &Release) -> (Option<Version>, &str) {
+    (parse_version(&release.number), release.published.as_str())
+}
+
+/// Whether a release on `candidate` may replace one on `installed`: the same channel or a more
+/// stable one. A release on an unknown channel replaces only another on an unknown channel.
+const fn at_least_as_stable(candidate: Channel, installed: Channel) -> bool {
+    const fn rank(channel: Channel) -> u8 {
+        match channel {
+            Channel::Release => 0,
+            Channel::Beta => 1,
+            Channel::Alpha => 2,
+            Channel::Unknown => 3,
+        }
+    }
+    rank(candidate) <= rank(installed)
 }
 
 /// The channels a release on `installed` may move to, in the catalog's names: its own, or more
@@ -680,7 +1021,7 @@ fn channel(value: &Value, names: Option<&ChannelMapping>) -> Channel {
     let Some(names) = names else {
         return Channel::Unknown;
     };
-    match value.pointer(&names.pointer).and_then(Value::as_str) {
+    match value.pointer(&names.pointer).and_then(scalar_text) {
         Some(name) if name == names.release => Channel::Release,
         Some(name) if name == names.beta => Channel::Beta,
         Some(name) if name == names.alpha => Channel::Alpha,
@@ -700,26 +1041,55 @@ fn availability(value: &Value, pointer: Option<&str>) -> Availability {
         .unwrap_or_default()
 }
 
+/// A reference or project id as route segments: itself when it is one safe segment, or its parts
+/// joined by `/` when the program declares segmented references.
+fn route_segments(program: &ProviderProgram, raw: &str) -> Option<String> {
+    match &program.routes.reference {
+        None => is_reference(raw).then(|| raw.to_owned()),
+        Some(shape) => {
+            let parts: Vec<&str> = raw.split(shape.separator.as_str()).collect();
+            (raw.len() <= REFERENCE_LIMIT
+                && parts.len() == usize::from(shape.segments)
+                && parts.iter().all(|part| is_reference(part)))
+            .then(|| parts.join("/"))
+        }
+    }
+}
+
+fn invalid_reference(program: &ProviderProgram, raw: &str) -> AdapterError {
+    specific(RuntimeError::InvalidReference {
+        provider: program.provider.name.clone(),
+        reference: raw.to_owned(),
+    })
+}
+
 fn required_route(route: Option<&str>) -> Result<&str, AdapterError> {
     route.ok_or_else(|| specific(RuntimeError::MissingRoute))
+}
+
+/// Text, or an integer's decimal digits, which is how catalogs that number their identifiers are
+/// read.
+fn scalar_text(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => Some(text.clone()),
+        Value::Number(number) if number.is_i64() || number.is_u64() => Some(number.to_string()),
+        _ => None,
+    }
 }
 
 fn required_text(value: &Value, pointer: Option<&str>) -> Result<String, AdapterError> {
     let pointer = pointer.ok_or_else(|| specific(RuntimeError::MissingMapping))?;
     value
         .pointer(pointer)
-        .ok_or_else(|| specific(RuntimeError::MissingPointer(pointer.to_owned())))?
-        .as_str()
-        .map(str::to_owned)
-        .ok_or_else(|| specific(RuntimeError::ExpectedText))
+        .ok_or_else(|| specific(RuntimeError::MissingPointer(pointer.to_owned())))
+        .and_then(|found| scalar_text(found).ok_or_else(|| specific(RuntimeError::ExpectedText)))
 }
 
 /// Text at `pointer`, or `None` when it is unmapped, absent, or not text.
 fn optional_text(value: &Value, pointer: Option<&str>) -> Option<String> {
     pointer
         .and_then(|pointer| value.pointer(pointer))
-        .and_then(Value::as_str)
-        .map(str::to_owned)
+        .and_then(scalar_text)
 }
 
 fn required_items<'v>(
@@ -747,37 +1117,61 @@ fn absent_as_empty<'v>(
     }
 }
 
-/// The strings in the mapped array; none when it is absent or null.
-fn strings(value: &Value, pointer: Option<&str>) -> Result<Vec<String>, AdapterError> {
-    required_items(value, pointer)
-        .or_else(|error| absent_as_empty(value, pointer, error))?
-        .iter()
-        .map(|item| {
-            item.as_str()
-                .map(str::to_owned)
-                .ok_or_else(|| specific(RuntimeError::ExpectedText))
-        })
-        .collect()
+/// The items `items` selects; none when they are absent or null.
+fn select_items<'v>(value: &'v Value, items: &Items) -> Result<Vec<&'v Value>, AdapterError> {
+    match items {
+        Items::Array(pointer) => Ok(required_items(value, Some(pointer))
+            .or_else(|error| absent_as_empty(value, Some(pointer), error))?
+            .iter()
+            .collect()),
+        Items::Single(single) => match value.pointer(&single.single) {
+            None | Some(Value::Null) => Ok(Vec::new()),
+            Some(object @ Value::Object(_)) => Ok(vec![object]),
+            Some(_) => Err(specific(RuntimeError::ExpectedObject)),
+        },
+    }
 }
 
-fn file(value: &Value, mapping: &FileMapping) -> Result<ReleaseFile, AdapterError> {
-    Ok(ReleaseFile {
-        url: required_text(value, mapping.url.as_deref())?,
-        name: required_text(value, mapping.name.as_deref())?,
-        size: mapping
-            .size
-            .as_deref()
-            .and_then(|pointer| value.pointer(pointer))
-            .and_then(Value::as_u64),
-        sha256: optional_text(value, mapping.sha256.as_deref()),
-        sha512: optional_text(value, mapping.sha512.as_deref()),
-        primary: mapping.primary.as_deref().is_none_or(|pointer| {
-            value
-                .pointer(pointer)
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-        }),
-    })
+/// The text values `selector` selects; none when they are absent or null.
+fn select_strings(value: &Value, selector: &Selector) -> Result<Vec<String>, AdapterError> {
+    match selector {
+        Selector::Pointer(pointer) => match value.pointer(pointer) {
+            None | Some(Value::Null) => Ok(Vec::new()),
+            Some(Value::Array(items)) => items
+                .iter()
+                .map(|item| scalar_text(item).ok_or_else(|| specific(RuntimeError::ExpectedText)))
+                .collect(),
+            Some(scalar) => scalar_text(scalar)
+                .map(|text| vec![text])
+                .ok_or_else(|| specific(RuntimeError::ExpectedText)),
+        },
+        Selector::Each(each) => selected(value, each),
+    }
+}
+
+/// The values inside each object `each` selects that meet its condition.
+fn selected(value: &Value, each: &EachSelector) -> Result<Vec<String>, AdapterError> {
+    let items = required_items(value, Some(&each.each))
+        .or_else(|error| absent_as_empty(value, Some(&each.each), error))?;
+    Ok(items
+        .iter()
+        .filter(|item| {
+            each.when.as_ref().is_none_or(|condition| {
+                item.pointer(&condition.pointer)
+                    .and_then(scalar_text)
+                    .is_some_and(|found| found == condition.equals)
+            })
+        })
+        .filter_map(|item| item.pointer(&each.value).and_then(scalar_text))
+        .collect())
+}
+
+/// The first text value `selector` selects, or `None`.
+fn select_text(value: &Value, selector: Option<&Selector>) -> Option<String> {
+    match selector? {
+        Selector::Pointer(pointer) => optional_text(value, Some(pointer)),
+        Selector::Each(each) => selected(value, each).ok()?.into_iter().next(),
+    }
 }
 
 /// Whether `raw` can be a slug, id or version number, and is safe as one route segment.
@@ -799,20 +1193,6 @@ fn interpolate(route: &str, name: &str, value: &str) -> Result<String, AdapterEr
     } else {
         Err(specific(RuntimeError::InvalidRouteTemplate))
     }
-}
-
-fn interpolate_game(
-    route: &str,
-    games: &BTreeMap<String, String>,
-    game: &str,
-) -> Result<String, AdapterError> {
-    if !route.contains("{game}") {
-        return Ok(route.to_owned());
-    }
-    let value = games
-        .get(game)
-        .ok_or_else(|| specific(RuntimeError::UnsupportedGame(game.to_owned())))?;
-    interpolate(route, "game", value)
 }
 
 fn specific(error: RuntimeError) -> AdapterError {
@@ -852,9 +1232,13 @@ fn direct_selection(provider: &str, raw: &str) -> Result<Selection, RuntimeError
         project: url.to_owned(),
     };
     let file = ReleaseFile {
-        url: url.to_owned(),
+        download: Download::Direct {
+            url: url.to_owned(),
+        },
         name: name.clone(),
         size: None,
+        md5: None,
+        sha1: None,
         sha256,
         sha512,
         primary: true,
@@ -904,6 +1288,8 @@ fn safe_file_name(name: &str) -> bool {
     !name.is_empty() && !name.starts_with('.') && !name.contains(['/', '\\', '\0'])
 }
 
+/// A pinned checksum fragment. Only strong digests may pin a URL: a pin is the user's guarantee
+/// that the bytes are the ones they chose.
 fn parse_checksum(fragment: &str) -> Result<(&str, String), RuntimeError> {
     let (algorithm, digest) = fragment
         .split_once('=')
@@ -931,18 +1317,31 @@ pub(super) enum RuntimeError {
     MissingMetadata,
     MissingRoute,
     MissingMapping,
+    MissingPage,
     MissingPointer(String),
     ExpectedArray,
+    ExpectedObject,
     ExpectedText,
-    InvalidReference { provider: String, reference: String },
+    InvalidReference {
+        provider: String,
+        reference: String,
+    },
+    InvalidDependency(String),
     InvalidRouteTemplate,
+    UnsupportedGame {
+        provider: String,
+        game: String,
+        edition: Option<String>,
+    },
+    ProjectNotForGame {
+        project: String,
+        game: String,
+    },
     UnsupportedReleaseProject,
     NoUpdateProtocol,
     InsecureUrl,
     InvalidUrl,
     InvalidChecksum,
-    InvalidUpdateProtocol,
-    UnsupportedGame(String),
 }
 
 impl fmt::Display for RuntimeError {
@@ -963,10 +1362,38 @@ impl fmt::Display for RuntimeError {
                     "{reference:?} is not a valid {provider} project or version reference"
                 );
             }
+            Self::InvalidDependency(dependency) => {
+                return write!(
+                    formatter,
+                    "provider program cannot read dependency {dependency:?}"
+                );
+            }
+            Self::UnsupportedGame {
+                provider,
+                game,
+                edition: Some(edition),
+            } => {
+                return write!(
+                    formatter,
+                    "{provider} does not serve the {edition} edition of {game}"
+                );
+            }
+            Self::UnsupportedGame {
+                provider,
+                game,
+                edition: None,
+            } => {
+                return write!(formatter, "{provider} does not serve {game}");
+            }
+            Self::ProjectNotForGame { project, game } => {
+                return write!(formatter, "{project} is not listed for {game}");
+            }
             Self::MissingMetadata => "provider program is missing required metadata",
             Self::MissingRoute => "provider program has no route for this operation",
             Self::MissingMapping => "provider program has no mapping for a required record field",
+            Self::MissingPage => "provider program has no page to send the user to for this file",
             Self::ExpectedArray => "provider program expected a JSON array in the response",
+            Self::ExpectedObject => "provider program expected a JSON object in the response",
             Self::ExpectedText => "provider program expected a JSON string in the response",
             Self::InvalidRouteTemplate => "provider program route template is invalid",
             Self::UnsupportedReleaseProject => {
@@ -976,10 +1403,6 @@ impl fmt::Display for RuntimeError {
             Self::InsecureUrl => "provider program refused an insecure URL; only https is allowed",
             Self::InvalidUrl => "provider program produced an invalid URL",
             Self::InvalidChecksum => "provider program found an invalid checksum",
-            Self::InvalidUpdateProtocol => "provider program has an invalid update protocol",
-            Self::UnsupportedGame(game) => {
-                return write!(formatter, "provider program does not support game {game:?}");
-            }
         };
         formatter.write_str(message)
     }
@@ -1003,6 +1426,18 @@ mod tests {
             "https://example.test/%ff.jar",
         ] {
             assert!(direct_selection("url", url).is_err(), "{url}");
+        }
+    }
+
+    #[test]
+    fn direct_urls_are_pinned_only_by_strong_digests() {
+        for weak in [
+            "sha1=".to_owned() + &"a".repeat(40),
+            "md5=".to_owned() + &"a".repeat(32),
+        ] {
+            assert!(
+                direct_selection("url", &format!("https://example.test/a.jar#{weak}")).is_err()
+            );
         }
     }
 }

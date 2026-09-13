@@ -177,6 +177,8 @@ pub(crate) fn open(
         game: Some(instance.plan().id.clone()),
         target: Some(LockedTarget {
             game_version: instance.config().game_version.clone(),
+            edition: instance.config().edition.clone(),
+            storefront: instance.config().storefront.clone(),
             loader: target.loader.clone(),
             loader_version: target.loader_version.clone(),
             side: target.side,
@@ -220,6 +222,23 @@ pub(crate) fn stage(
                 instance.plan().id
             ),
         ));
+    }
+    let config = instance.config();
+    for (kind, declared, installed) in [
+        ("edition", &plan.target.edition, &config.edition),
+        ("storefront", &plan.target.storefront, &config.storefront),
+    ] {
+        if let Some(declared) = declared
+            && installed.as_ref() != Some(declared)
+        {
+            staged.blockers.push(PackIssue::new(
+                IssueCode::UnsupportedTarget,
+                format!(
+                    "the pack targets {kind} {declared}, but this instance's {kind} is {}",
+                    installed.as_deref().unwrap_or("not set")
+                ),
+            ));
+        }
     }
     verify_environment(instance, &plan.environment, &mut staged.blockers)?;
     match &plan.lockfile {
@@ -764,6 +783,8 @@ impl<'a> Fetcher<'a> {
             instance,
             target: Target {
                 game: instance.plan().id.clone(),
+                edition: instance.config().edition.clone(),
+                storefront: instance.config().storefront.clone(),
                 loader: target.loader.clone(),
                 provides: instance.target_provides(target),
                 loader_version: target.loader_version.clone(),
@@ -988,4 +1009,6 @@ fn matches_hashes(file: &ReleaseFile, requirement: &PackRequirement) -> bool {
     let equal = |published: Option<&String>, pinned: Option<&String>| matches!((published, pinned), (Some(published), Some(pinned)) if published.eq_ignore_ascii_case(pinned));
     equal(file.sha512.as_ref(), requirement.hashes.get("sha512"))
         || equal(file.sha256.as_ref(), requirement.hashes.get("sha256"))
+        || equal(file.sha1.as_ref(), requirement.hashes.get("sha1"))
+        || equal(file.md5.as_ref(), requirement.hashes.get("md5"))
 }

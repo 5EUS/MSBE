@@ -558,6 +558,8 @@ mod tests {
             name: "Example".to_owned(),
             version: "1.0.0".to_owned(),
             fingerprint: None,
+            editions: Vec::new(),
+            storefronts: Vec::new(),
             environment: Vec::new(),
             extensions: Vec::new(),
             deploy: Deploy::default(),
@@ -570,6 +572,8 @@ mod tests {
                     path: "mods".to_owned(),
                 }],
                 sides: vec![Side::Client],
+                editions: Vec::new(),
+                storefronts: Vec::new(),
             }],
             components: Vec::new(),
             steps: vec![Step::Place(PlaceStep {
@@ -600,6 +604,8 @@ mod tests {
             bootstrap: "none".to_owned(),
             targets: Vec::new(),
             sides: vec![Side::Client],
+            editions: Vec::new(),
+            storefronts: Vec::new(),
         });
         if let Some(Step::Place(place)) = plan.steps.first_mut() {
             place.loaders = vec!["loader".to_owned()];

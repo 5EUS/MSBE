@@ -9,7 +9,7 @@ use crate::{
     AcquiredArtifact, AcquisitionError, ArtifactDescriptor, DOWNLOAD_LIMIT, EndpointError,
     HttpClient, HttpError, ManifestError, PackCodecRegistration, Provider, Target,
     WasmPackCodecRegistration, acquire,
-    model::{Project, Release, ReleaseFile, Request, SearchResult},
+    model::{Download, Project, Release, ReleaseFile, Request, SearchResult},
 };
 
 /// Builds an adapter from its validated manifest.
@@ -92,7 +92,8 @@ pub trait Adapter: fmt::Debug {
     ///
     /// # Errors
     ///
-    /// Returns [`AdapterError`] for an insecure URL or unsafe file name, a transfer failure, or a
+    /// Returns [`AdapterError::ActionRequired`] for a file MSBE may not download itself, and
+    /// otherwise [`AdapterError`] for an insecure URL or unsafe file name, a transfer failure, or a
     /// mismatch. A file that fails verification is left in `dir`, which the caller discards.
     fn acquire(
         &self,
@@ -100,11 +101,19 @@ pub trait Adapter: fmt::Debug {
         file: &ReleaseFile,
         dir: &Path,
     ) -> Result<AcquiredArtifact, AdapterError> {
+        let Download::Direct { url } = &file.download else {
+            return Err(AdapterError::ActionRequired {
+                file: file.name.clone(),
+                download: Box::new(file.download.clone()),
+            });
+        };
         let descriptor = ArtifactDescriptor {
-            url: file.url.clone(),
+            url: url.clone(),
             file_name: file.name.clone(),
             limit: file.size.unwrap_or(DOWNLOAD_LIMIT),
             size: file.size,
+            md5: file.md5.clone(),
+            sha1: file.sha1.clone(),
             sha256: file.sha256.clone(),
             sha512: file.sha512.clone(),
         };
@@ -143,13 +152,23 @@ pub trait Search {
 }
 
 /// The project and release metadata dependency resolution walks.
+///
+/// Every operation takes the target, because a catalog that serves several games may address a
+/// project only within one of them.
 pub trait Releases {
-    /// Fetches a project by any reference the provider accepts, such as a slug or an id.
+    /// Fetches a project of `target`'s game by any reference the provider accepts, such as a slug
+    /// or an id.
     ///
     /// # Errors
     ///
-    /// Returns [`AdapterError`] for a malformed reference, a request failure, or bad metadata.
-    fn project(&self, http: &dyn HttpClient, reference: &str) -> Result<Project, AdapterError>;
+    /// Returns [`AdapterError`] for a malformed reference, a game the provider does not serve, a
+    /// request failure, or bad metadata.
+    fn project(
+        &self,
+        http: &dyn HttpClient,
+        reference: &str,
+        target: &Target,
+    ) -> Result<Project, AdapterError>;
 
     /// The releases of `project`, by its stable id, that are compatible with `target`, the most
     /// preferred first.
@@ -173,6 +192,7 @@ pub trait Releases {
         &self,
         http: &dyn HttpClient,
         release: &str,
+        target: &Target,
     ) -> Result<PackageId, AdapterError>;
 }
 
@@ -223,6 +243,14 @@ pub enum AdapterError {
     /// A file could not be acquired and verified.
     #[error(transparent)]
     Acquisition(#[from] AcquisitionError),
+    /// MSBE may not download a file itself; the user has to.
+    #[error("{file} cannot be downloaded by MSBE: {download}")]
+    ActionRequired {
+        /// The file's name.
+        file: String,
+        /// How the user can obtain it.
+        download: Box<Download>,
+    },
     /// A release has no files to install.
     #[error("release {release} of {project} has no files")]
     NoFiles {

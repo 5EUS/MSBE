@@ -30,9 +30,9 @@ normal, well-typed outcome — not an error and not an invitation to work around
 | Provider               | Auth                               | Programmatic download      | Notable constraints                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | ---------------------- | ---------------------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Modrinth**           | none for public; token for private | ✓ open API                 | **Implemented (M1).** Real dependency graph. Requires an identifying User-Agent; 300 requests a minute, surfaced as `RateLimited` with the reset time. Downloads are https-only and verified against the published size and SHA-512 before ingest. Updates are found with the bulk hash endpoints (`POST /version_files` and `/version_files/update`), at most four requests however many mods are installed. A mod stays on its release channel or moves to a more stable one, and never goes to an older version unless the installed one no longer supports the instance. |
-| **Thunderstore**       | none                               | ✓                          | Clean SemVer, clean package format.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| **CurseForge**         | API key required                   | ✓ _conditionally_          | **Must honour `allowModDistribution: false`.** When false, third-party download is forbidden — return `Unavailable` and send the user to the mod page. Non-negotiable; this flag is why several managers got access revoked.                                                                                                                                                                                                                                                                                                                                                 |
-| **Nexus Mods**         | personal API key / OAuth           | premium: ✓ direct. free: ✗ | Free accounts have no programmatic file download. The _supported_ path is the `nxm://` handler (see below). Rate limits published per-key; honour them and the `X-RL-*` response headers.                                                                                                                                                                                                                                                                                                                                                                                    |
+| **Thunderstore**       | none                               | ✓                          | **Implemented as a program.** Packages are `Namespace-Name`, listed per community; `[games]` maps plan ids to communities, and a package not listed for the instance's game is refused. The package API carries only the latest version with its dependencies, so that is the release offered, and `releases-v1` updates to it by SemVer. No digests are published: downloads are checked for HTTPS and a safe name only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| **CurseForge**         | API key required                   | ✓ _conditionally_          | **Must honour `allowModDistribution: false`.** When false, third-party download is forbidden — return `Unavailable` and send the user to the mod page. Non-negotiable; this flag is why several managers got access revoked. A program maps the flag with `mappings.release.file.distributable`; a file flagged off, or published with no download URL, is typed as a user download at its `[pages]` page and never transferred. Its SHA-1 and MD5 digests (`hashes[].algo` 1 and 2) are verified.                                                                                                                                                                                                                                                                                                                                                 |
+| **Nexus Mods**         | personal API key / OAuth           | premium: ✓ direct. free: ✗ | Free accounts have no programmatic file download. The _supported_ path is the `nxm://` handler (see below). Rate limits published per-key; honour them and the `X-RL-*` response headers. A program selects `browser_assisted` acquisition with `scheme = "nxm"`, and names each game's domain in `[games]`, per edition where Nexus lists editions as separate games.                                                                                                                                                                                                                                                                                                                                                                                    |
 | **GitHub Releases**    | optional token                     | ✓                          | Watch unauthenticated rate limits.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | **CKAN repos**         | none                               | ✓                          | Consume the existing index; do not fork it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | **Steam Workshop**     | Steam account                      | SteamCMD or import         | **Planned.** MSBE may invoke a user-installed SteamCMD to acquire content the user's account is entitled to receive, or ingest a local file, archive, or directory obtained elsewhere. It will not implement Steam-client, depot, manifest, or authentication protocols itself.                                                                                                                                                                                                                                                                                              |
@@ -58,8 +58,8 @@ struct ProviderPolicy {
 
 ## 6.3 Provider manifests
 
-Provider definitions are versioned TOML documents. MSBE ships the direct URL and Modrinth
-providers as provider programs (§6.4), whose manifests pass through the same validated catalog
+Provider definitions are versioned TOML documents. MSBE ships the direct URL, Modrinth and
+Thunderstore providers as provider programs (§6.4), whose manifests pass through the same validated catalog
 that will consume signed registry definitions. A manifest declares identity, source recognition, metadata origin,
 policy, and an acquisition primitive; it cannot execute code, alter HTTP transport rules, or
 weaken policy enforcement.
@@ -87,11 +87,19 @@ ack_required = false
 ```
 
 The schema rejects unknown fields, duplicate provider ids, empty or non-ASCII source prefixes,
-and metadata endpoints that are not HTTPS. The acquisition vocabulary is closed. In M1 it
-contains only `direct_https`: a reviewed adapter must still supply an HTTPS artifact URL and
-the applicable hash/size validation. Future primitives such as `browser_assisted`,
-`local_import`, and `steamcmd` require a runtime implementation and policy review before a
-manifest can select them.
+and metadata endpoints that are not HTTPS. The acquisition vocabulary is closed, and every
+release file carries the `Download` it allows:
+
+| `type`             | What MSBE does                                                                                                                                                                          |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `direct_https`     | downloads over HTTPS and verifies every published size and digest. A file its author flags as not distributable, or published with no download URL, is still a user download.            |
+| `user_action`      | never downloads. Each file names the page to fetch it from; the user adds the saved file.                                                                                               |
+| `browser_assisted` | as `user_action`, and names the URI `scheme` the page's mod-manager button hands over, such as `nxm`. Capturing and redeeming that link (§6.6) is not implemented yet.                  |
+
+`Adapter::acquire` refuses a file that is not a direct download with `AdapterError::ActionRequired`,
+which names the page, before any transfer: the CLI exits with the policy code, and a pack import
+reports `user_action_required`. `local_import` and `steamcmd` remain future primitives that
+require a runtime implementation and policy review before a manifest can select them.
 
 The schema above is the M1 subset. The target model is a **provider program**: a versioned TOML
 document interpreted by a reviewed, fail-closed runtime. The program is the default way to add a
@@ -106,16 +114,18 @@ configured trust allowlist and its digest is not revoked. Unknown fields, unsupp
 digest mismatches, untrusted signers, and revoked programs fail closed before an adapter exists.
 
 The runtime vocabulary is closed. `direct-url-v1` parses HTTPS URLs and optional SHA-256/SHA-512
-fragments. `catalog-v1` fills fixed slots with endpoint-relative routes, named request parameters,
-and bounded JSON pointers into responses, and serves up to five capabilities:
+fragments; a pin is the user's guarantee about the bytes, so a weaker digest cannot pin a URL.
+`catalog-v1` fills fixed slots with the games it serves, translations of target facts,
+endpoint-relative routes and web pages, named request parameters, and bounded JSON pointers into
+responses, and serves up to five capabilities:
 
 | Capability        | What the runtime does                                                                                                                                   |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `search`          | sends the words, a limit lowered to the catalog's `maximum`, and facet groups built from the target; drops hits whose side availability rules them out |
 | `project`         | fetches a project by slug or ID, with its client and server availability                                                                                |
-| `releases`        | sends target-derived query parameters, keeps releases for the game version, a target loader, and the loader version, and orders them                   |
+| `releases`        | sends target-derived query parameters, keeps releases for the game version, a target loader, the loader version, the edition and the storefront, and orders them newest first or by SemVer                 |
 | `release-project` | finds the project a release belongs to, for a dependency that names only a release                                                                     |
-| `updates`         | runs a reviewed update protocol; `hash-lookup-v1` looks installed files up by hash and keeps each on its release channel or a more stable one           |
+| `updates`         | runs a reviewed update protocol: `hash-lookup-v1` looks installed files up by hash, `releases-v1` lists each installed project's releases; both keep a file on its release channel or a more stable one           |
 
 A program cannot form arbitrary URLs, run scripts, or select a transport. Native registrations must
 state a non-empty exception reason; they remain reserved for protocol semantics the reviewed
@@ -160,8 +170,79 @@ channel         = { pointer = "/version_type", release = "release", beta = "beta
 ```
 
 Validation refuses a program that declares a capability without the routes and mappings it needs,
-a section without its capability, a route whose placeholders are not exactly the one it takes, an
-unknown facet placeholder, or a parameter with no single value.
+a section without its capability, a route whose placeholders are not exactly the one it takes and
+at most one `{game}`, an unknown facet placeholder, a parameter with no single value, a catalog
+with no `[games]`, a game or translation that is not a safe identifier, a distribution flag its
+policy does not respect, a file MSBE may not download with no page to send the user to, and
+`releases-v1` over releases in the catalog's own order.
+
+### Target facts and catalogs that serve many games
+
+A program never sends or matches MSBE's spelling of a fact by accident; every fact passes through
+it:
+
+- **Games.** `[games]` maps each plan id the catalog serves to the catalog's identifier for it,
+  optionally by edition (`game = { id = "2", editions = { original = "1" } }`). A target for any
+  other game, or an edition with no identifier, is refused before a request is made. `{game}` may
+  appear once in any route or page, `game` is a target fact for parameters and facets, and
+  `mappings.project.games` refuses a project the catalog does not list for the target's game.
+- **Target facts.** `game`, `game-version`, `loaders` (the loader and what it provides),
+  `edition`, and `storefront`. A target without a fact sends nothing for it and accepts any release,
+  so a game version is optional everywhere.
+- **Translation.** `[translate]` gives the catalog's spelling of game versions, loaders, editions
+  and storefronts. A fact with a table is known to the catalog only by the values it lists: another
+  value is never sent and matches no release. A parameter's own `values` replace the table for that
+  parameter, for catalogs whose requests and responses spell a value differently, such as a loader
+  sent as `4` and listed as `Fabric`.
+- **Encodings.** A parameter holds a `json-array` (the default), `comma`-separated values, one
+  `repeated` pair per value, or a `single` value. A `single` parameter is left out, not truncated,
+  when the target has several values, and the runtime filters the answer instead.
+- **Mappings.** A selector is a pointer, or `{ each, value, when }` for a value inside each object of
+  an array, such as the digest whose `algo` is `1`. Integers are read as their decimal text.
+  `mappings.releases` and `files` accept `{ single = pointer }` for one object, such as a listing
+  that is one package or a release that is its own file. `dependency.kinds` names the catalog's
+  relationship kinds, `dependency.text` reads `Namespace-Name-1.0.0` strings, `routes.reference`
+  splits a reference such as `Namespace-Name` into route segments, and `file.extension` names
+  files a catalog serves without an extension.
+- **Digests.** Files carry `md5`, `sha1`, `sha256` and `sha512` selectors, and every published
+  digest is verified. SHA-1 and MD5 catch a corrupt or wrong file, not a deliberately colliding
+  one; content identity stays SHA-256. A `hash-lookup-v1` program on a weak algorithm records that
+  digest in provenance so installed files can be looked up again.
+- **Updates.** `releases-v1` needs `[releases] order = "newest-first"` or `"semver"`. SemVer
+  ignores a leading `v`, and releases whose number is not a version follow the rest by date. A
+  catalog that no longer lists the installed release is compared by version number.
+
+An excerpt of the Thunderstore program (`extensions/providers/thunderstore/program.toml`):
+
+```toml
+[games]
+valheim = "valheim"
+
+[routes]
+reference = { separator = "-", segments = 2 }
+project   = "/api/experimental/package/{reference}/"
+releases  = "/api/experimental/package/{project}/"
+
+[releases]
+order = "semver"
+
+[updates]
+type = "releases-v1"
+
+[mappings]
+releases = { single = "/latest" }
+
+[mappings.project]
+games = { each = "/community_listings", value = "/community" }
+
+[mappings.release.file]
+url       = "/download_url"
+name      = "/full_name"
+extension = "zip"
+
+[mappings.release.dependency]
+text = { separator = "-" }
+```
 
 The generic runtime owns HTTPS-only URL resolution, endpoint-relative route expansion, fixed
 request methods, response limits, pagination bounds, JSON-pointer extraction, scalar and enum
@@ -176,8 +257,8 @@ runtime to clients. An untrusted or unsupported program is visible for diagnosis
 network requests.
 
 The M1 runtime resolves every recognized source through a fail-closed reviewed-adapter registry.
-MSBE ships two provider programs, `url` on `direct-url-v1` and `modrinth` on `catalog-v1`, and
-one native exception, `local`, which ingests files the user selects. Shipped programs are trusted
+MSBE ships three provider programs, `url` on `direct-url-v1`, and `modrinth` and `thunderstore` on
+`catalog-v1`, and one native exception, `local`, which ingests files the user selects. Shipped programs are trusted
 as part of the build and pinned in native export lockfiles by their canonical digest. M1 has no credential or
 persisted-acknowledgement workflow, so providers declaring `requires_auth = true` or
 `ack_required = true` are refused with an explicit unsupported-workflow error. This permits
@@ -221,11 +302,13 @@ provider behavior separate:
 | `msbe-providers`     | reviewed runtime implementations, trusted program loading, codec registrations, and the shared fail-closed policy gate               |
 | `msbe-provider-<id>` | a provider MSBE ships: a program with its overlay, codecs and test fixtures, or a native exception with its justification for code  |
 
-Adding a declarative provider is a signed provider program; shipping one with MSBE is a
-`msbe-provider-<id>` crate exporting a `ProgramRegistration` and one line in `BUILTIN_PROGRAMS`.
-Adding a native provider is a new `msbe-provider-<id>` crate, one reviewed registration, and an
-explicit reason it cannot use an existing runtime. The CLI, daemon, and `msbe-core` never name a provider. Every runtime or native
-adapter must obey these boundaries:
+Adding a declarative provider is a signed provider program; shipping one with MSBE is its program
+under `extensions/providers/<id>/` and one `ProgramRegistration` in `BUILTIN_PROGRAMS`. Adding a
+native provider is a new `msbe-provider-<id>` crate, one reviewed registration, and an explicit
+reason it cannot use an existing runtime. `crates/msbe-providers/src/builtin.rs`, which lists what
+the build ships, is the one file under `crates/` that may name a provider, game, storefront, loader
+or pack format; `scripts/development/check-architecture.sh` fails CI when any other file does,
+tests aside. Every runtime or native adapter must obey these boundaries:
 
 1. **Registration-only entry.** The crate exports one `Registration`: its provider id,
    manifest, overlay entries and constructor. `Providers` checks the manifest's policy before
@@ -234,20 +317,22 @@ adapter must obey these boundaries:
 2. **Neutral records at the boundary.** Requests, projects, releases, files, dependencies,
    search results and update checks cross the trait as `msbe_provider_api::model` types. Wire
    records stay private to the adapter's crate.
-3. **One compatibility input.** Search, releases and updates accept the shared `Target`
-   `{ game_version, loader, provides, loader_version, side }`. Missing side metadata is
-   incompatible; loader capabilities are explicit rather than inferred.
+3. **One compatibility input.** Search, projects, releases and updates accept the shared `Target`
+   `{ game, edition, storefront, game_version, loader, provides, loader_version, side }`, every
+   fact in MSBE's spelling; only `game`, `loader` and `side` are always present. Missing side
+   metadata is incompatible; loader capabilities are explicit rather than inferred.
 4. **Bounded metadata.** API calls use `JsonEndpoint` with endpoint-relative paths and a fixed
    response limit. Adapters do not construct URLs from untrusted identifiers or issue ad-hoc
    HTTP requests.
 5. **Verified acquisition.** The default `Adapter::acquire` runs the shared acquisition service,
    which owns create-new streaming transfer, HTTPS-only URLs, safe output names, published size
-   checks, and SHA-256/SHA-512 verification. The adapter supplies every integrity value it has
-   in its release files.
+   checks, and MD5, SHA-1, SHA-256 and SHA-512 verification. The adapter supplies every integrity
+   value it has in its release files, and a file MSBE may not download fails as `ActionRequired`
+   before any transfer.
 6. **Capabilities, not stubs.** `as_search`, `as_releases` and `as_updates` return `None` unless
    the provider supports them, so a missing capability is known before a command starts.
-   Update protocols, such as the bulk hash lookups and release-channel policy of
-   `hash-lookup-v1`, stay behind the capability they implement.
+   Update protocols, such as the bulk hash lookups of `hash-lookup-v1` and the per-project
+   listings of `releases-v1`, stay behind the capability they implement.
 7. **Shared resolution.** An adapter that implements `Releases` gets dependency resolution, the
    overlay, installed-release pinning and PubGrub's explanations from `resolve::Resolver`; it
    never walks a dependency graph itself. A requirement on one provider's project can be met by
@@ -350,6 +435,10 @@ sequenceDiagram
 MSBE registers the protocol handler on all three platforms and catches links from
 **the integrated browser or the user's system browser alike** — a user who prefers
 Firefox loses nothing.
+
+**Status: planned.** A program can already select `browser_assisted` acquisition with
+`scheme = "nxm"`, so every file is typed as needing the user and names its page (§6.3). Registering
+the handler and redeeming links remain, and depend on the credential workflow M1 refuses.
 
 ## 6.7 Assisted download queue (the large-modpack case)
 

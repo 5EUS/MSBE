@@ -30,7 +30,7 @@ use msbe_fsops::{
     Applier, Backend, Capabilities, Digest, Journal, Observer, Operation, Prior, Record, RelPath,
     Store, TxnId, atomic,
 };
-use msbe_plan_schema::{Component, Plan, Side};
+use msbe_plan_schema::{Component, InstallationError, Plan, Side};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
 
@@ -168,6 +168,12 @@ pub struct InstanceConfig {
     /// The game version, used to choose compatible versions from providers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub game_version: Option<String>,
+    /// The installation's edition, one the plan declares.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edition: Option<String>,
+    /// The storefront the installation came from, one the plan declares.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storefront: Option<String>,
     /// The store shard, on the same volume as `root` where possible.
     pub store: PathBuf,
 }
@@ -600,6 +606,12 @@ pub struct TransformId {
 pub struct LockedTarget {
     /// Game version used for candidate filtering.
     pub game_version: Option<String>,
+    /// Installation edition used for candidate filtering, when the instance names one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edition: Option<String>,
+    /// Installation storefront used for candidate filtering, when the instance names one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storefront: Option<String>,
     /// Selected loader identifier.
     pub loader: String,
     /// Selected loader version, when known.
@@ -753,6 +765,10 @@ pub struct NewInstance<'a> {
     pub side: Side,
     /// The game version, which providers need to choose compatible versions.
     pub game_version: Option<&'a str>,
+    /// The installation's edition, as declared by the plan.
+    pub edition: Option<&'a str>,
+    /// The storefront the installation came from, as declared by the plan.
+    pub storefront: Option<&'a str>,
     /// An explicit store location. Defaults to `.msbe/store` beside the game directory.
     pub store: Option<&'a Path>,
 }
@@ -926,6 +942,10 @@ pub struct Status {
     pub loader: String,
     /// The game version providers match, if set.
     pub game_version: Option<String>,
+    /// The installation's edition, if set.
+    pub edition: Option<String>,
+    /// The installation's storefront, if set.
+    pub storefront: Option<String>,
     /// The store shard.
     pub store: PathBuf,
     /// What the store shard can do in the game directory.
@@ -990,6 +1010,7 @@ impl Instance {
                 side: new.side,
             });
         }
+        plan.check_installation(loader, new.edition, new.storefront)?;
         let store = match new.store {
             Some(path) => std::path::absolute(path).map_err(io_error("resolve store", path))?,
             None => default_store(&root)?,
@@ -1007,6 +1028,8 @@ impl Instance {
             loader_version: new.loader_version.map(str::to_owned),
             side: new.side,
             game_version: new.game_version.map(str::to_owned),
+            edition: new.edition.map(str::to_owned),
+            storefront: new.storefront.map(str::to_owned),
             store,
         };
         write_toml(&dir.join("instance.toml"), &config)?;
@@ -1241,6 +1264,8 @@ impl Instance {
             extensions,
             target: LockedTarget {
                 game_version: self.config.game_version.clone(),
+                edition: self.config.edition.clone(),
+                storefront: self.config.storefront.clone(),
                 loader: target.loader,
                 loader_version: target.loader_version,
                 side: target.side,
@@ -2730,6 +2755,8 @@ impl Instance {
             plan_version: self.plan.version.clone(),
             loader: self.config.loader.clone(),
             game_version: self.config.game_version.clone(),
+            edition: self.config.edition.clone(),
+            storefront: self.config.storefront.clone(),
             store: self.config.store.clone(),
             capabilities,
             backend: capabilities.choose(&Backend::DEFAULT_CHAIN),
@@ -2748,6 +2775,29 @@ impl Instance {
     /// Returns an error if `instance.toml` cannot be written.
     pub fn set_game_version(&mut self, version: Option<&str>) -> Result<(), InstanceError> {
         self.config.game_version = version.map(str::to_owned);
+        write_toml(&self.dir.join("instance.toml"), &self.config)
+    }
+
+    /// Records the installation's edition and storefront, or clears either.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the plan does not declare a value, the configured loader does not
+    /// support it, or `instance.toml` cannot be written.
+    pub fn set_installation(
+        &mut self,
+        edition: Option<&str>,
+        storefront: Option<&str>,
+    ) -> Result<(), InstanceError> {
+        let loader = self
+            .plan
+            .loaders
+            .iter()
+            .find(|loader| loader.id == self.config.loader)
+            .ok_or_else(|| ResolveError::UnknownLoader(self.config.loader.clone()))?;
+        self.plan.check_installation(loader, edition, storefront)?;
+        self.config.edition = edition.map(str::to_owned);
+        self.config.storefront = storefront.map(str::to_owned);
         write_toml(&self.dir.join("instance.toml"), &self.config)
     }
 
@@ -2826,6 +2876,11 @@ impl Instance {
                 side: target.side,
             });
         }
+        self.plan.check_installation(
+            loader,
+            self.config.edition.as_deref(),
+            self.config.storefront.as_deref(),
+        )?;
         Ok(())
     }
 
@@ -3112,6 +3167,10 @@ pub enum InstanceError {
         /// The instance root.
         root: PathBuf,
     },
+    /// The installation's edition or storefront is not one the plan and loader accept.
+    #[error(transparent)]
+    Installation(#[from] InstallationError),
+
     /// The selected loader does not support the requested game side.
     #[error("loader {loader:?} does not support the {side:?} target")]
     UnsupportedSide {
@@ -3471,7 +3530,9 @@ mod tests {
     use msbe_fsops::{
         Backend, Checkpoint, Error as FsError, NoopObserver, Observer, Operation, RelPath,
     };
-    use msbe_plan_schema::{EditJsonStep, EnvironmentInput, InstallationFingerprint, Side, Step};
+    use msbe_plan_schema::{
+        EditJsonStep, EnvironmentInput, InstallationError, InstallationFingerprint, Side, Step,
+    };
     use tempfile::TempDir;
 
     use super::{
@@ -3542,6 +3603,8 @@ flatten = true
                     loader_version: None,
                     side: Side::Client,
                     game_version: Some("1.0"),
+                    edition: None,
+                    storefront: None,
                     store: None,
                 },
             )
@@ -3672,6 +3735,61 @@ flatten = true
         );
         assert!(!fixture.game.join("mods/alpha.bin").exists());
         assert!(instance.deployed_profile().is_none());
+    }
+
+    #[test]
+    fn editions_and_storefronts_are_checked_against_the_plan_and_locked() {
+        let plan = PLAN.replacen(
+            "[[loaders]]\n",
+            "editions = [{ id = \"original\", name = \"Original\" }, { id = \"remaster\", name = \"Remaster\" }]\n\
+             storefronts = [{ id = \"sandboxed\", name = \"Sandboxed\" }]\n\n[[loaders]]\neditions = [\"remaster\"]\n",
+            1,
+        );
+        let fixture = Fixture::with_plan(&plan);
+        let refused = Instance::create(
+            &fixture.home,
+            &super::NewInstance {
+                name: &name("demo"),
+                root: &fixture.game,
+                plan: &fixture.plan,
+                loader: "loader",
+                loader_version: None,
+                side: Side::Client,
+                game_version: None,
+                edition: Some("original"),
+                storefront: None,
+                store: None,
+            },
+        );
+        assert!(
+            matches!(
+                refused,
+                Err(InstanceError::Installation(
+                    InstallationError::Unsupported { .. }
+                ))
+            ),
+            "{refused:?}"
+        );
+
+        let mut instance = fixture.create();
+        assert!(matches!(
+            instance.set_installation(None, Some("elsewhere")),
+            Err(InstanceError::Installation(
+                InstallationError::Unknown { .. }
+            ))
+        ));
+        instance
+            .set_installation(Some("remaster"), Some("sandboxed"))
+            .unwrap();
+        let reopened = fixture.reopen();
+        let status = reopened.status().unwrap();
+        assert_eq!(
+            (status.edition.as_deref(), status.storefront.as_deref()),
+            (Some("remaster"), Some("sandboxed"))
+        );
+        let lockfile = reopened.write_lockfile(&name("default")).unwrap();
+        assert_eq!(lockfile.target.edition.as_deref(), Some("remaster"));
+        assert_eq!(lockfile.target.storefront.as_deref(), Some("sandboxed"));
     }
 
     #[test]
@@ -3844,6 +3962,8 @@ extension = "installer"
                 loader_version: None,
                 side: Side::Client,
                 game_version: None,
+                edition: None,
+                storefront: None,
                 store: None,
             },
         );
@@ -3939,6 +4059,8 @@ extension = "installer"
             bootstrap: "none".to_owned(),
             targets: Vec::new(),
             sides: vec![Side::Client],
+            editions: Vec::new(),
+            storefronts: Vec::new(),
         });
         let absent = "absent.json".to_owned();
         instance.plan.fingerprint = Some(InstallationFingerprint {

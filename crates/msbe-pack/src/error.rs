@@ -154,6 +154,7 @@ impl PackError {
             Self::Cancelled => IssueCode::Cancelled,
             Self::Registry(error) => registry_code(error),
             Self::Codec(error) => codec_code(error),
+            Self::Adapter(AdapterError::ActionRequired { .. }) => IssueCode::UserActionRequired,
             Self::Adapter(_) | Self::Http(_) => IssueCode::MissingBlob,
             Self::Archive(_) => IssueCode::LimitExceeded,
             Self::Instance(_) | Self::Fs(_) | Self::Io { .. } => IssueCode::HostFailure,

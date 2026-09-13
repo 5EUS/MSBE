@@ -11,7 +11,7 @@ use msbe_plan_schema::Side;
 use msbe_provider_api::{
     AcquisitionError, Adapter, AdapterError, HttpClient, HttpError, Overlay, PackageId, Provenance,
     Target, UpdateCheck, hex,
-    model::{Channel, Request},
+    model::{Channel, Download, Request},
     resolve::{
         InstallPlan, InstalledRelease, Only, ProjectRequest, Requirement, ResolveError, Resolver,
         Substitution,
@@ -20,7 +20,7 @@ use msbe_provider_api::{
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha512};
 
-use crate::{Providers, registry::MODRINTH};
+use crate::{Providers, builtin::MODRINTH};
 
 const ID: &str = "modrinth";
 /// The production API base, which the fake answers for.
@@ -109,6 +109,8 @@ fn contents(file: &str) -> Vec<u8> {
 fn target() -> Target {
     Target {
         game: "minecraft".to_owned(),
+        edition: None,
+        storefront: None,
         loader: "fabric".to_owned(),
         provides: Vec::new(),
         loader_version: None,
@@ -386,7 +388,8 @@ fn downloads_are_verified_before_they_are_trusted() {
     if let Some(last) = tampered.last_mut() {
         *last ^= 1;
     }
-    http.files.insert(file.url.clone(), tampered);
+    let url = file.download.url().unwrap().to_owned();
+    http.files.insert(url.clone(), tampered);
     let bad = tempfile::tempdir().unwrap();
     assert!(matches!(
         modrinth.acquire(&http, &file, bad.path()),
@@ -396,7 +399,9 @@ fn downloads_are_verified_before_they_are_trusted() {
     ));
 
     let mut insecure = file.clone();
-    insecure.url = insecure.url.replacen("https://", "http://", 1);
+    insecure.download = Download::Direct {
+        url: url.replacen("https://", "http://", 1),
+    };
     assert!(matches!(
         modrinth.acquire(&http, &insecure, bad.path()),
         Err(AdapterError::Acquisition(AcquisitionError::InsecureUrl(_)))

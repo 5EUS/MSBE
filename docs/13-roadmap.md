@@ -119,8 +119,9 @@ and backtracking. Reading Fabric/NeoForge version ranges from artifacts remains 
 
 Where the domain gets hard, still without touching credentials.
 
-- **Target pre-filter** — **implemented**: `{ game_version, loader, loader_version, side }`
-  is applied before version selection, with loader-level `provides` so a Quilt target accepts
+- **Target pre-filter** — **implemented**: `{ game, edition, storefront, game_version, loader,
+  loader_version, side }` is applied before version selection, every fact optional but the game,
+  loader and side, with loader-level `provides` so a Quilt target accepts
   Fabric mods. This is the Forge/NeoForge/Fabric/Quilt split, which is the defining structural
   fact of Minecraft modding and the reason the game is worth building against first.
 - **PubGrub solver** — **implemented for Modrinth's target-filtered candidate graph**, including

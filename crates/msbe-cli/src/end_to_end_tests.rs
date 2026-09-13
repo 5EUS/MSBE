@@ -699,19 +699,28 @@ fn a_download_failing_verification_adds_nothing() {
 }
 
 #[test]
-fn modrinth_needs_a_game_version_which_can_be_set_later() {
+fn providers_serve_an_instance_without_a_game_version_and_one_can_be_set_later() {
     let world = World::new();
     world.add_instance(None);
 
-    let outcome = world.msbe(&["add", "mc", "modrinth:sodium"]);
-    assert_eq!(outcome.code, exit::FAILURE);
-    assert!(outcome.err.contains("--game-version"), "{}", outcome.err);
+    assert_eq!(
+        at(&world.json(&["add", "mc", "modrinth:iris"]), "/added"),
+        &json!(["iris"])
+    );
 
     let updated = world.json(&["instance", "set", "mc", "--game-version", "1.21.1"]);
     assert_eq!(at(&updated, "/game_version"), "1.21.1");
     assert_eq!(
         at(&world.json(&["add", "mc", "modrinth:sodium"]), "/added"),
         &json!(["sodium"])
+    );
+
+    let edition = world.msbe(&["instance", "set", "mc", "--edition", "remaster"]);
+    assert_eq!(edition.code, exit::FAILURE);
+    assert!(
+        edition.err.contains("declares no edition"),
+        "{}",
+        edition.err
     );
 }
 

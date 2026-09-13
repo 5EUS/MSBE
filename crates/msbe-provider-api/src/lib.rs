@@ -64,9 +64,11 @@ pub use msbe_core::instance::NativeExtensionIdentity;
 pub use msbe_core::{instance::Provenance, solver::PackageId};
 pub use overlay::{Overlay, OverlayError};
 pub use program::{
-    Capability, ChannelMapping, DependencyMapping, Facets, FileMapping, HashAlgorithm, Mappings,
-    ObjectMapping, ProgramError, ProviderProgram, ProviderProgramEnvelope, QueryParameter,
-    ReleaseMapping, ReleaseOrder, ReleasesRequest, Routes, RuntimeKind, SearchRequest, TargetFact,
-    UpdateFields, UpdateProtocol, UpdateProtocolKind,
+    Capability, ChannelMapping, Condition, DependencyKinds, DependencyMapping, EachSelector,
+    EditionGameIds, Encoding, Facets, FileMapping, GameId, HashAlgorithm, Items, Mappings,
+    ObjectMapping, Pages, ProgramError, ProviderProgram, ProviderProgramEnvelope, QueryParameter,
+    ReleaseMapping, ReleaseOrder, ReleasesRequest, Routes, RuntimeKind, SearchRequest,
+    SegmentedReference, Selector, SingleItem, TargetFact, TextDependency, Translations,
+    UpdateFields, UpdateProtocol,
 };
 pub use target::{Availability, Target};
