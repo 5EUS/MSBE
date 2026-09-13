@@ -7,8 +7,8 @@ use std::{cell::RefCell, collections::BTreeMap, io::Write};
 use md5::Md5;
 use msbe_plan_schema::Side;
 use msbe_provider_api::{
-    AcquisitionError, Adapter, AdapterError, HttpClient, HttpError, Provenance, ProviderProgram,
-    Target, UpdateCheck, hex,
+    AcquisitionError, Adapter, AdapterError, HttpClient, HttpError, HttpRequest, HttpResponse,
+    Method, Provenance, ProviderProgram, Target, UpdateCheck, hex,
     model::{ActionReason, Channel, DependencyKind, Download, Release},
 };
 use serde_json::{Value, json};
@@ -136,25 +136,32 @@ impl FakeHttp {
 }
 
 impl HttpClient for FakeHttp {
-    fn get(&self, url: &str, query: &[(&str, &str)], _: u64) -> Result<Vec<u8>, HttpError> {
-        let rendered: Vec<String> = query.iter().map(|(k, v)| format!("{k}={v}")).collect();
+    fn send(&self, request: &HttpRequest<'_>) -> Result<HttpResponse, HttpError> {
+        let url = request.url;
+        assert_eq!(
+            request.method,
+            Method::Get,
+            "this catalog is never posted to: {url}"
+        );
+        let rendered: Vec<String> = request
+            .query
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect();
         self.requests
             .borrow_mut()
             .push(format!("{url}?{}", rendered.join("&")));
         self.json
             .get(url)
-            .map(|body| serde_json::to_vec(body).unwrap())
+            .map(|body| serde_json::to_vec(body).unwrap().into())
             .ok_or_else(|| HttpError::Status {
                 url: url.to_owned(),
                 status: 404,
             })
     }
 
-    fn post_json(&self, url: &str, _: &[u8], _: u64) -> Result<Vec<u8>, HttpError> {
-        panic!("this catalog is never posted to: {url}")
-    }
-
-    fn download(&self, url: &str, sink: &mut dyn Write, _: u64) -> Result<u64, HttpError> {
+    fn download(&self, request: &HttpRequest<'_>, sink: &mut dyn Write) -> Result<u64, HttpError> {
+        let url = request.url;
         self.requests.borrow_mut().push(format!("DOWNLOAD {url}"));
         let bytes = self.files.get(url).ok_or_else(|| HttpError::Status {
             url: url.to_owned(),

@@ -7,11 +7,11 @@ use msbe_core::{config::Home, instance::NativeExtensionIdentity};
 use msbe_plan_schema::Side;
 use msbe_provider_api::{
     Adapter, AdapterError, ContainerKind, ExtensionCapability, ExtensionEnvelope, ExtensionProvide,
-    HostApiRange, HttpClient, HttpError, PackCodec, PackCodecDescriptor, PackCodecError,
-    PackCodecRegistration, PackDirections, PackEntry, PackExportContext, PackExportPlan,
-    PackImportContext, PackImportPlan, PackInput, PackLayout, PackOptionSchema, PackOptions,
-    PackProbe, PackageId, ProgramError, Provider, ProviderProgram, ProviderProgramEnvelope,
-    Registration, SigningKey, SupportSet, Target, model::Request,
+    HostApiRange, HttpClient, HttpError, HttpRequest, HttpResponse, Method, PackCodec,
+    PackCodecDescriptor, PackCodecError, PackCodecRegistration, PackDirections, PackEntry,
+    PackExportContext, PackExportPlan, PackImportContext, PackImportPlan, PackInput, PackLayout,
+    PackOptionSchema, PackOptions, PackProbe, PackageId, ProgramError, Provider, ProviderProgram,
+    ProviderProgramEnvelope, Registration, SigningKey, SupportSet, Target, model::Request,
 };
 use msbe_secrets::{Access, Acknowledgement};
 use serde_json::json;
@@ -21,20 +21,18 @@ use super::{ExtensionTrust, ProgramTrust, Providers, RegistryError, Routed};
 struct SearchHttp;
 
 impl HttpClient for SearchHttp {
-    fn get(&self, _: &str, _: &[(&str, &str)], _: u64) -> Result<Vec<u8>, HttpError> {
+    fn send(&self, request: &HttpRequest<'_>) -> Result<HttpResponse, HttpError> {
+        assert_eq!(request.method, Method::Get, "search never posts");
         Ok(serde_json::to_vec(&json!({ "hits": [{
             "project_id": "AANobbMI", "slug": "sodium", "title": "Sodium",
             "description": "A rendering engine", "downloads": 42,
             "client_side": "required", "server_side": "required"
         }] }))
-        .unwrap())
+        .unwrap()
+        .into())
     }
 
-    fn post_json(&self, _: &str, _: &[u8], _: u64) -> Result<Vec<u8>, HttpError> {
-        unreachable!("search never posts")
-    }
-
-    fn download(&self, _: &str, _: &mut dyn Write, _: u64) -> Result<u64, HttpError> {
+    fn download(&self, _: &HttpRequest<'_>, _: &mut dyn Write) -> Result<u64, HttpError> {
         unreachable!("search never downloads")
     }
 }

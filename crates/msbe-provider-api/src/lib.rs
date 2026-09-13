@@ -58,7 +58,10 @@ pub use envelope::{
     EnvelopeError, ExtensionCapability, ExtensionEnvelope, ExtensionProvide, HostApiRange,
 };
 pub use hashing::hex;
-pub use http::{HttpClient, HttpError};
+pub use http::{
+    ApiHeaders, Header, HeaderError, HttpClient, HttpError, HttpRequest, HttpResponse, Method,
+    Origin, Rate, without_query,
+};
 pub use manifest::{Catalog, ManifestError, Provider, Source};
 pub use msbe_core::instance::NativeExtensionIdentity;
 pub use msbe_core::{instance::Provenance, solver::PackageId};

@@ -9,8 +9,8 @@ use std::{cell::RefCell, collections::BTreeMap, io::Write};
 
 use msbe_plan_schema::Side;
 use msbe_provider_api::{
-    AcquisitionError, Adapter, AdapterError, HttpClient, HttpError, Overlay, PackageId, Provenance,
-    Target, UpdateCheck, hex,
+    AcquisitionError, Adapter, AdapterError, HttpClient, HttpError, HttpRequest, HttpResponse,
+    Method, Overlay, PackageId, Provenance, Target, UpdateCheck, hex,
     model::{Channel, Download, Request},
     resolve::{
         InstallPlan, InstalledRelease, Only, ProjectRequest, Requirement, ResolveError, Resolver,
@@ -46,10 +46,10 @@ impl FakeHttp {
             .insert(format!("{BASE}{path}#{version_types}"), body);
     }
 
-    fn answer(&self, key: &str, url: &str) -> Result<Vec<u8>, HttpError> {
+    fn answer(&self, key: &str, url: &str) -> Result<HttpResponse, HttpError> {
         self.json
             .get(key)
-            .map(|body| serde_json::to_vec(body).unwrap())
+            .map(|body| serde_json::to_vec(body).unwrap().into())
             .ok_or_else(|| HttpError::Status {
                 url: url.to_owned(),
                 status: 404,
@@ -58,16 +58,20 @@ impl FakeHttp {
 }
 
 impl HttpClient for FakeHttp {
-    fn get(&self, url: &str, query: &[(&str, &str)], _limit: u64) -> Result<Vec<u8>, HttpError> {
-        let rendered: Vec<String> = query.iter().map(|(k, v)| format!("{k}={v}")).collect();
-        self.requests
-            .borrow_mut()
-            .push(format!("{url}?{}", rendered.join("&")));
-        self.answer(url, url)
-    }
-
-    fn post_json(&self, url: &str, body: &[u8], _limit: u64) -> Result<Vec<u8>, HttpError> {
-        let request: Value = serde_json::from_slice(body).unwrap();
+    fn send(&self, request: &HttpRequest<'_>) -> Result<HttpResponse, HttpError> {
+        let url = request.url;
+        let Method::Post { json } = request.method else {
+            let rendered: Vec<String> = request
+                .query
+                .iter()
+                .map(|(k, v)| format!("{k}={v}"))
+                .collect();
+            self.requests
+                .borrow_mut()
+                .push(format!("{url}?{}", rendered.join("&")));
+            return self.answer(url, url);
+        };
+        let request: Value = serde_json::from_slice(json).unwrap();
         let version_types = request
             .get("version_types")
             .and_then(Value::as_array)
@@ -85,7 +89,8 @@ impl HttpClient for FakeHttp {
         self.answer(&format!("{url}#{version_types}"), url)
     }
 
-    fn download(&self, url: &str, sink: &mut dyn Write, limit: u64) -> Result<u64, HttpError> {
+    fn download(&self, request: &HttpRequest<'_>, sink: &mut dyn Write) -> Result<u64, HttpError> {
+        let (url, limit) = (request.url, request.limit);
         let bytes = self.files.get(url).ok_or_else(|| HttpError::Status {
             url: url.to_owned(),
             status: 404,

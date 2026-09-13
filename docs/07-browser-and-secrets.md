@@ -135,6 +135,13 @@ Discipline around them:
   yet; when one lands, it goes behind the same filter;
 - HTTP errors never repeat a URL's query or fragment, where signed download links carry
   their credentials;
+- the provider registry, not the adapter, attaches a credential. An adapter names the
+  header its credential goes in; the registry adds the value only to requests for the
+  origin (scheme, host and port) of the provider's `api_base`, never to an artifact
+  download, and refuses header names HTTP already gives a meaning to, such as
+  `authorization`, `cookie`, `content-*` and `proxy-*`. ureq forwards every header except
+  `Authorization` and `Cookie` across redirects, so `msbe-http` follows the redirects of a
+  request carrying a credential itself and fails one that leaves its origin;
 - `msbe bundle` (support bundle, planned) runs the same redactor and prints a summary of
   what it removed so the user can see it worked before mailing the file to a stranger;
 - token scopes are minimal, expiry is honoured, and `msbe auth status` (planned) shows

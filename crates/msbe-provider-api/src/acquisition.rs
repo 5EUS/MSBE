@@ -204,26 +204,19 @@ mod tests {
     use sha1::{Digest as _, Sha1};
 
     use super::{AcquisitionError, ArtifactDescriptor, acquire};
-    use crate::{HttpClient, HttpError, hashing::hex};
+    use crate::{HttpClient, HttpError, HttpRequest, HttpResponse, hashing::hex};
 
     struct Serves(&'static [u8]);
 
     impl HttpClient for Serves {
-        fn get(&self, url: &str, _: &[(&str, &str)], _: u64) -> Result<Vec<u8>, HttpError> {
+        fn send(&self, request: &HttpRequest<'_>) -> Result<HttpResponse, HttpError> {
             Err(HttpError::Status {
-                url: url.to_owned(),
+                url: request.url.to_owned(),
                 status: 404,
             })
         }
 
-        fn post_json(&self, url: &str, _: &[u8], _: u64) -> Result<Vec<u8>, HttpError> {
-            Err(HttpError::Status {
-                url: url.to_owned(),
-                status: 404,
-            })
-        }
-
-        fn download(&self, _: &str, sink: &mut dyn Write, _: u64) -> Result<u64, HttpError> {
+        fn download(&self, _: &HttpRequest<'_>, sink: &mut dyn Write) -> Result<u64, HttpError> {
             sink.write_all(self.0).unwrap();
             Ok(u64::try_from(self.0.len()).unwrap())
         }

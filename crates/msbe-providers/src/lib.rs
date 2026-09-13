@@ -9,6 +9,7 @@
 //! See `docs/06-providers-and-policy.md`.
 
 mod authoring;
+mod authorized;
 mod builtin;
 #[cfg(test)]
 mod catalog_tests;
@@ -25,6 +26,7 @@ mod thunderstore_tests;
 pub use authoring::{
     AuthoringError, SignedCodec, SignerKey, VerifiedCodec, sign_codec, verify_codec,
 };
+pub use authorized::CredentialSource;
 pub use builtin::{BUILTIN, BUILTIN_PROGRAMS};
 pub use installed::{ExtensionTrust, codecs_directory, trust_file};
 pub use registry::{ProgramTrust, Providers, RegistryError, Routed};

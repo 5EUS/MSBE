@@ -10,7 +10,7 @@ use thiserror::Error;
 
 use crate::{
     hashing::HashingWriter,
-    http::{HttpClient, HttpError},
+    http::{HttpClient, HttpError, HttpRequest},
 };
 
 /// The bytes and digests written during one completed artifact transfer.
@@ -35,7 +35,7 @@ pub(crate) fn download(
             path: path.to_owned(),
             source,
         })?);
-    http.download(url, &mut sink, limit)?;
+    http.download(&HttpRequest::get(url, limit), &mut sink)?;
     sink.inner()
         .sync_all()
         .map_err(|source| ArtifactError::Io {
@@ -69,27 +69,20 @@ mod tests {
     use std::io::Write;
 
     use super::{ArtifactError, download};
-    use crate::{HttpClient, HttpError, hashing::hex};
+    use crate::{HttpClient, HttpError, HttpRequest, HttpResponse, hashing::hex};
     use sha2::{Digest as _, Sha512};
 
     struct Serves(&'static [u8]);
 
     impl HttpClient for Serves {
-        fn get(&self, url: &str, _: &[(&str, &str)], _: u64) -> Result<Vec<u8>, HttpError> {
+        fn send(&self, request: &HttpRequest<'_>) -> Result<HttpResponse, HttpError> {
             Err(HttpError::Status {
-                url: url.to_owned(),
+                url: request.url.to_owned(),
                 status: 404,
             })
         }
 
-        fn post_json(&self, url: &str, _: &[u8], _: u64) -> Result<Vec<u8>, HttpError> {
-            Err(HttpError::Status {
-                url: url.to_owned(),
-                status: 404,
-            })
-        }
-
-        fn download(&self, _: &str, sink: &mut dyn Write, _: u64) -> Result<u64, HttpError> {
+        fn download(&self, _: &HttpRequest<'_>, sink: &mut dyn Write) -> Result<u64, HttpError> {
             sink.write_all(self.0)
                 .map_err(|error| HttpError::Transport {
                     url: "test".to_owned(),

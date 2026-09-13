@@ -43,6 +43,14 @@ certificate store rather than a bundled list of roots. That respects system and 
 certificate authorities, and keeps `webpki-roots` (CDLA-Permissive-2.0, which `deny.toml`
 does not allow) out of the dependency graph.
 
+Adapters reach the network only through `HttpClient`. A request is an `HttpRequest`: its method
+and JSON body, URL, query, headers, response size limit, and the response headers that report
+remaining quota. `send` answers with an `HttpResponse`, the body and that quota; `download`
+streams the body instead. The registry hands each adapter a client scoped to its provider. The
+credential header the adapter names (`Adapter::api_headers`), and the quota headers, go only to
+the origin of the provider's `api_base`; downloads carry neither, and the quota last reported is
+`Providers::rate` ([07 §7.5](07-browser-and-secrets.md)).
+
 Encoded as data in `ProviderPolicy`, not as scattered `if` statements:
 
 ```rust

@@ -5,7 +5,8 @@ use std::{cell::RefCell, collections::BTreeMap, io::Write};
 
 use msbe_plan_schema::Side;
 use msbe_provider_api::{
-    HttpClient, HttpError, Overlay, Provenance, Target, UpdateCheck,
+    HttpClient, HttpError, HttpRequest, HttpResponse, Method, Overlay, Provenance, Target,
+    UpdateCheck,
     model::{Download, Request},
     resolve::{Only, ProjectRequest, Resolver},
 };
@@ -23,23 +24,25 @@ struct FakeHttp {
 }
 
 impl HttpClient for FakeHttp {
-    fn get(&self, url: &str, _: &[(&str, &str)], _: u64) -> Result<Vec<u8>, HttpError> {
+    fn send(&self, request: &HttpRequest<'_>) -> Result<HttpResponse, HttpError> {
+        let url = request.url;
+        assert_eq!(
+            request.method,
+            Method::Get,
+            "Thunderstore is never posted to: {url}"
+        );
         self.requests.borrow_mut().push(url.to_owned());
         self.json
             .get(url)
-            .map(|body| serde_json::to_vec(body).unwrap())
+            .map(|body| serde_json::to_vec(body).unwrap().into())
             .ok_or_else(|| HttpError::Status {
                 url: url.to_owned(),
                 status: 404,
             })
     }
 
-    fn post_json(&self, url: &str, _: &[u8], _: u64) -> Result<Vec<u8>, HttpError> {
-        panic!("Thunderstore is never posted to: {url}")
-    }
-
-    fn download(&self, url: &str, _: &mut dyn Write, _: u64) -> Result<u64, HttpError> {
-        panic!("these tests never download: {url}")
+    fn download(&self, request: &HttpRequest<'_>, _: &mut dyn Write) -> Result<u64, HttpError> {
+        panic!("these tests never download: {}", request.url)
     }
 }
 

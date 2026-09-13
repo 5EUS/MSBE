@@ -5,7 +5,7 @@ use std::fmt;
 use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
 
-use crate::HttpClient;
+use crate::{HttpClient, HttpRequest};
 
 /// A provider metadata endpoint with one trusted HTTPS base URL and a response size limit.
 pub struct JsonEndpoint<'a> {
@@ -46,8 +46,10 @@ impl<'a> JsonEndpoint<'a> {
         query: &[(&str, &str)],
     ) -> Result<T, EndpointError> {
         let url = self.url(path)?;
-        let body = self.http.get(&url, query, self.limit)?;
-        decode(url, &body)
+        let response = self
+            .http
+            .send(&HttpRequest::get(&url, self.limit).with_query(query))?;
+        decode(url, &response.body)
     }
 
     /// Sends a JSON request and decodes the JSON response from an endpoint-relative path.
@@ -63,8 +65,10 @@ impl<'a> JsonEndpoint<'a> {
     ) -> Result<T, EndpointError> {
         let url = self.url(path)?;
         let body = serde_json::to_vec(request).map_err(EndpointError::Encode)?;
-        let response = self.http.post_json(&url, &body, self.limit)?;
-        decode(url, &response)
+        let response = self
+            .http
+            .send(&HttpRequest::post_json(&url, &body, self.limit))?;
+        decode(url, &response.body)
     }
 
     fn url(&self, path: &str) -> Result<String, EndpointError> {
@@ -115,20 +119,16 @@ mod tests {
     use serde_json::json;
 
     use super::{EndpointError, JsonEndpoint};
-    use crate::{HttpClient, HttpError};
+    use crate::{HttpClient, HttpError, HttpRequest, HttpResponse};
 
     struct Fake;
 
     impl HttpClient for Fake {
-        fn get(&self, _: &str, _: &[(&str, &str)], _: u64) -> Result<Vec<u8>, HttpError> {
-            Ok(br#"{"value":1}"#.to_vec())
+        fn send(&self, _: &HttpRequest<'_>) -> Result<HttpResponse, HttpError> {
+            Ok(br#"{"value":1}"#.to_vec().into())
         }
 
-        fn post_json(&self, _: &str, _: &[u8], _: u64) -> Result<Vec<u8>, HttpError> {
-            Ok(br#"{"value":1}"#.to_vec())
-        }
-
-        fn download(&self, _: &str, _: &mut dyn Write, _: u64) -> Result<u64, HttpError> {
+        fn download(&self, _: &HttpRequest<'_>, _: &mut dyn Write) -> Result<u64, HttpError> {
             Err(HttpError::Status {
                 url: "test".to_owned(),
                 status: 404,

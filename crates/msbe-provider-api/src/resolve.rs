@@ -624,8 +624,8 @@ mod tests {
         Adapters, InstallPlan, InstalledRelease, Only, ProjectRequest, ResolveError, Resolver,
     };
     use crate::{
-        Adapter, AdapterError, Availability, EndpointError, HttpClient, HttpError, Overlay,
-        Releases, Target,
+        Adapter, AdapterError, Availability, EndpointError, HttpClient, HttpError, HttpRequest,
+        HttpResponse, Overlay, Releases, Target,
         model::{
             Channel, Dependency, DependencyKind, Download, Project, Release, ReleaseFile, Request,
         },
@@ -635,16 +635,12 @@ mod tests {
     struct Offline;
 
     impl HttpClient for Offline {
-        fn get(&self, url: &str, _: &[(&str, &str)], _: u64) -> Result<Vec<u8>, HttpError> {
-            Err(offline(url))
+        fn send(&self, request: &HttpRequest<'_>) -> Result<HttpResponse, HttpError> {
+            Err(offline(request.url))
         }
 
-        fn post_json(&self, url: &str, _: &[u8], _: u64) -> Result<Vec<u8>, HttpError> {
-            Err(offline(url))
-        }
-
-        fn download(&self, url: &str, _: &mut dyn Write, _: u64) -> Result<u64, HttpError> {
-            Err(offline(url))
+        fn download(&self, request: &HttpRequest<'_>, _: &mut dyn Write) -> Result<u64, HttpError> {
+            Err(offline(request.url))
         }
     }
 

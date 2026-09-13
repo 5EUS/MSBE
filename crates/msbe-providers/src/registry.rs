@@ -3,24 +3,26 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::PathBuf,
+    sync::{Arc, Mutex},
 };
 
 use msbe_core::{config::Home, instance::ExtensionPin};
 use msbe_fsops::Digest;
 use msbe_provider_api::{
-    Adapter, AdapterError, Catalog, ExtensionEnvelope, HttpClient, ManifestError, Overlay,
-    OverlayError, PackCodec, PackCodecDescriptor, PackCodecError, PackCodecRegistration, PackInput,
-    ProgramError, ProgramRegistration, Provider, ProviderProgram, ProviderProgramEnvelope,
-    Registration, Target, VerifyingKey, WasmPackCodecRegistration,
+    Adapter, AdapterError, Catalog, ExtensionEnvelope, HeaderError, HttpClient, ManifestError,
+    Overlay, OverlayError, PackCodec, PackCodecDescriptor, PackCodecError, PackCodecRegistration,
+    PackInput, ProgramError, ProgramRegistration, Provider, ProviderProgram,
+    ProviderProgramEnvelope, Rate, Registration, Target, VerifyingKey, WasmPackCodecRegistration,
     model::{Request, SearchResult},
     resolve::{Adapters, ResolveError},
 };
-use msbe_secrets::{Access, StoreError};
+use msbe_secrets::{Access, Credentials, StoreError};
 use msbe_wasm_codec::WasmPackCodec;
 use thiserror::Error;
 
 use crate::{
-    ExtensionTrust,
+    CredentialSource, ExtensionTrust,
+    authorized::{Authorized, Keys},
     builtin::{BUILTIN, BUILTIN_PROGRAMS},
     installed, runtime,
 };
@@ -54,7 +56,10 @@ pub struct ProgramTrust {
 #[derive(Debug)]
 pub struct Providers {
     catalog: Catalog,
-    adapters: BTreeMap<String, Box<dyn Adapter>>,
+    /// Each provider's adapter, whose requests carry only what its provider's scope allows.
+    adapters: BTreeMap<String, Authorized>,
+    /// The credentials those requests carry, and the quotas their responses report.
+    keys: Arc<Keys>,
     codecs: CodecTable,
     extensions: Vec<ExtensionPin>,
     overlay: Overlay,
@@ -160,6 +165,7 @@ impl Providers {
     /// The providers MSBE ships, plus the WebAssembly pack codecs installed in `home` that its
     /// `extensions/trust.toml` trusts (`docs/18-wasm-extensions.md` §18.3), authorized by the
     /// credentials and acknowledgements `home` records (`docs/07-browser-and-secrets.md` §7.5).
+    /// Requests that may carry a credential read it from `home`'s credentials when first needed.
     ///
     /// # Errors
     ///
@@ -168,7 +174,9 @@ impl Providers {
     /// refused codec refuses them all, so nothing runs with trust the user did not intend. Returns
     /// [`RegistryError::Access`] when the credential records or acknowledgements cannot be read.
     pub fn installed(home: &Home) -> Result<Self, RegistryError> {
-        let mut providers = Self::builtins()?.with_access(Access::load(home)?);
+        let mut providers = Self::builtins()?
+            .with_access(Access::load(home)?)
+            .with_credentials(Arc::new(Mutex::new(Credentials::open(home)?)));
         let found = installed::read(&home.root().join(installed::DIRECTORY))?;
         for codec in found.codecs {
             providers
@@ -283,6 +291,7 @@ impl Providers {
         let mut providers = Self {
             catalog,
             adapters: assembly.adapters,
+            keys: assembly.keys,
             codecs: assembly.codecs,
             extensions: assembly.extensions,
             overlay: Overlay::from_toml(&assembly.overlay)?,
@@ -313,6 +322,20 @@ impl Providers {
     pub fn with_access(mut self, access: Access) -> Self {
         self.access = access;
         self
+    }
+
+    /// This registry, with each provider's credential read from `source` when a request that may
+    /// carry it is made: one to the origin of the provider's `api_base`, from an adapter that names
+    /// a credential header. Without a source, no request carries a credential.
+    #[must_use]
+    pub fn with_credentials(self, source: Arc<dyn CredentialSource>) -> Self {
+        self.keys.set_source(source);
+        self
+    }
+
+    /// The quota `provider`'s API last reported remaining to this registry, if it reported any.
+    pub fn rate(&self, provider: &str) -> Option<Rate> {
+        self.keys.rate(provider)
     }
 
     /// The overlay entries every registered adapter ships.
@@ -469,7 +492,7 @@ impl Providers {
         self.authorize(provider)?;
         self.adapters
             .get(&provider.id)
-            .map(Box::as_ref)
+            .map(|adapter| -> &dyn Adapter { adapter })
             .ok_or_else(|| RegistryError::UnavailableAdapter(provider.id.clone()))
     }
 
@@ -544,7 +567,8 @@ fn program_pin(
 /// A registry being assembled: the adapters, codecs, pins and overlay entries gathered so far.
 #[derive(Default)]
 struct Assembly {
-    adapters: BTreeMap<String, Box<dyn Adapter>>,
+    adapters: BTreeMap<String, Authorized>,
+    keys: Arc<Keys>,
     codecs: CodecTable,
     extensions: Vec<ExtensionPin>,
     overlay: Vec<&'static str>,
@@ -580,7 +604,10 @@ impl Assembly {
                 adapter: adapter.id().to_owned(),
             });
         }
-        self.adapters.insert(provider.id.clone(), adapter);
+        self.adapters.insert(
+            provider.id.clone(),
+            Authorized::new(provider, adapter, Arc::clone(&self.keys))?,
+        );
         for codec_registration in registration.pack_codecs {
             let pin = self.codecs.register(&provider.id, codec_registration)?;
             self.extensions.push(pin);
@@ -603,6 +630,7 @@ impl Assembly {
                 adapter: adapter.id().to_owned(),
             });
         }
+        let adapter = Authorized::new(provider, adapter, Arc::clone(&self.keys))?;
         if self.adapters.insert(provider.id.clone(), adapter).is_some() {
             return Err(RegistryError::DuplicateProgramAdapter(provider.id.clone()));
         }
@@ -817,6 +845,15 @@ pub enum RegistryError {
     /// A built-in manifest or descriptor could not be canonicalized for a pin.
     #[error("cannot canonicalize native extension identity: {0}")]
     NativeCanonical(String),
+    /// An adapter declares a header its provider's requests cannot use.
+    #[error("provider {provider:?} declares an unusable API header: {source}")]
+    ApiHeaders {
+        /// The provider id.
+        provider: String,
+        /// What is wrong with the header.
+        #[source]
+        source: HeaderError,
+    },
     /// A native extension did not state why a reviewed runtime cannot serve it.
     #[error("native provider {0:?} must state an exception reason")]
     MissingNativeException(String),

@@ -6,8 +6,8 @@ use msbe_core::{instance::Provenance, solver::PackageId};
 use thiserror::Error;
 
 use crate::{
-    AcquiredArtifact, AcquisitionError, ArtifactDescriptor, DOWNLOAD_LIMIT, EndpointError,
-    HttpClient, HttpError, ManifestError, PackCodecRegistration, Provider, Target,
+    AcquiredArtifact, AcquisitionError, ApiHeaders, ArtifactDescriptor, DOWNLOAD_LIMIT,
+    EndpointError, HttpClient, HttpError, ManifestError, PackCodecRegistration, Provider, Target,
     WasmPackCodecRegistration, acquire,
     model::{Download, Project, Release, ReleaseFile, Request, SearchResult},
 };
@@ -86,6 +86,13 @@ pub trait Adapter: fmt::Debug {
     /// Update discovery for installed releases, when the provider supports it.
     fn as_updates(&self) -> Option<&dyn Updates> {
         None
+    }
+
+    /// The headers the provider's metadata API uses: the one its credential goes in, and the ones
+    /// that report remaining quota. The adapter names them and never holds the credential; the
+    /// registry attaches it to requests for the provider's metadata origin only.
+    fn api_headers(&self) -> ApiHeaders {
+        ApiHeaders::default()
     }
 
     /// Downloads `file` into `dir`, verifying every size and digest the provider published.

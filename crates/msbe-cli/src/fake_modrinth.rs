@@ -7,7 +7,7 @@
 
 use std::{cell::RefCell, collections::BTreeMap, fmt::Write as _, io::Write, rc::Rc};
 
-use msbe_provider_api::{HttpClient, HttpError};
+use msbe_provider_api::{HttpClient, HttpError, HttpRequest, HttpResponse, Method};
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha512};
 
@@ -97,18 +97,20 @@ impl FakeModrinth {
 }
 
 impl HttpClient for FakeModrinth {
-    fn get(&self, url: &str, _: &[(&str, &str)], _: u64) -> Result<Vec<u8>, HttpError> {
-        self.json
-            .borrow()
-            .get(url)
-            .map(|body| serde_json::to_vec(body).unwrap())
-            .ok_or_else(|| HttpError::Status {
-                url: url.to_owned(),
-                status: 404,
-            })
-    }
-    fn post_json(&self, url: &str, body: &[u8], _: u64) -> Result<Vec<u8>, HttpError> {
-        let request: Value = serde_json::from_slice(body).unwrap();
+    fn send(&self, request: &HttpRequest<'_>) -> Result<HttpResponse, HttpError> {
+        let url = request.url;
+        let Method::Post { json } = request.method else {
+            return self
+                .json
+                .borrow()
+                .get(url)
+                .map(|body| serde_json::to_vec(body).unwrap().into())
+                .ok_or_else(|| HttpError::Status {
+                    url: url.to_owned(),
+                    status: 404,
+                });
+        };
+        let request: Value = serde_json::from_slice(json).unwrap();
         let versions = self.versions();
         let latest = url.ends_with("/version_files/update");
         let mut answer = serde_json::Map::new();
@@ -132,9 +134,10 @@ impl HttpClient for FakeModrinth {
                 answer.insert(hash.as_str().unwrap().to_owned(), version.clone());
             }
         }
-        Ok(serde_json::to_vec(&answer).unwrap())
+        Ok(serde_json::to_vec(&answer).unwrap().into())
     }
-    fn download(&self, url: &str, sink: &mut dyn Write, _: u64) -> Result<u64, HttpError> {
+    fn download(&self, request: &HttpRequest<'_>, sink: &mut dyn Write) -> Result<u64, HttpError> {
+        let url = request.url;
         let files = self.files.borrow();
         let bytes = files.get(url).ok_or_else(|| HttpError::Status {
             url: url.to_owned(),
