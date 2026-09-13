@@ -32,6 +32,8 @@ internal sealed partial class MainViewModel : ViewModelBase
         this.folders = folders;
         this.time = time ?? TimeProvider.System;
         this.BrowseResults.CollectionChanged += this.OnBrowseResultsChanged;
+        this.QueuedDownloads.CollectionChanged += this.OnDownloadsChanged;
+        this.FinishedDownloads.CollectionChanged += this.OnDownloadsChanged;
     }
 
     /// <summary>Gets games currently supported by the connected daemon.</summary>

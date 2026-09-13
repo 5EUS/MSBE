@@ -397,6 +397,187 @@
     <Setter Property="Foreground" Value="#858C99" />
   </Style>
 
+  <Style Selector="Button.status-downloads">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="CornerRadius" Value="4" />
+    <Setter Property="MinHeight" Value="0" />
+    <Setter Property="Padding" Value="8,1" />
+  </Style>
+
+  <Style Selector="Button.status-downloads:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="#1B1E25" />
+  </Style>
+
+  <Style Selector="Button.status-downloads LucideIcon">
+    <Setter Property="Foreground" Value="#72C6A5" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+
+  <Style Selector="ProgressBar.status-progress">
+    <Setter Property="Width" Value="72" />
+    <Setter Property="Height" Value="3" />
+    <Setter Property="MinWidth" Value="0" />
+    <Setter Property="MinHeight" Value="0" />
+    <Setter Property="CornerRadius" Value="2" />
+    <Setter Property="Foreground" Value="#72C6A5" />
+    <Setter Property="Background" Value="#242832" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+
+  <Style Selector="Border.tab-badge">
+    <Setter Property="Background" Value="#72C6A5" />
+    <Setter Property="CornerRadius" Value="9" />
+    <Setter Property="MinWidth" Value="18" />
+    <Setter Property="Height" Value="18" />
+    <Setter Property="Padding" Value="5,0" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+
+  <Style Selector="Border.tab-badge TextBlock">
+    <Setter Property="Foreground" Value="#0E1014" />
+    <Setter Property="FontSize" Value="11" />
+    <Setter Property="FontWeight" Value="Bold" />
+    <Setter Property="HorizontalAlignment" Value="Center" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+
+  <Style Selector="Border.download-hero">
+    <Setter Property="Background">
+      <LinearGradientBrush StartPoint="0%,0%" EndPoint="100%,100%">
+        <GradientStop Offset="0" Color="#1E2B30" />
+        <GradientStop Offset="1" Color="#1A1D24" />
+      </LinearGradientBrush>
+    </Setter>
+    <Setter Property="BorderBrush" Value="#2C3540" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="10" />
+    <Setter Property="Padding" Value="22" />
+  </Style>
+
+  <Style Selector="TextBlock.download-hero-title">
+    <Setter Property="Foreground" Value="#F3F4F6" />
+    <Setter Property="FontSize" Value="20" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+  </Style>
+
+  <Style Selector="TextBlock.download-title">
+    <Setter Property="Foreground" Value="#E4E7EC" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+  </Style>
+
+  <Style Selector="TextBlock.download-meta">
+    <Setter Property="Foreground" Value="#8D94A3" />
+    <Setter Property="FontSize" Value="12" />
+  </Style>
+
+  <Style Selector="TextBlock.download-status">
+    <Setter Property="Foreground" Value="#72C6A5" />
+    <Setter Property="FontSize" Value="11" />
+    <Setter Property="FontWeight" Value="Bold" />
+  </Style>
+
+  <Style Selector="TextBlock.download-section">
+    <Setter Property="Foreground" Value="#737B8C" />
+    <Setter Property="FontSize" Value="11" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+  </Style>
+
+  <Style Selector="TextBlock.download-count">
+    <Setter Property="Foreground" Value="#9FC9BA" />
+    <Setter Property="FontSize" Value="11" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+  </Style>
+
+  <Style Selector="TextBlock.download-error">
+    <Setter Property="Foreground" Value="#E48A98" />
+    <Setter Property="FontSize" Value="12" />
+  </Style>
+
+  <Style Selector="ProgressBar.download-progress">
+    <Setter Property="Height" Value="4" />
+    <Setter Property="MinHeight" Value="0" />
+    <Setter Property="CornerRadius" Value="2" />
+    <Setter Property="Foreground" Value="#72C6A5" />
+    <Setter Property="Background" Value="#262B35" />
+  </Style>
+
+  <Style Selector="Border.download-icon">
+    <Setter Property="Background" Value="#263640" />
+    <Setter Property="CornerRadius" Value="6" />
+  </Style>
+
+  <Style Selector="Border.download-icon LucideIcon">
+    <Setter Property="Foreground" Value="#9FC9BA" />
+    <Setter Property="HorizontalAlignment" Value="Center" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+
+  <Style Selector="Border.download-row">
+    <Setter Property="Background" Value="#1B1E25" />
+    <Setter Property="BorderBrush" Value="#262A33" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="8" />
+    <Setter Property="Padding" Value="12,10" />
+  </Style>
+
+  <Style Selector="Border.download-row:pointerover">
+    <Setter Property="Background" Value="#20242C" />
+  </Style>
+
+  <Style Selector="Border.download-row.failed">
+    <Setter Property="BorderBrush" Value="#4A2B31" />
+  </Style>
+
+  <Style Selector="StackPanel.download-actions">
+    <Setter Property="Opacity" Value="0" />
+    <Setter Property="Transitions">
+      <Transitions>
+        <DoubleTransition Property="Opacity" Duration="0:0:0.12" />
+      </Transitions>
+    </Setter>
+  </Style>
+
+  <Style Selector="Border.download-row:pointerover StackPanel.download-actions, Border.download-row:focus-within StackPanel.download-actions">
+    <Setter Property="Opacity" Value="1" />
+  </Style>
+
+  <Style Selector="LucideIcon.download-ok">
+    <Setter Property="Foreground" Value="#72C6A5" />
+  </Style>
+
+  <Style Selector="LucideIcon.download-failed">
+    <Setter Property="Foreground" Value="#E48A98" />
+  </Style>
+
+  <Style Selector="Button.icon-button">
+    <Setter Property="Width" Value="30" />
+    <Setter Property="Height" Value="30" />
+    <Setter Property="Padding" Value="0" />
+    <Setter Property="CornerRadius" Value="6" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="Foreground" Value="#B8BEC9" />
+    <Setter Property="HorizontalContentAlignment" Value="Center" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+  </Style>
+
+  <Style Selector="Button.icon-button:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="#2A2F3A" />
+    <Setter Property="Foreground" Value="#F3F4F6" />
+  </Style>
+
+  <Style Selector="Button.text-button">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="Foreground" Value="#8D94A3" />
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="MinHeight" Value="0" />
+    <Setter Property="Padding" Value="8,4" />
+  </Style>
+
+  <Style Selector="Button.text-button:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="Foreground" Value="#F3F4F6" />
+  </Style>
+
   <Style Selector="Border.cli-scrim">
     <Setter Property="Background" Value="#AA090A0E" />
     <Setter Property="HorizontalAlignment" Value="Stretch" />

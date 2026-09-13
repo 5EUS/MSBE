@@ -35,11 +35,6 @@ internal sealed partial class MainViewModel
     [NotifyPropertyChangedFor(nameof(IsBrowseEmpty))]
     public partial bool IsBrowseLoading { get; set; }
 
-    /// <summary>Gets or sets whether an installation is running.</summary>
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(CanInstallMarkedBrowseResults))]
-    public partial bool IsBrowseInstalling { get; set; }
-
     /// <summary>Gets or sets whether required dependencies are included.</summary>
     [ObservableProperty]
     public partial bool BrowseWithDependencies { get; set; } = true;
@@ -63,7 +58,7 @@ internal sealed partial class MainViewModel
     public string MarkedBrowseResultCount => $"{this.MarkedBrowseResults.Count} selected";
 
     /// <summary>Gets a value indicating whether the marked results can be installed.</summary>
-    public bool CanInstallMarkedBrowseResults => this.HasMarkedBrowseResults && !this.IsBrowseInstalling;
+    public bool CanInstallMarkedBrowseResults => this.HasMarkedBrowseResults;
 
     [RelayCommand]
     private async Task SearchBrowseAsync()
@@ -130,7 +125,7 @@ internal sealed partial class MainViewModel
     }
 
     [RelayCommand]
-    private async Task AddBrowseResultAsync()
+    private void AddBrowseResult()
     {
         if (this.SelectedInstance is null || this.SelectedProfile is null || !this.CanInstallMarkedBrowseResults)
         {
@@ -138,40 +133,29 @@ internal sealed partial class MainViewModel
         }
 
         BrowseResultItem[] marked = [.. this.MarkedBrowseResults];
-        this.IsBrowseInstalling = true;
-        this.BrowseError = string.Empty;
-        try
+        int queued = 0;
+        foreach (BrowseResultItem resultItem in marked)
         {
-            List<string> arguments = ["--format", "json", "add", this.SelectedInstance];
-            arguments.AddRange(marked.Select(result => result.Source));
-            arguments.AddRange(["--profile", this.SelectedProfile]);
-            if (this.BrowseWithDependencies)
+            var download = new DownloadQueueItem(
+                resultItem.Title,
+                resultItem.Source,
+                resultItem.Provider,
+                resultItem.IconSource,
+                this.SelectedInstance,
+                this.SelectedProfile,
+                this.BrowseWithDependencies);
+            if (this.TryQueueDownload(download))
             {
-                arguments.Add("--with-deps");
+                queued++;
             }
 
-            CommandResult result = await this.client.RunCommandAsync(arguments, CancellationToken.None).ConfigureAwait(true);
-            if (result.ExitCode != 0)
-            {
-                throw new InvalidOperationException(result.StandardError.Trim());
-            }
+            resultItem.IsMarked = false;
+        }
 
-            await this.LoadModsAsync(this.SelectedInstance, this.SelectedProfile).ConfigureAwait(true);
-            foreach (BrowseResultItem resultItem in marked)
-            {
-                resultItem.IsMarked = false;
-            }
-
-            this.StatusMessage = $"Added {marked.Length} mod(s) to {this.SelectedProfile}. Review deployment to apply them.";
-        }
-        catch (Exception exception) when (exception is IOException or SocketException or InvalidOperationException)
-        {
-            this.BrowseError = exception.Message;
-        }
-        finally
-        {
-            this.IsBrowseInstalling = false;
-        }
+        this.StatusMessage = queued == marked.Length
+            ? $"Queued {queued} mod(s) for {this.SelectedProfile}."
+            : $"Queued {queued} mod(s) for {this.SelectedProfile}; {marked.Length - queued} already in the queue.";
+        this.StartDownloads();
     }
 
     private void OnBrowseResultsChanged(object? sender, NotifyCollectionChangedEventArgs eventArgs)

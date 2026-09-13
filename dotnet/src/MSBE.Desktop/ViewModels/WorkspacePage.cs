@@ -18,6 +18,9 @@ public enum WorkspacePage
     /// <summary>Pack configuration, validation, and export.</summary>
     Pack,
 
+    /// <summary>The queue of provider downloads.</summary>
+    Downloads,
+
     /// <summary>The application settings workspace.</summary>
     Settings,
 }

@@ -9,6 +9,14 @@
             <Button Classes="workspace-tab" Classes.active="{Binding IsGamesWorkspace}" Content="GAMES" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Games}" />
             <Button Classes="workspace-tab" Classes.active="{Binding IsBrowseWorkspace}" Content="BROWSE" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Browse}" />
             <Button Classes="workspace-tab" Classes.active="{Binding IsPackWorkspace}" Content="PACK" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Pack}" />
+            <Button Classes="workspace-tab" Classes.active="{Binding IsDownloadsWorkspace}" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Downloads}">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <TextBlock Text="DOWNLOADS" />
+                    <Border Classes="tab-badge" IsVisible="{Binding HasPendingDownloads}">
+                        <TextBlock Text="{Binding PendingDownloadCount}" />
+                    </Border>
+                </StackPanel>
+            </Button>
             <Button Classes="workspace-tab" Classes.active="{Binding IsSettingsWorkspace}" Content="SETTINGS" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Settings}" />
         </StackPanel>
     </Border>

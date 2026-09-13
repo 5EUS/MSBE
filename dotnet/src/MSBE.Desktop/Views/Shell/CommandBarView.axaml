@@ -18,6 +18,7 @@
                     <MenuItem Header="Instances" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Instances}" />
                     <MenuItem Header="Games" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Games}" />
                     <MenuItem Header="Browse" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Browse}" />
+                    <MenuItem Header="Downloads" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Downloads}" />
                     <MenuItem Header="Settings" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Settings}" InputGesture="Ctrl+," />
                 </MenuItem>
             </Menu>

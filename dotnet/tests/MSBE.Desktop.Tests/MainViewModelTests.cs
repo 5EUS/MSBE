@@ -13,6 +13,7 @@ namespace MSBE.Desktop.Tests;
 public sealed class MainViewModelTests
 {
     private const string DataDirectory = "/data/msbe";
+    private const string AddedJson = """{"added":["mod"],"skipped":[],"unresolved":[],"incompatible":[],"substituted":[]}""";
 
     /// <summary>Refresh loads, sorts and selects registered instances.</summary>
     /// <returns>A task representing the test.</returns>
@@ -270,7 +271,8 @@ public sealed class MainViewModelTests
         Assert.True(vm.BrowseResults[0].IsInstalled);
         Assert.True(vm.BrowseResults[0].IsMarked);
         Assert.Equal("1 selected", vm.MarkedBrowseResultCount);
-        await vm.AddBrowseResultCommand.ExecuteAsync(parameter: null);
+        vm.AddBrowseResultCommand.Execute(parameter: null);
+        await vm.DownloadsSettled.ConfigureAwait(true);
 
         Assert.Equal("Sodium", vm.SelectedBrowseResult.Title);
         Assert.Equal("https://cdn.modrinth.com/data/AANobbMI/icon.png", vm.SelectedBrowseResult.IconSource);
@@ -280,8 +282,75 @@ public sealed class MainViewModelTests
         Assert.Contains(calls, arguments => arguments.SequenceEqual(
             ["--format", "json", "add", "alpha", "modrinth:iris", "--profile", "default", "--with-deps"],
             StringComparer.Ordinal));
-        Assert.Contains("Added 1 mod(s)", vm.StatusMessage, StringComparison.Ordinal);
+        DownloadQueueItem download = Assert.Single(vm.FinishedDownloads);
+        Assert.Equal("Iris", download.Title);
+        Assert.Equal(DownloadState.Completed, download.State);
+        Assert.Equal("Added 1 mod", download.Detail);
+        Assert.Null(vm.ActiveDownload);
+        Assert.Empty(vm.QueuedDownloads);
+        Assert.Contains("Added Iris to default", vm.StatusMessage, StringComparison.Ordinal);
         Assert.Empty(vm.MarkedBrowseResults);
+    }
+
+    /// <summary>The download queue runs in order, honours reordering and pausing, and retries failures.</summary>
+    /// <returns>A task representing the test.</returns>
+    [Fact]
+    public async Task DownloadQueueRunsInOrderPausesAndRetries()
+    {
+        TaskCompletionSource<CommandResult> sodium = new();
+        bool brokenFails = true;
+        List<string> added = [];
+        MainViewModel vm = new(DownloadQueueClient(sodium.Task, () => brokenFails, added)) { SelectedInstance = "alpha", BrowseQuery = "mods" };
+
+        await vm.SearchBrowseCommand.ExecuteAsync(parameter: null);
+        foreach (BrowseResultItem result in vm.BrowseResults)
+        {
+            result.IsMarked = true;
+        }
+
+        vm.AddBrowseResultCommand.Execute(parameter: null);
+
+        Assert.Equal("Sodium", vm.ActiveDownload?.Title);
+        Assert.Equal(["Iris", "Broken"], vm.QueuedDownloads.Select(download => download.Title));
+        Assert.Equal(3, vm.PendingDownloadCount);
+        Assert.Equal("Downloading Sodium · 2 queued", vm.DownloadSummary);
+
+        vm.MoveDownloadUpCommand.Execute(vm.QueuedDownloads[1]);
+        vm.RemoveQueuedDownloadCommand.Execute(vm.QueuedDownloads[1]);
+        vm.ToggleDownloadQueuePausedCommand.Execute(parameter: null);
+
+        Assert.Equal(["Broken"], vm.QueuedDownloads.Select(download => download.Title));
+        Assert.Equal("Downloading Sodium · queue paused", vm.DownloadSummary);
+
+        sodium.SetResult(new CommandResult(0, AddedJson, string.Empty));
+        await vm.DownloadsSettled.ConfigureAwait(true);
+
+        Assert.Null(vm.ActiveDownload);
+        Assert.Equal(["Broken"], vm.QueuedDownloads.Select(download => download.Title));
+        Assert.Equal(DownloadState.Completed, Assert.Single(vm.FinishedDownloads).State);
+        Assert.Equal("Paused · 1 queued", vm.DownloadSummary);
+
+        vm.ToggleDownloadQueuePausedCommand.Execute(parameter: null);
+        await vm.DownloadsSettled.ConfigureAwait(true);
+
+        DownloadQueueItem broken = vm.FinishedDownloads[0];
+        Assert.Equal(DownloadState.Failed, broken.State);
+        Assert.Equal("no compatible release", broken.Detail);
+        Assert.Empty(vm.QueuedDownloads);
+
+        brokenFails = false;
+        vm.RetryDownloadCommand.Execute(broken);
+        await vm.DownloadsSettled.ConfigureAwait(true);
+
+        Assert.Equal(DownloadState.Completed, broken.State);
+        Assert.Same(broken, vm.FinishedDownloads[0]);
+        Assert.Equal(2, vm.FinishedDownloads.Count);
+        Assert.Equal(["modrinth:sodium", "modrinth:broken", "modrinth:broken"], added);
+
+        vm.ClearFinishedDownloadsCommand.Execute(parameter: null);
+
+        Assert.False(vm.HasFinishedDownloads);
+        Assert.Equal("No downloads in progress", vm.DownloadSummary);
     }
 
     /// <summary>Profile creation can clone the current profile and selects the result.</summary>
@@ -611,6 +680,37 @@ public sealed class MainViewModelTests
             : new CommandResult(0, """{"target":{"loader":"fabric","loader_version":"0.16.10","side":"client"},"order":[],"components":{},"mods":{},"configs":{}}""", string.Empty);
     }
 
+    private static TestClient DownloadQueueClient(Task<CommandResult> sodium, Func<bool> brokenFails, List<string> added)
+    {
+        const string StatusJson = """{"name":"alpha","root":"/games/alpha","plan_id":"minecraft","plan_version":"1","loader":"fabric","game_version":"1.21.1","deployed_profile":"default","deployed_files":0}""";
+        const string ProfilesJson = """{"profiles":["default"],"deployed":"default"}""";
+        const string ModsJson = """{"order":[],"components":{},"mods":{}}""";
+        const string SearchJson = """[{"provider":"modrinth","project":"AANobbMI","slug":"sodium","title":"Sodium","description":"","icon_url":null,"downloads":1},{"provider":"modrinth","project":"YL57xq9U","slug":"iris","title":"Iris","description":"","icon_url":null,"downloads":1},{"provider":"modrinth","project":"BROKEN00","slug":"broken","title":"Broken","description":"","icon_url":null,"downloads":1}]""";
+        return new TestClient(arguments =>
+        {
+            if (arguments.Contains("add", StringComparer.Ordinal))
+            {
+                string source = arguments[4];
+                added.Add(source);
+                return source switch
+                {
+                    "modrinth:sodium" => sodium,
+                    "modrinth:broken" when brokenFails() => Task.FromResult(new CommandResult(1, string.Empty, "no compatible release")),
+                    _ => Task.FromResult(new CommandResult(0, AddedJson, string.Empty)),
+                };
+            }
+
+            string output = arguments.FirstOrDefault(argument => argument is "status" or "list" or "search") switch
+            {
+                "status" => StatusJson,
+                "list" => ProfilesJson,
+                "search" => SearchJson,
+                _ => ModsJson,
+            };
+            return Task.FromResult(new CommandResult(0, output, string.Empty));
+        });
+    }
+
     private sealed class TestFolderLauncher : IFolderLauncher
     {
         private readonly bool succeeds;
@@ -628,10 +728,15 @@ public sealed class MainViewModelTests
 
     private sealed class TestClient : IMsbeClient
     {
-        private readonly Func<IReadOnlyList<string>, CommandResult> runCommand;
+        private readonly Func<IReadOnlyList<string>, Task<CommandResult>> runCommand;
         private readonly Func<string, string>? invoke;
 
         public TestClient(Func<IReadOnlyList<string>, CommandResult> runCommand, Func<string, string>? invoke = null)
+            : this(arguments => Task.FromResult(runCommand(arguments)), invoke)
+        {
+        }
+
+        public TestClient(Func<IReadOnlyList<string>, Task<CommandResult>> runCommand, Func<string, string>? invoke = null)
         {
             this.runCommand = runCommand;
             this.invoke = invoke;
@@ -644,7 +749,7 @@ public sealed class MainViewModelTests
         public Task<IReadOnlyList<GameInfo>> GetGamesAsync(CancellationToken cancellationToken) => Task.FromResult<IReadOnlyList<GameInfo>>(
             [new GameInfo("minecraft", "Minecraft", "1", ["fabric", "neoforge"])]);
 
-        public Task<CommandResult> RunCommandAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken) => Task.FromResult(this.runCommand(arguments));
+        public Task<CommandResult> RunCommandAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken) => this.runCommand(arguments);
 
         public Task<JsonElement> InvokeAsync(string method, Action<Utf8JsonWriter>? writeParameters, CancellationToken cancellationToken)
         {

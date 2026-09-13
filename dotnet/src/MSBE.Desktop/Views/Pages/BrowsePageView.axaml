@@ -97,7 +97,7 @@
                             <CheckBox Content="Include required dependencies" IsChecked="{Binding BrowseWithDependencies}" />
                             <Button Classes="primary-button"
                                     HorizontalAlignment="Stretch"
-                                    Content="Install selected mods"
+                                    Content="Add to download queue"
                                     IsEnabled="{Binding CanInstallMarkedBrowseResults}"
                                     Command="{Binding AddBrowseResultCommand}" />
                         </StackPanel>

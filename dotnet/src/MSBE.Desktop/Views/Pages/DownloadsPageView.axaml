@@ -1,0 +1,171 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:asyncImageLoader="clr-namespace:AsyncImageLoader;assembly=AsyncImageLoader.Avalonia"
+             xmlns:vm="using:MSBE.Desktop.ViewModels"
+             x:Class="MSBE.Desktop.Views.Pages.DownloadsPageView"
+             x:DataType="vm:MainViewModel">
+    <Grid Margin="8" RowDefinitions="Auto,*" RowSpacing="18">
+        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+            <StackPanel Spacing="3">
+                <TextBlock Classes="sectionHeading" Text="Downloads" />
+                <TextBlock Classes="download-meta" Text="{Binding DownloadSummary}" />
+            </StackPanel>
+            <Button Grid.Column="1"
+                    Classes="secondary-button"
+                    VerticalAlignment="Center"
+                    Command="{Binding ToggleDownloadQueuePausedCommand}">
+                <StackPanel Orientation="Horizontal" Spacing="7">
+                    <LucideIcon Kind="Pause" Size="15" StrokeWidth="2" IsVisible="{Binding !IsDownloadQueuePaused}" />
+                    <LucideIcon Kind="Play" Size="15" StrokeWidth="2" IsVisible="{Binding IsDownloadQueuePaused}" />
+                    <TextBlock Text="{Binding DownloadQueueToggleLabel}" />
+                </StackPanel>
+            </Button>
+        </Grid>
+
+        <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="0,0,4,8" Spacing="26">
+                <Border Classes="download-hero">
+                    <Panel>
+                        <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="16" RowSpacing="18" IsVisible="{Binding IsDownloading}">
+                            <Border Classes="download-icon" Width="64" Height="64" ClipToBounds="True">
+                                <Panel>
+                                    <LucideIcon Kind="PackageSearch" Size="26" StrokeWidth="1.6" />
+                                    <Image asyncImageLoader:ImageLoader.Source="{Binding ActiveDownload.IconSource}"
+                                           RenderOptions.BitmapInterpolationMode="HighQuality"
+                                           Stretch="UniformToFill" />
+                                </Panel>
+                            </Border>
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="4">
+                                <TextBlock Classes="download-hero-title" Text="{Binding ActiveDownload.Title}" TextTrimming="CharacterEllipsis" />
+                                <TextBlock Classes="download-meta" Text="{Binding ActiveDownload.Summary}" TextTrimming="CharacterEllipsis" />
+                            </StackPanel>
+                            <TextBlock Grid.Column="2" Classes="download-status" VerticalAlignment="Center" Text="DOWNLOADING" />
+                            <ProgressBar Grid.Row="1" Grid.ColumnSpan="3" Classes="download-progress" IsIndeterminate="True" />
+                        </Grid>
+
+                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="16" IsVisible="{Binding !IsDownloading}">
+                            <Border Classes="download-icon" Width="64" Height="64">
+                                <Panel>
+                                    <LucideIcon Kind="Download" Size="26" StrokeWidth="1.6" IsVisible="{Binding !IsDownloadQueuePaused}" />
+                                    <LucideIcon Kind="Pause" Size="26" StrokeWidth="1.6" IsVisible="{Binding IsDownloadQueuePaused}" />
+                                </Panel>
+                            </Border>
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="4">
+                                <TextBlock Classes="download-hero-title" Text="{Binding DownloadIdleTitle}" />
+                                <TextBlock Classes="download-meta" Text="{Binding DownloadIdleHint}" TextWrapping="Wrap" />
+                            </StackPanel>
+                        </Grid>
+                    </Panel>
+                </Border>
+
+                <StackPanel Spacing="10" IsVisible="{Binding HasQueuedDownloads}">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Classes="download-section" Text="UP NEXT" />
+                        <TextBlock Classes="download-count" Text="{Binding QueuedDownloads.Count}" />
+                    </StackPanel>
+                    <ItemsControl ItemsSource="{Binding QueuedDownloads}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Spacing="6" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:DownloadQueueItem">
+                                <Border Classes="download-row">
+                                    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
+                                        <Border Classes="download-icon" Width="36" Height="36" ClipToBounds="True">
+                                            <Panel>
+                                                <LucideIcon Kind="PackageSearch" Size="17" StrokeWidth="1.8" />
+                                                <Image asyncImageLoader:ImageLoader.Source="{Binding IconSource}"
+                                                       RenderOptions.BitmapInterpolationMode="HighQuality"
+                                                       Stretch="UniformToFill" />
+                                            </Panel>
+                                        </Border>
+                                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+                                            <TextBlock Classes="download-title" Text="{Binding Title}" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Classes="download-meta" Text="{Binding Summary}" TextTrimming="CharacterEllipsis" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2" Classes="download-actions" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
+                                            <Button Classes="icon-button"
+                                                    ToolTip.Tip="Move up"
+                                                    AutomationProperties.Name="Move up"
+                                                    Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).MoveDownloadUpCommand}"
+                                                    CommandParameter="{Binding}">
+                                                <LucideIcon Kind="ChevronUp" Size="16" StrokeWidth="2" />
+                                            </Button>
+                                            <Button Classes="icon-button"
+                                                    ToolTip.Tip="Move down"
+                                                    AutomationProperties.Name="Move down"
+                                                    Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).MoveDownloadDownCommand}"
+                                                    CommandParameter="{Binding}">
+                                                <LucideIcon Kind="ChevronDown" Size="16" StrokeWidth="2" />
+                                            </Button>
+                                            <Button Classes="icon-button"
+                                                    ToolTip.Tip="Remove from queue"
+                                                    AutomationProperties.Name="Remove from queue"
+                                                    Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).RemoveQueuedDownloadCommand}"
+                                                    CommandParameter="{Binding}">
+                                                <LucideIcon Kind="X" Size="16" StrokeWidth="2" />
+                                            </Button>
+                                        </StackPanel>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+
+                <StackPanel Spacing="10" IsVisible="{Binding HasFinishedDownloads}">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                            <TextBlock Classes="download-section" Text="COMPLETED" />
+                            <TextBlock Classes="download-count" Text="{Binding FinishedDownloads.Count}" />
+                        </StackPanel>
+                        <Button Grid.Column="1" Classes="text-button" Content="Clear" Command="{Binding ClearFinishedDownloadsCommand}" />
+                    </Grid>
+                    <ItemsControl ItemsSource="{Binding FinishedDownloads}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Spacing="6" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:DownloadQueueItem">
+                                <Border Classes="download-row" Classes.failed="{Binding IsFailed}">
+                                    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
+                                        <Border Classes="download-icon" Width="36" Height="36" ClipToBounds="True">
+                                            <Panel>
+                                                <LucideIcon Kind="PackageSearch" Size="17" StrokeWidth="1.8" />
+                                                <Image asyncImageLoader:ImageLoader.Source="{Binding IconSource}"
+                                                       RenderOptions.BitmapInterpolationMode="HighQuality"
+                                                       Stretch="UniformToFill" />
+                                            </Panel>
+                                        </Border>
+                                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+                                            <TextBlock Classes="download-title" Text="{Binding Title}" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Classes="download-meta" Text="{Binding Summary}" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Classes="download-error" Text="{Binding Detail}" TextWrapping="Wrap" MaxLines="2" IsVisible="{Binding IsFailed}" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                            <TextBlock Classes="download-meta" VerticalAlignment="Center" Text="{Binding Detail}" IsVisible="{Binding IsCompleted}" />
+                                            <LucideIcon Classes="download-ok" Kind="CircleCheck" Size="17" StrokeWidth="2" IsVisible="{Binding IsCompleted}" />
+                                            <Button Classes="icon-button"
+                                                    IsVisible="{Binding IsFailed}"
+                                                    ToolTip.Tip="Retry"
+                                                    AutomationProperties.Name="Retry download"
+                                                    Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).RetryDownloadCommand}"
+                                                    CommandParameter="{Binding}">
+                                                <LucideIcon Kind="RotateCw" Size="15" StrokeWidth="2" />
+                                            </Button>
+                                            <LucideIcon Classes="download-failed" Kind="CircleAlert" Size="17" StrokeWidth="2" IsVisible="{Binding IsFailed}" />
+                                        </StackPanel>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</UserControl>
