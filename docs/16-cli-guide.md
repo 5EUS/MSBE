@@ -254,6 +254,9 @@ preview, rather than copied into the game's mod directory.
 | `purge INSTANCE`                                                                                                                                 | **Implemented** | Undo all deployment history.                                                |
 | `verify INSTANCE`                                                                                                                                | **Implemented** | Report deployment drift.                                                    |
 | `status INSTANCE`                                                                                                                                | **Implemented** | Show instance and deployment state.                                         |
+| `extension keygen SIGNER KEY_FILE`                                                                                                               | **Implemented** | Create a private signing key and print the trust entry for it.              |
+| `extension sign MODULE --key KEY_FILE --version VERSION [--id ID]`                                                                               | **Implemented** | Sign a WebAssembly pack codec; writes its envelope beside the module.       |
+| `extension verify ENVELOPE`                                                                                                                      | **Implemented** | Check a signed codec against the local trust root without installing it.   |
 
 Pack commands are codec-driven: `pack formats` and `pack options` list what the reviewed registry
 provides, and the CLI names no format itself. Every pack command previews first. `--dry-run`
@@ -277,6 +280,21 @@ change the new version invalidates must be resolved before the update runs. Modr
 honors each manifest file's `path`; the archive `overrides/` directory is not yet imported. A
 snapshot is a private backup, not a pack: `pack import` refuses one. See
 [17 - Pack formats and native bundles](17-pack-formats-and-native-bundles.md).
+
+Extension commands publish WebAssembly pack codecs ([18 §18.3](18-wasm-extensions.md)). A publisher
+creates a key once, signs each release, and shares the trust entry `keygen` prints. A user adds that
+entry to `extensions/trust.toml` in the MSBE home, checks the codec with `verify`, and copies the
+envelope and its module into `extensions/codecs/`. Pass absolute paths, since the daemon resolves them.
+
+```sh
+"$MSBE" extension keygen example-publisher "$HOME/.msbe-keys/example-publisher.toml"
+"$MSBE" extension sign "$PWD/pack-list.wasm" --key "$HOME/.msbe-keys/example-publisher.toml" --version 1.0.0
+"$MSBE" extension verify "$PWD/pack-list.toml"
+```
+
+A key file is created readable only by its owner and is never replaced; `sign` refuses a key file
+other users can read. `sign` loads the module in the sandbox first, so only a module MSBE can run as a
+codec is signed.
 
 ## 7. Planned command surface
 

@@ -17,22 +17,33 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use msbe_core::config::Home;
 use msbe_provider_api::{
     ExtensionCapability, ExtensionEnvelope, ExtensionProvide, HostApiRange, VerifyingKey,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::RegistryError;
 
 /// The data-directory folder installed extensions live in.
 pub(crate) const DIRECTORY: &str = "extensions";
+/// The most bytes a codec module may be.
+pub(crate) const MODULE_LIMIT: u64 = 64 << 20;
 
 const TRUST_FILE: &str = "trust.toml";
 const CODECS: &str = "codecs";
 /// The most bytes a trust root or envelope document may be.
 const DOCUMENT_LIMIT: u64 = 1 << 20;
-/// The most bytes a codec module may be.
-const MODULE_LIMIT: u64 = 64 << 20;
+
+/// The trust root in `home`: the signers this installation accepts extensions from.
+pub fn trust_file(home: &Home) -> PathBuf {
+    home.root().join(DIRECTORY).join(TRUST_FILE)
+}
+
+/// The folder in `home` that installed codecs, envelope and module side by side, are read from.
+pub fn codecs_directory(home: &Home) -> PathBuf {
+    home.root().join(DIRECTORY).join(CODECS)
+}
 
 /// Signers local policy trusts to publish extensions, and the providers each may bind codecs to.
 ///
@@ -87,7 +98,7 @@ impl ExtensionTrust {
 }
 
 /// A codec envelope as installed: the envelope fields, and the module file its payload is.
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CodecDocument {
     schema: u32,
@@ -96,11 +107,11 @@ struct CodecDocument {
     module: String,
     package_digest: String,
     provides: Vec<ExtensionProvide>,
-    host_api: HostApiRange,
     #[serde(default)]
     capabilities: Vec<ExtensionCapability>,
     signer: String,
     signature: String,
+    host_api: HostApiRange,
 }
 
 #[derive(Deserialize)]
@@ -136,11 +147,7 @@ pub(crate) struct Installed {
 /// Reads the trust root and every codec envelope beneath `directory`. A missing directory, trust
 /// root or codecs folder is simply empty.
 pub(crate) fn read(directory: &Path) -> Result<Installed, RegistryError> {
-    let trust_path = directory.join(TRUST_FILE);
-    let trust = match read_limited(&trust_path, DOCUMENT_LIMIT)? {
-        Some(bytes) => parse_trust(&trust_path, &bytes)?,
-        None => ExtensionTrust::default(),
-    };
+    let trust = read_trust(directory)?;
     let codecs_directory = directory.join(CODECS);
     let entries = match fs::read_dir(&codecs_directory) {
         Ok(entries) => entries,
@@ -167,14 +174,24 @@ pub(crate) fn read(directory: &Path) -> Result<Installed, RegistryError> {
     documents.sort();
     let codecs = documents
         .into_iter()
-        .map(|path| read_codec(&codecs_directory, path))
+        .map(read_codec)
         .collect::<Result<_, _>>()?;
     Ok(Installed { trust, codecs })
 }
 
-fn read_codec(directory: &Path, path: PathBuf) -> Result<InstalledCodec, RegistryError> {
+/// The trust root beneath `directory`, or no trust at all when it has none.
+pub(crate) fn read_trust(directory: &Path) -> Result<ExtensionTrust, RegistryError> {
+    let path = directory.join(TRUST_FILE);
+    match read_limited(&path, DOCUMENT_LIMIT)? {
+        Some(bytes) => parse_trust(&path, &bytes),
+        None => Ok(ExtensionTrust::default()),
+    }
+}
+
+/// The codec whose envelope document is at `path`, with the module it names beside it.
+pub(crate) fn read_codec(path: PathBuf) -> Result<InstalledCodec, RegistryError> {
     let bytes = read_limited(&path, DOCUMENT_LIMIT)?
-        .ok_or_else(|| invalid(&path, "the envelope disappeared while it was being read"))?;
+        .ok_or_else(|| invalid(&path, "the envelope does not exist"))?;
     let text = std::str::from_utf8(&bytes).map_err(|error| invalid(&path, error))?;
     let document: CodecDocument = toml::from_str(text).map_err(|error| invalid(&path, error))?;
     if !is_module_name(&document.module) {
@@ -186,7 +203,8 @@ fn read_codec(directory: &Path, path: PathBuf) -> Result<InstalledCodec, Registr
             ),
         ));
     }
-    let payload = read_limited(&directory.join(&document.module), MODULE_LIMIT)?
+    let module = path.with_file_name(&document.module);
+    let payload = read_limited(&module, MODULE_LIMIT)?
         .ok_or_else(|| invalid(&path, format!("module {} is missing", document.module)))?;
     Ok(InstalledCodec {
         envelope: ExtensionEnvelope {
@@ -205,6 +223,25 @@ fn read_codec(directory: &Path, path: PathBuf) -> Result<InstalledCodec, Registr
     })
 }
 
+/// The envelope document for `envelope`, whose payload is the module named `module` beside it.
+pub(crate) fn envelope_document(
+    envelope: &ExtensionEnvelope<Vec<u8>>,
+    module: &str,
+) -> Result<String, toml::ser::Error> {
+    toml::to_string(&CodecDocument {
+        schema: envelope.schema,
+        id: envelope.id.clone(),
+        version: envelope.version.clone(),
+        module: module.to_owned(),
+        package_digest: envelope.package_digest.clone(),
+        provides: envelope.provides.clone(),
+        capabilities: envelope.capabilities.clone(),
+        signer: envelope.signer.clone(),
+        signature: envelope.signature.clone(),
+        host_api: envelope.host_api,
+    })
+}
+
 fn parse_trust(path: &Path, bytes: &[u8]) -> Result<ExtensionTrust, RegistryError> {
     let text = std::str::from_utf8(bytes).map_err(|error| invalid(path, error))?;
     let document: TrustDocument = toml::from_str(text).map_err(|error| invalid(path, error))?;
@@ -216,22 +253,24 @@ fn parse_trust(path: &Path, bytes: &[u8]) -> Result<ExtensionTrust, RegistryErro
                 format!("signer {:?} is listed more than once", signer.id),
             ));
         }
-        let key = decode_key(&signer.key).ok_or_else(|| {
-            invalid(
-                path,
-                format!(
-                    "signer {:?} needs a 64-character hexadecimal Ed25519 public key",
-                    signer.id
-                ),
-            )
-        })?;
+        let key = decode_bytes(&signer.key)
+            .and_then(|bytes| VerifyingKey::from_bytes(&bytes).ok())
+            .ok_or_else(|| {
+                invalid(
+                    path,
+                    format!(
+                        "signer {:?} needs a 64-character hexadecimal Ed25519 public key",
+                        signer.id
+                    ),
+                )
+            })?;
         trust = trust.with_signer(signer.id, key, signer.providers);
     }
     Ok(trust)
 }
 
 /// The file at `path`, or `None` when it does not exist, refusing one larger than `limit`.
-fn read_limited(path: &Path, limit: u64) -> Result<Option<Vec<u8>>, RegistryError> {
+pub(crate) fn read_limited(path: &Path, limit: u64) -> Result<Option<Vec<u8>>, RegistryError> {
     let file = match fs::File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -248,7 +287,7 @@ fn read_limited(path: &Path, limit: u64) -> Result<Option<Vec<u8>>, RegistryErro
 }
 
 /// Whether `name` is a plain `.wasm` file name, with no directory part.
-fn is_module_name(name: &str) -> bool {
+pub(crate) fn is_module_name(name: &str) -> bool {
     !name.starts_with('.')
         && !name.contains(['/', '\\', ':', '\0'])
         && Path::new(name)
@@ -256,7 +295,8 @@ fn is_module_name(name: &str) -> bool {
             .is_some_and(|extension| extension == "wasm")
 }
 
-fn decode_key(hex: &str) -> Option<VerifyingKey> {
+/// The 32 bytes a 64-character hexadecimal string spells.
+pub(crate) fn decode_bytes(hex: &str) -> Option<[u8; 32]> {
     if hex.len() != 64 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return None;
     }
@@ -264,7 +304,7 @@ fn decode_key(hex: &str) -> Option<VerifyingKey> {
     for (byte, pair) in bytes.iter_mut().zip(hex.as_bytes().chunks_exact(2)) {
         *byte = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
     }
-    VerifyingKey::from_bytes(&bytes).ok()
+    Some(bytes)
 }
 
 fn invalid(path: &Path, reason: impl fmt::Display) -> RegistryError {

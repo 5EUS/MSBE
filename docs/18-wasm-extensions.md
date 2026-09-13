@@ -294,6 +294,12 @@ signer         = "example-publisher"
 signature      = "…"
 ```
 
+`msbe extension` writes both documents ([16](16-cli-guide.md)). `keygen` creates a private signing
+key and prints the trust entry for its public key. `sign` loads a module in the sandbox, then writes
+its envelope document beside it. `verify` checks an envelope against the local trust root exactly as
+installing it would, without installing anything. A key file is created readable only by its owner,
+is never replaced, and cannot sign while other users can read it.
+
 A codec whose descriptor names no provider needs only a trusted signer. A codec that names a
 provider is served under that provider's identity and policy gate, like a native codec, so it also
 needs the provider to be registered and its signer to be granted that provider. A codec that fails

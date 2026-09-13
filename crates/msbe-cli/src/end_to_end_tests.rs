@@ -1312,57 +1312,62 @@ extension = "installer"
     );
 }
 
+/// A publisher signs a codec with the extension tools; a user trusts the key, verifies the codec,
+/// installs it, and MSBE serves it only while the trust root names its signer.
 #[test]
-fn installed_wasm_codecs_join_the_codec_catalog_under_the_local_trust_root() {
-    use msbe_provider_api::{ExtensionEnvelope, ExtensionProvide, HostApiRange, SigningKey, hex};
-
+fn signed_wasm_codecs_join_the_codec_catalog_under_the_local_trust_root() {
     const PACK_LIST: &[u8] = include_bytes!("../../msbe-wasm-codec/tests/fixtures/pack-list.wasm");
     let world = World::new();
-    let key = SigningKey::from_bytes(&[9; 32]);
-    let mut envelope = ExtensionEnvelope {
-        schema: 1,
-        package_digest: ExtensionEnvelope::package_digest_for(&PACK_LIST.to_vec()).unwrap(),
-        id: "pack-list".to_owned(),
-        version: "1.0.0".to_owned(),
-        provides: vec![ExtensionProvide::PackCodecV1],
-        host_api: HostApiRange {
-            minimum: 1,
-            maximum: 1,
-        },
-        capabilities: Vec::new(),
-        signer: "publisher".to_owned(),
-        signature: "00".repeat(64),
-        payload: PACK_LIST.to_vec(),
-    };
-    envelope.sign(&key).unwrap();
+    let key = world.inputs.join("publisher.toml").display().to_string();
+    let module = world.file("pack-list.wasm", PACK_LIST);
 
-    let extensions = world.home.join("extensions");
-    fs::create_dir_all(extensions.join("codecs")).unwrap();
-    fs::write(extensions.join("codecs/pack-list.wasm"), PACK_LIST).unwrap();
-    fs::write(
-        extensions.join("codecs/pack-list.toml"),
-        format!(
-            "schema = 1\nid = \"pack-list\"\nversion = \"1.0.0\"\nmodule = \"pack-list.wasm\"\npackage_digest = \"{}\"\nprovides = [\"pack-codec-v1\"]\nhost_api = {{ minimum = 1, maximum = 1 }}\nsigner = \"publisher\"\nsignature = \"{}\"\n",
-            envelope.package_digest, envelope.signature
-        ),
-    )
-    .unwrap();
-    fs::write(
-        extensions.join("trust.toml"),
-        format!(
-            "[[signer]]\nid = \"publisher\"\nkey = \"{}\"\n",
-            hex(key.verifying_key().as_bytes())
-        ),
-    )
-    .unwrap();
+    let generated = world.json(&["extension", "keygen", "publisher", key.as_str()]);
+    assert_eq!(
+        world
+            .msbe(&["extension", "keygen", "publisher", key.as_str()])
+            .code,
+        exit::FAILURE,
+        "a key file is never replaced"
+    );
+    let signed = world.json(&[
+        "extension",
+        "sign",
+        module.as_str(),
+        "--key",
+        key.as_str(),
+        "--version",
+        "1.0.0",
+    ]);
+    assert_eq!(at(&signed, "/codec"), "pack-list");
+    let envelope = at(&signed, "/envelope").as_str().unwrap().to_owned();
 
+    let untrusted = world.msbe(&["extension", "verify", envelope.as_str()]);
+    assert_eq!(untrusted.code, exit::FAILURE);
+    assert!(untrusted.err.contains("not trusted"), "{}", untrusted.err);
+
+    let trust = PathBuf::from(at(&generated, "/trust").as_str().unwrap());
+    fs::create_dir_all(trust.parent().unwrap()).unwrap();
+    fs::write(&trust, at(&generated, "/trust_entry").as_str().unwrap()).unwrap();
+    let verified = world.json(&["extension", "verify", envelope.as_str()]);
+    assert_eq!(at(&verified, "/signer"), "publisher");
+
+    let codecs = world.home.join("extensions/codecs");
+    fs::create_dir_all(&codecs).unwrap();
+    fs::copy(&module, codecs.join("pack-list.wasm")).unwrap();
+    fs::copy(&envelope, codecs.join("pack-list.toml")).unwrap();
     let formats = world.json(&["pack", "formats"]).to_string();
     assert!(formats.contains(r#""pack-list""#), "{formats}");
 
-    fs::write(extensions.join("trust.toml"), "").unwrap();
+    fs::write(&trust, "").unwrap();
     let refused = world.msbe(&["pack", "formats"]);
     assert_eq!(refused.code, exit::FAILURE);
     assert!(refused.err.contains("pack-list.toml"), "{}", refused.err);
+    let diagnosed = world.msbe(&["extension", "verify", envelope.as_str()]);
+    assert!(
+        diagnosed.err.contains("not trusted"),
+        "extension commands still run to diagnose a refused codec: {}",
+        diagnosed.err
+    );
 }
 
 fn mrpack(world: &World, version: &str, files: &[(&str, &[u8])]) -> String {

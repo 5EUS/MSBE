@@ -95,6 +95,10 @@ Defences:
   redaction filter in front of the logger and property-tested.
 - Support bundles are redacted by the same filter and print a summary of what was
   removed before the user shares the file.
+- Extension signing keys stay with their publisher: `msbe extension keygen` creates a key
+  readable only by its owner and never replaces one, and `sign` refuses a key other users
+  can read. Which signers an installation trusts is local policy in `extensions/trust.toml`,
+  which trusts no one by default ([18 §18.3](18-wasm-extensions.md)).
 
 ## 11.6 Safety-of-the-user concerns
 

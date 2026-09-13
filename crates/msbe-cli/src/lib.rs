@@ -36,7 +36,10 @@ use msbe_provider_api::{
         Substitution,
     },
 };
-use msbe_providers::{Providers, RegistryError, Routed};
+use msbe_providers::{
+    AuthoringError, Providers, RegistryError, Routed, SignerKey, codecs_directory, sign_codec,
+    trust_file, verify_codec,
+};
 use serde::Serialize;
 
 #[cfg(test)]
@@ -115,6 +118,10 @@ enum Command {
     /// Diagnose one broken module through deterministic trial deployments.
     #[command(subcommand)]
     Bisect(BisectCommand),
+    /// Create signing keys, sign WebAssembly pack codecs, and check signed codecs against the local
+    /// trust root.
+    #[command(subcommand)]
+    Extension(ExtensionCommand),
     /// Add mods to a profile from local files, .zip archives, provider references, or https URLs.
     Add {
         /// The instance.
@@ -375,6 +382,37 @@ enum SnapshotCommand {
 }
 
 #[derive(Debug, Subcommand)]
+enum ExtensionCommand {
+    /// Generate a signing key, and print the trust entry that lets MSBE accept its signatures.
+    Keygen {
+        /// The signer ID every envelope the key signs names.
+        signer: String,
+        /// The key file to create. An existing file is never replaced.
+        key: PathBuf,
+    },
+    /// Sign a WebAssembly pack codec, writing its envelope beside the module.
+    Sign {
+        /// The .wasm module.
+        module: PathBuf,
+        /// The key file to sign with.
+        #[arg(long, value_name = "FILE")]
+        key: PathBuf,
+        /// The version to publish the codec as.
+        #[arg(long)]
+        version: String,
+        /// The extension ID. Defaults to the codec ID the module declares.
+        #[arg(long)]
+        id: Option<String>,
+    },
+    /// Check a signed codec against the local trust root, as installing it would, without
+    /// installing it.
+    Verify {
+        /// The envelope document beside the module.
+        envelope: PathBuf,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 enum PackConfigCommand {
     /// List pack-owned config files.
     List {
@@ -564,6 +602,8 @@ enum CliError {
     Http(#[from] HttpError),
     #[error(transparent)]
     Provider(#[from] RegistryError),
+    #[error(transparent)]
+    Authoring(#[from] AuthoringError),
     #[error(transparent)]
     Pack(#[from] PackError),
     #[error(transparent)]
@@ -758,6 +798,10 @@ fn execute(cli: &Cli, console: &mut Console<'_>) -> Result<u8, CliError> {
         Some(dir) => Home::at(dir),
         None => Home::discover()?,
     };
+    // Extension commands never need the installed extensions, and must work to repair them.
+    if let Command::Extension(command) = &cli.command {
+        return extension_command(&home, command, console);
+    }
     let providers = Providers::installed(&home)?;
     match &cli.command {
         Command::Instance(command) => instance_command(&home, command, console),
@@ -765,6 +809,7 @@ fn execute(cli: &Cli, console: &mut Console<'_>) -> Result<u8, CliError> {
         Command::Pack(command) => pack_command(&providers, &home, command, console),
         Command::Snapshot(command) => snapshot_command(&home, command, console),
         Command::Bisect(command) => bisect_command(&home, command, console),
+        Command::Extension(command) => extension_command(&home, command, console),
         Command::Add {
             instance,
             sources,
@@ -1334,6 +1379,102 @@ fn pack_capture(
             report.profile
         )
     })?;
+    Ok(exit::OK)
+}
+
+/// A generated signing key, and how to trust it.
+#[derive(Serialize)]
+struct KeyReport {
+    signer: String,
+    key: PathBuf,
+    public_key: String,
+    trust: PathBuf,
+    trust_entry: String,
+}
+
+fn extension_command(
+    home: &Home,
+    command: &ExtensionCommand,
+    console: &mut Console<'_>,
+) -> Result<u8, CliError> {
+    match command {
+        ExtensionCommand::Keygen { signer, key } => {
+            let path = absolute(key)?;
+            let generated = SignerKey::generate(signer)?;
+            generated.write_new(&path)?;
+            let report = KeyReport {
+                signer: generated.signer().to_owned(),
+                key: path,
+                public_key: generated.public_key(),
+                trust: trust_file(home),
+                trust_entry: generated.trust_entry(&[]),
+            };
+            console.emit(&report, |out, report| {
+                writeln!(
+                    out,
+                    "Wrote a signing key for {} to {}. Keep it private: anyone who holds it can sign as {}.",
+                    report.signer,
+                    report.key.display(),
+                    report.signer
+                )?;
+                writeln!(out, "Public key: {}", report.public_key)?;
+                writeln!(
+                    out,
+                    "To trust it, add this entry to {}, with `providers = [...]` naming any provider its codecs bind to:\n",
+                    report.trust.display()
+                )?;
+                write!(out, "{}", report.trust_entry)
+            })?;
+        }
+        ExtensionCommand::Sign {
+            module,
+            key,
+            version,
+            id,
+        } => {
+            let key = SignerKey::read(&absolute(key)?)?;
+            let signed = sign_codec(&absolute(module)?, &key, version, id.as_deref())?;
+            let install = codecs_directory(home);
+            console.emit(&signed, |out, signed| {
+                writeln!(
+                    out,
+                    "Signed codec {} as {} {} by {}, and wrote {}.",
+                    signed.codec,
+                    signed.id,
+                    signed.version,
+                    signed.signer,
+                    signed.envelope.display()
+                )?;
+                if let Some(provider) = &signed.provider {
+                    writeln!(
+                        out,
+                        "It binds to provider {provider}, so its signer's trust entry needs providers = [\"{provider}\"]."
+                    )?;
+                }
+                writeln!(
+                    out,
+                    "Install it by copying the envelope and {} into {}.",
+                    signed.module.display(),
+                    install.display()
+                )
+            })?;
+        }
+        ExtensionCommand::Verify { envelope } => {
+            let verified = verify_codec(home, &absolute(envelope)?)?;
+            console.emit(&verified, |out, verified| {
+                writeln!(
+                    out,
+                    "{} is codec {} ({} {}), signed by {} and trusted by {}.",
+                    verified.envelope.display(),
+                    verified.codec,
+                    verified.id,
+                    verified.version,
+                    verified.signer,
+                    verified.trust.display()
+                )
+            })?;
+        }
+    }
     Ok(exit::OK)
 }
 

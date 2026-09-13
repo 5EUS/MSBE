@@ -7,11 +7,15 @@
 //!
 //! See `docs/06-providers-and-policy.md`.
 
+mod authoring;
 #[cfg(test)]
 mod conformance_tests;
 mod installed;
 mod registry;
 mod runtime;
 
-pub use installed::ExtensionTrust;
+pub use authoring::{
+    AuthoringError, SignedCodec, SignerKey, VerifiedCodec, sign_codec, verify_codec,
+};
+pub use installed::{ExtensionTrust, codecs_directory, trust_file};
 pub use registry::{BUILTIN, ProgramTrust, Providers, RegistryError, Routed};

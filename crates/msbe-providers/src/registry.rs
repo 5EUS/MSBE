@@ -90,7 +90,7 @@ struct RegisteredCodec {
 }
 
 impl Providers {
-    /// Adds a trusted WebAssembly pack codec to this registry.
+    /// Adds a trusted WebAssembly pack codec to this registry, returning its codec ID.
     ///
     /// A codec whose descriptor names a provider is served under that provider's policy, and is
     /// admitted only when the provider is registered and `trust` lets the envelope's signer publish
@@ -105,7 +105,7 @@ impl Providers {
         &mut self,
         envelope: &ExtensionEnvelope<Vec<u8>>,
         trust: &ExtensionTrust,
-    ) -> Result<(), RegistryError> {
+    ) -> Result<String, RegistryError> {
         let codec = WasmPackCodec::load_signed(envelope, &trust.keys())?;
         let descriptor = codec.descriptor();
         if let Some(provider) = &descriptor.provider {
@@ -161,19 +161,19 @@ impl Providers {
     }
 
     /// Adds a loaded WebAssembly codec under the provider its descriptor names, once its ID and
-    /// detection hints are free.
-    fn admit_wasm_codec(&mut self, codec: WasmPackCodec) -> Result<(), RegistryError> {
+    /// detection hints are free, and returns its ID.
+    fn admit_wasm_codec(&mut self, codec: WasmPackCodec) -> Result<String, RegistryError> {
         let descriptor = codec.descriptor();
         self.codecs.claim(descriptor)?;
         let (id, provider) = (descriptor.id.clone(), descriptor.provider.clone());
         self.codecs.codecs.insert(
-            id,
+            id.clone(),
             RegisteredCodec {
                 provider,
                 codec: Box::new(codec),
             },
         );
-        Ok(())
+        Ok(id)
     }
 
     /// The providers MSBE ships, plus the WebAssembly pack codecs installed in `home` that its
