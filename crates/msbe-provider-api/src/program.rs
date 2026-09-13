@@ -87,6 +87,9 @@ pub struct ProviderProgram {
     /// Operations this program permits its runtime to expose.
     #[serde(default)]
     pub capabilities: Vec<Capability>,
+    /// Provider-specific identifiers for MSBE game identifiers.
+    #[serde(default)]
+    pub games: BTreeMap<String, String>,
     /// Fixed endpoint-relative routes for catalog runtimes.
     #[serde(default)]
     pub routes: Routes,
@@ -211,16 +214,23 @@ impl ProviderProgram {
             (false, true) => Err(ProgramError::UnusedSection("updates")),
             (true, true) => {
                 self.require_release_model(Capability::Updates)?;
-                Self::require(
-                    self.mappings.release.project.is_some(),
-                    Capability::Updates,
-                    "mapping release.project",
-                )?;
-                Self::require(
-                    self.mappings.release.channel.is_some(),
-                    Capability::Updates,
-                    "mapping release.channel",
-                )
+                if self
+                    .updates
+                    .as_ref()
+                    .is_some_and(|updates| updates.kind == UpdateProtocolKind::HashLookupV1)
+                {
+                    Self::require(
+                        self.mappings.release.project.is_some(),
+                        Capability::Updates,
+                        "mapping release.project",
+                    )?;
+                    Self::require(
+                        self.mappings.release.channel.is_some(),
+                        Capability::Updates,
+                        "mapping release.channel",
+                    )?;
+                }
+                Ok(())
             }
             (false, false) => Ok(()),
         }
@@ -283,11 +293,6 @@ impl ProviderProgram {
             (release.number.is_some(), "mapping release.number"),
             (release.published.is_some(), "mapping release.published"),
             (release.files.is_some(), "mapping release.files"),
-            (
-                release.game_versions.is_some(),
-                "mapping release.game_versions",
-            ),
-            (release.loaders.is_some(), "mapping release.loaders"),
             (
                 release.dependencies.is_some(),
                 "mapping release.dependencies",
@@ -487,12 +492,17 @@ pub struct QueryParameter {
     /// A target fact, sent as a JSON array of strings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<TargetFact>,
+    /// Provider-specific spellings for target values.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub values: BTreeMap<String, String>,
 }
 
 /// A fact about the target a request may carry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum TargetFact {
+    /// The target's game identifier.
+    Game,
     /// Every loader the target accepts: its own and those it provides.
     Loaders,
     /// The target's game version.
@@ -508,6 +518,8 @@ pub enum ReleaseOrder {
     Listed,
     /// Newest publication first, whatever the channel.
     NewestFirst,
+    /// Highest semantic version first.
+    Semver,
 }
 
 /// How a catalog is asked for updates.
@@ -518,27 +530,49 @@ pub struct UpdateProtocol {
     #[serde(rename = "type")]
     pub kind: UpdateProtocolKind,
     /// The published file hash installed files are looked up by.
-    pub algorithm: HashAlgorithm,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub algorithm: Option<HashAlgorithm>,
     /// Route answering which release each hashed file belongs to.
-    pub listed: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub listed: Option<String>,
     /// Route answering the newest release, admitted by filters, of each hashed file's project.
-    pub latest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest: Option<String>,
     /// The request body's field names.
-    pub fields: UpdateFields,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fields: Option<UpdateFields>,
 }
 
 impl UpdateProtocol {
     fn validate(&self) -> Result<(), ProgramError> {
-        check_route(&self.listed, None)?;
-        check_route(&self.latest, None)?;
-        let fields = &self.fields;
-        check_names(&[
-            &fields.hashes,
-            &fields.algorithm,
-            &fields.loaders,
-            &fields.game_versions,
-            &fields.channels,
-        ])
+        match self.kind {
+            UpdateProtocolKind::HashLookupV1 => {
+                let (Some(algorithm), Some(listed), Some(latest), Some(fields)) =
+                    (self.algorithm, &self.listed, &self.latest, &self.fields)
+                else {
+                    return Err(ProgramError::InvalidUpdateProtocol);
+                };
+                let _ = algorithm;
+                check_route(listed, None)?;
+                check_route(latest, None)?;
+                check_names(&[
+                    &fields.hashes,
+                    &fields.algorithm,
+                    &fields.loaders,
+                    &fields.game_versions,
+                    &fields.channels,
+                ])
+            }
+            UpdateProtocolKind::ReleasesV1
+                if self.algorithm.is_none()
+                    && self.listed.is_none()
+                    && self.latest.is_none()
+                    && self.fields.is_none() =>
+            {
+                Ok(())
+            }
+            UpdateProtocolKind::ReleasesV1 => Err(ProgramError::InvalidUpdateProtocol),
+        }
     }
 }
 
@@ -550,6 +584,8 @@ pub enum UpdateProtocolKind {
     /// use for the newest compatible release. A file stays on its channel or moves to a more stable
     /// one, and moves to an older release only to regain compatibility with the target.
     HashLookupV1,
+    /// List each installed project's releases and select a newer compatible version.
+    ReleasesV1,
 }
 
 /// A published file hash algorithm.
@@ -875,6 +911,7 @@ fn check_route(route: &str, placeholder: Option<&str>) -> Result<(), ProgramErro
         }
         None => route.to_owned(),
     };
+    let rest = rest.replacen("{game}", "", 1);
     if rest.contains(['{', '}', '?', '#', ' ']) {
         return Err(invalid());
     }
@@ -883,8 +920,11 @@ fn check_route(route: &str, placeholder: Option<&str>) -> Result<(), ProgramErro
 
 /// Refuses a facet template with an unknown placeholder, or more than one.
 fn check_template(template: &str) -> Result<(), ProgramError> {
-    let markers = template.matches("{game_version}").count() + template.matches("{loader}").count();
+    let markers = template.matches("{game}").count()
+        + template.matches("{game_version}").count()
+        + template.matches("{loader}").count();
     let rest = template
+        .replacen("{game}", "", 1)
         .replacen("{game_version}", "", 1)
         .replacen("{loader}", "", 1);
     if template.is_empty()
@@ -1008,6 +1048,9 @@ pub enum ProgramError {
         /// Required route or mapping.
         requirement: &'static str,
     },
+    /// An update protocol included fields that its reviewed form does not accept.
+    #[error("invalid provider program update protocol")]
+    InvalidUpdateProtocol,
 }
 
 #[cfg(test)]

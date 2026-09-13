@@ -1,0 +1,58 @@
+# Thunderstore catalog program. Communities are provider-side spellings of MSBE games.
+runtime = "catalog-v1"
+capabilities = ["project", "releases", "updates"]
+
+[games]
+valheim = "valheim"
+
+[provider]
+schema = 1
+id = "thunderstore"
+name = "Thunderstore"
+
+[provider.source]
+type = "prefixed"
+prefix = "thunderstore:"
+
+[provider.metadata]
+api_base = "https://thunderstore.io"
+
+[provider.acquisition]
+type = "direct_https"
+
+[provider.policy]
+requires_auth = false
+respects_distribution_flag = true
+tos_url = "https://thunderstore.io/package/terms-of-service/"
+ack_required = false
+
+[routes]
+# Thunderstore's community package endpoint identifies packages by UUID.
+project = "/c/valheim/api/v1/package/{reference}"
+releases = "/c/{game}/api/v1/package/{project}"
+
+[releases]
+order = "semver"
+
+[updates]
+type = "releases-v1"
+
+[mappings.project]
+id = "/uuid4"
+title = "/name"
+slug = "/full_name"
+
+[mappings.release]
+id = "/uuid4"
+number = "/version_number"
+published = "/date_created"
+files = "/versions"
+dependencies = "/dependencies"
+
+[mappings.release.file]
+url = "/download_url"
+name = "/full_name"
+
+[mappings.release.dependency]
+project = "/name"
+kind = "/dependency_type"

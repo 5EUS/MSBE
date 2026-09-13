@@ -1208,6 +1208,7 @@ dependencies = [
  "msbe-provider-api",
  "msbe-provider-local",
  "msbe-wasm-codec",
+ "semver",
  "serde",
  "serde_json",
  "sha2 0.11.0",

@@ -19,10 +19,10 @@ report() {
   status=1
 }
 
-for crate in msbe-cli msbe-core msbe-daemon msbe-pack msbe-plan-host msbe-rpc-schema; do
+for crate in msbe-archive msbe-browser msbe-cli msbe-core msbe-daemon msbe-fsops msbe-pack msbe-plan-host msbe-rpc-schema msbe-wasm-codec; do
   directory="$root/crates/$crate/src"
   [ -d "$directory" ] || continue
-  if hits=$(rg --ignore-case --line-number --glob '*.rs' --glob '!end_to_end_tests.rs' \
+  if hits=$(rg --ignore-case --line-number --glob '*.rs' --glob '!*_tests.rs' --glob '!fake_modrinth.rs' \
     "$pattern" "$directory"); then
     report "$crate" "$hits"
   fi

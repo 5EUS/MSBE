@@ -25,6 +25,7 @@ use msbe_provider_api::{
         ReleasesRequest, TargetFact, UpdateProtocol,
     },
 };
+use semver::Version;
 use serde_json::{Map, Value};
 
 /// The most bytes a catalog response may be.
@@ -178,11 +179,12 @@ impl Releases for ProgramAdapter {
     ) -> Result<Vec<Release>, AdapterError> {
         let project = self.reference(project)?;
         let catalog = self.catalog(http)?;
-        let route = interpolate(
+        let route = interpolate_game(
             required_route(self.program.routes.releases.as_deref())?,
-            "project",
-            project,
+            &self.program.games,
+            &target.game,
         )?;
+        let route = interpolate(&route, "project", project)?;
         let parameters = release_parameters(&self.program.releases, target);
         let parameters: Vec<(&str, &str)> = parameters
             .iter()
@@ -198,8 +200,15 @@ impl Releases for ProgramAdapter {
                 releases.push(catalog.release(value, Some(project))?);
             }
         }
-        if self.program.releases.order == ReleaseOrder::NewestFirst {
-            releases.sort_by(|a, b| b.published.cmp(&a.published));
+        match self.program.releases.order {
+            ReleaseOrder::NewestFirst => releases.sort_by(|a, b| b.published.cmp(&a.published)),
+            ReleaseOrder::Semver => releases.sort_by(|a, b| {
+                Version::parse(&b.number)
+                    .ok()
+                    .cmp(&Version::parse(&a.number).ok())
+                    .then_with(|| b.published.cmp(&a.published))
+            }),
+            ReleaseOrder::Listed => {}
         }
         Ok(releases)
     }
@@ -239,8 +248,15 @@ impl Updates for ProgramAdapter {
             .updates
             .as_ref()
             .ok_or_else(|| specific(RuntimeError::NoUpdateProtocol))?;
-        self.catalog(http)?
-            .check_updates(protocol, installed, target)
+        let catalog = self.catalog(http)?;
+        match protocol.kind {
+            msbe_provider_api::program::UpdateProtocolKind::HashLookupV1 => {
+                catalog.check_updates(protocol, installed, target)
+            }
+            msbe_provider_api::program::UpdateProtocolKind::ReleasesV1 => {
+                catalog.check_release_updates(installed, target)
+            }
+        }
     }
 }
 
@@ -335,12 +351,14 @@ impl Catalog<'_> {
             }
             _ => true,
         };
-        Ok(target.game_version.as_ref().is_none_or(|wanted| {
-            game_versions.is_empty() || game_versions.iter().any(|version| version == wanted)
-        }) && loaders
-            .iter()
-            .any(|loader| loader_ids.contains(&loader.as_str()))
-            && version_matches)
+        Ok(map.game_versions.is_none()
+            || target.game_version.as_ref().is_none_or(|wanted| {
+                game_versions.is_empty() || game_versions.iter().any(|version| version == wanted)
+            }) && (map.loaders.is_none()
+                || loaders
+                    .iter()
+                    .any(|loader| loader_ids.contains(&loader.as_str())))
+                && version_matches)
     }
 
     /// The release in `value`, which belongs to `listed` when the program does not map a release's
@@ -403,7 +421,22 @@ impl Catalog<'_> {
         installed: &[&Provenance],
         target: &Target,
     ) -> Result<Vec<UpdateCheck>, AdapterError> {
-        let algorithm = protocol.algorithm.as_str();
+        let algorithm = protocol
+            .algorithm
+            .ok_or_else(|| specific(RuntimeError::InvalidUpdateProtocol))?
+            .as_str();
+        let listed_route = protocol
+            .listed
+            .as_deref()
+            .ok_or_else(|| specific(RuntimeError::InvalidUpdateProtocol))?;
+        let latest_route = protocol
+            .latest
+            .as_deref()
+            .ok_or_else(|| specific(RuntimeError::InvalidUpdateProtocol))?;
+        let fields = protocol
+            .fields
+            .as_ref()
+            .ok_or_else(|| specific(RuntimeError::InvalidUpdateProtocol))?;
         let requested: Vec<String> = installed
             .iter()
             .filter_map(|provenance| provenance.hashes.get(algorithm))
@@ -412,10 +445,9 @@ impl Catalog<'_> {
         if requested.is_empty() {
             return Ok(Vec::new());
         }
-        let fields = &protocol.fields;
         let unique: BTreeSet<&str> = requested.iter().map(String::as_str).collect();
         let listed = self.post(
-            &protocol.listed,
+            listed_route,
             Map::from_iter([
                 (
                     fields.hashes.clone(),
@@ -442,19 +474,27 @@ impl Catalog<'_> {
         let loaders: Vec<&str> = target.loader_ids().collect();
         let mut latest = BTreeMap::new();
         for (channels, hashes) in groups {
-            latest.extend(self.post(
-                &protocol.latest,
-                Map::from_iter([
-                    (fields.hashes.clone(), Value::from(hashes)),
-                    (fields.algorithm.clone(), Value::from(algorithm)),
-                    (fields.loaders.clone(), Value::from(loaders.clone())),
-                    (
-                        fields.game_versions.clone(),
-                        Value::from(target.game_version.clone()),
-                    ),
-                    (fields.channels.clone(), Value::from(channels)),
-                ]),
-            )?);
+            latest.extend(
+                self.post(
+                    latest_route,
+                    Map::from_iter([
+                        (fields.hashes.clone(), Value::from(hashes)),
+                        (fields.algorithm.clone(), Value::from(algorithm)),
+                        (fields.loaders.clone(), Value::from(loaders.clone())),
+                        (
+                            fields.game_versions.clone(),
+                            Value::from(
+                                target
+                                    .game_version
+                                    .iter()
+                                    .map(String::as_str)
+                                    .collect::<Vec<_>>(),
+                            ),
+                        ),
+                        (fields.channels.clone(), Value::from(channels)),
+                    ]),
+                )?,
+            );
         }
 
         requested
@@ -462,6 +502,55 @@ impl Catalog<'_> {
             .map(|hash| match listed.get(hash) {
                 Some(release) => self.decide(release, latest.get(hash), target),
                 None => Ok(UpdateCheck::Unlisted),
+            })
+            .collect()
+    }
+
+    fn check_release_updates(
+        &self,
+        installed: &[&Provenance],
+        target: &Target,
+    ) -> Result<Vec<UpdateCheck>, AdapterError> {
+        installed
+            .iter()
+            .map(|provenance| {
+                let route = interpolate_game(
+                    required_route(self.program.routes.releases.as_deref())?,
+                    &self.program.games,
+                    &target.game,
+                )?;
+                let route = interpolate(&route, "project", &provenance.project)?;
+                let body = self.get(&route, &[])?;
+                let listed = body
+                    .as_array()
+                    .ok_or_else(|| specific(RuntimeError::ExpectedArray))?;
+                let mut releases: Vec<Release> = listed
+                    .iter()
+                    .filter(|value| self.supports(value, target).unwrap_or(false))
+                    .filter_map(|value| self.release(value, Some(&provenance.project)).ok())
+                    .collect();
+                releases.sort_by(|a, b| {
+                    Version::parse(&b.number)
+                        .ok()
+                        .cmp(&Version::parse(&a.number).ok())
+                });
+                let Some(latest) = releases.first() else {
+                    return Ok(UpdateCheck::Unlisted);
+                };
+                if latest.number == provenance.version_number {
+                    return Ok(UpdateCheck::Current);
+                }
+                let file = latest
+                    .primary_file()
+                    .cloned()
+                    .ok_or_else(|| AdapterError::NoFiles {
+                        project: latest.project.clone(),
+                        release: latest.id.clone(),
+                    })?;
+                Ok(UpdateCheck::Available(Box::new(Update {
+                    release: latest.clone(),
+                    file,
+                })))
             })
             .collect()
     }
@@ -514,7 +603,9 @@ fn facet_groups(facets: &Facets, target: &Target) -> String {
             group
                 .iter()
                 .flat_map(|template| {
-                    if template.contains("{loader}") {
+                    if template.contains("{game}") {
+                        vec![template.replace("{game}", &target.game)]
+                    } else if template.contains("{loader}") {
                         target
                             .loader_ids()
                             .map(|loader| template.replace("{loader}", loader))
@@ -539,12 +630,25 @@ fn release_parameters(request: &ReleasesRequest, target: &Target) -> Vec<(String
         .iter()
         .filter_map(|parameter| {
             let values: Vec<&str> = match parameter.target {
+                Some(TargetFact::Game) => vec![target.game.as_str()],
                 Some(TargetFact::Loaders) => target.loader_ids().collect(),
                 Some(TargetFact::GameVersion) => {
                     target.game_version.iter().map(String::as_str).collect()
                 }
                 None => Vec::new(),
             };
+            if parameter.target.is_some() && values.is_empty() {
+                return None;
+            }
+            let values: Vec<&str> = values
+                .into_iter()
+                .filter_map(|value| {
+                    parameter
+                        .values
+                        .get(value)
+                        .map_or(Some(value), |mapped| Some(mapped.as_str()))
+                })
+                .collect();
             if parameter.target.is_some() && values.is_empty() {
                 return None;
             }
@@ -697,6 +801,20 @@ fn interpolate(route: &str, name: &str, value: &str) -> Result<String, AdapterEr
     }
 }
 
+fn interpolate_game(
+    route: &str,
+    games: &BTreeMap<String, String>,
+    game: &str,
+) -> Result<String, AdapterError> {
+    if !route.contains("{game}") {
+        return Ok(route.to_owned());
+    }
+    let value = games
+        .get(game)
+        .ok_or_else(|| specific(RuntimeError::UnsupportedGame(game.to_owned())))?;
+    interpolate(route, "game", value)
+}
+
 fn specific(error: RuntimeError) -> AdapterError {
     AdapterError::specific(error)
 }
@@ -823,6 +941,8 @@ pub(super) enum RuntimeError {
     InsecureUrl,
     InvalidUrl,
     InvalidChecksum,
+    InvalidUpdateProtocol,
+    UnsupportedGame(String),
 }
 
 impl fmt::Display for RuntimeError {
@@ -856,6 +976,10 @@ impl fmt::Display for RuntimeError {
             Self::InsecureUrl => "provider program refused an insecure URL; only https is allowed",
             Self::InvalidUrl => "provider program produced an invalid URL",
             Self::InvalidChecksum => "provider program found an invalid checksum",
+            Self::InvalidUpdateProtocol => "provider program has an invalid update protocol",
+            Self::UnsupportedGame(game) => {
+                return write!(formatter, "provider program does not support game {game:?}");
+            }
         };
         formatter.write_str(message)
     }

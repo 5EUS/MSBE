@@ -108,10 +108,11 @@ fn contents(file: &str) -> Vec<u8> {
 
 fn target() -> Target {
     Target {
+        game: "minecraft".to_owned(),
         loader: "fabric".to_owned(),
         provides: Vec::new(),
         loader_version: None,
-        game_version: "1.21.1".to_owned(),
+        game_version: Some("1.21.1".to_owned()),
         side: Side::Client,
     }
 }

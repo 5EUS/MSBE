@@ -165,9 +165,9 @@ mod tests {
 
     use super::{Overlay, OverlayError};
 
-    fn modrinth(project: &str) -> PackageId {
+    fn provider(project: &str) -> PackageId {
         PackageId {
-            provider: "modrinth".to_owned(),
+            provider: "example".to_owned(),
             project: project.to_owned(),
         }
     }
@@ -176,26 +176,26 @@ mod tests {
     fn entries_record_provides_and_replaces() {
         let overlay = Overlay::from_toml(&[r#"
             schema = 1
-            mod = "modrinth:successor"
-            provides = ["modrinth:api"]
-            replaces = ["modrinth:abandoned"]
+            mod = "example:successor"
+            provides = ["example:api"]
+            replaces = ["example:abandoned"]
         "#])
         .unwrap();
-        let entry = overlay.entry(&modrinth("successor")).unwrap();
-        assert_eq!(entry.provides, [modrinth("api")]);
-        assert_eq!(entry.replaces, [modrinth("abandoned")]);
-        assert!(overlay.entry(&modrinth("api")).is_none());
+        let entry = overlay.entry(&provider("successor")).unwrap();
+        assert_eq!(entry.provides, [provider("api")]);
+        assert_eq!(entry.replaces, [provider("abandoned")]);
+        assert!(overlay.entry(&provider("api")).is_none());
     }
 
     #[test]
     fn invalid_or_contradictory_entries_are_rejected() {
         let rejection = |document: &str| Overlay::from_toml(&[document]).unwrap_err();
         assert!(matches!(
-            rejection("schema = 2\nmod = \"modrinth:a\""),
+            rejection("schema = 2\nmod = \"example:a\""),
             OverlayError::UnsupportedSchema(2)
         ));
         assert!(matches!(
-            rejection("schema = 1\nmod = \"modrinth:a\"\nconflicts = []"),
+            rejection("schema = 1\nmod = \"example:a\"\nconflicts = []"),
             OverlayError::Parse(_)
         ));
         assert!(matches!(
@@ -203,16 +203,16 @@ mod tests {
             OverlayError::InvalidReference(_)
         ));
         assert!(matches!(
-            rejection("schema = 1\nmod = \"modrinth:a\"\nreplaces = [\"modrinth:a\"]"),
+            rejection("schema = 1\nmod = \"example:a\"\nreplaces = [\"example:a\"]"),
             OverlayError::SuppliesItself(_)
         ));
         assert!(matches!(
             rejection(
-                "schema = 1\nmod = \"modrinth:a\"\nprovides = [\"modrinth:b\"]\nreplaces = [\"modrinth:b\"]"
+                "schema = 1\nmod = \"example:a\"\nprovides = [\"example:b\"]\nreplaces = [\"example:b\"]"
             ),
             OverlayError::ProvidesAndReplaces { .. }
         ));
-        let entry = "schema = 1\nmod = \"modrinth:a\"";
+        let entry = "schema = 1\nmod = \"example:a\"";
         assert!(matches!(
             Overlay::from_toml(&[entry, entry]),
             Err(OverlayError::DuplicateEntry(_))

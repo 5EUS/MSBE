@@ -29,7 +29,7 @@ pub const BUILTIN: &[Registration] = &[msbe_provider_local::REGISTRATION];
 
 /// The providers MSBE ships as declarative programs. A new one is a program, its data, and one line
 /// here.
-pub const BUILTIN_PROGRAMS: &[ProgramRegistration] = &[DIRECT_URL, MODRINTH];
+pub const BUILTIN_PROGRAMS: &[ProgramRegistration] = &[DIRECT_URL, MODRINTH, THUNDERSTORE];
 
 const DIRECT_URL: ProgramRegistration = ProgramRegistration {
     program: DIRECT_PROGRAM,
@@ -50,6 +50,13 @@ pub(crate) const MODRINTH: ProgramRegistration = ProgramRegistration {
         version: "1.0.0",
         module: include_bytes!("../../../extensions/providers/modrinth/modrinth-mrpack.wasm"),
     }],
+};
+
+const THUNDERSTORE: ProgramRegistration = ProgramRegistration {
+    program: include_str!("../../../extensions/providers/thunderstore/program.toml"),
+    version: env!("CARGO_PKG_VERSION"),
+    overlay: &[],
+    wasm_pack_codecs: &[],
 };
 
 const DIRECT_PROGRAM: &str = r#"
@@ -1588,10 +1595,11 @@ mod tests {
         );
         let providers = Providers::new_with_programs(&[], &[], &[&document], &trust())?;
         let target = Target {
+            game: "minecraft".to_owned(),
             loader: "fabric".to_owned(),
             provides: Vec::new(),
             loader_version: None,
-            game_version: "1.0".to_owned(),
+            game_version: Some("1.0".to_owned()),
             side: Side::Client,
         };
         let hits = providers.search("catalog", &SearchHttp, "test", &target, 5)?;
@@ -1675,10 +1683,11 @@ mod tests {
             &SearchHttp,
             "rendering",
             &Target {
+                game: "minecraft".to_owned(),
                 loader: "fabric".to_owned(),
                 provides: Vec::new(),
                 loader_version: None,
-                game_version: "1.21.1".to_owned(),
+                game_version: Some("1.21.1".to_owned()),
                 side: Side::Client,
             },
             10,
