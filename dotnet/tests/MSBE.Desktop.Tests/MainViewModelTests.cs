@@ -13,7 +13,25 @@ namespace MSBE.Desktop.Tests;
 public sealed class MainViewModelTests
 {
     private const string DataDirectory = "/data/msbe";
-    private const string AddedJson = """{"added":["mod"],"skipped":[],"unresolved":[],"incompatible":[],"substituted":[]}""";
+    private const string IrisQueuedJson = """{"id":1,"revision":1,"title":"Iris","source":"modrinth:iris","target":{"instance":"alpha","profile":"default"},"with_deps":true,"attempts":0,"state":{"kind":"queued"},"files":[]}""";
+    private const string EmptyQueueJson = """{"next":0,"paused":false,"order":[],"items":[]}""";
+    private const string DownloadTarget = "\"target\":{\"instance\":\"alpha\",\"profile\":\"default\"}";
+    private const string QueueJson = $$$"""
+        {"next":3,"paused":false,"order":[1,2,3],"items":[
+          {"id":1,"revision":1,"title":"Sodium","source":"modrinth:sodium",{{{DownloadTarget}}},"attempts":1,"state":{"kind":"downloading"},"files":[]},
+          {"id":2,"revision":2,"title":"Iris","source":"modrinth:iris",{{{DownloadTarget}}},"attempts":0,"state":{"kind":"queued"},"files":[]},
+          {"id":3,"revision":3,"title":"Tool","source":"assisted:tool",{{{DownloadTarget}}},"attempts":1,"state":{"kind":"awaiting_user","page":"https://www.example.test/tool","scheme":"handoff"},"files":[]}
+        ]}
+        """;
+
+    private const string FinishedQueueJson = $$$"""
+        {"next":7,"paused":true,"order":[1,2,3,4],"items":[
+          {"id":1,"revision":4,"title":"Sodium","source":"modrinth:sodium",{{{DownloadTarget}}},"attempts":1,"state":{"kind":"completed"},"files":[],"added":["sodium"]},
+          {"id":2,"revision":5,"title":"Iris","source":"modrinth:iris",{{{DownloadTarget}}},"attempts":0,"state":{"kind":"cancelled"},"files":[]},
+          {"id":3,"revision":6,"title":"Tool","source":"assisted:tool",{{{DownloadTarget}}},"attempts":1,"state":{"kind":"failed","message":"the link expired"},"files":[]},
+          {"id":4,"revision":7,"attempts":1,"state":{"kind":"downloaded"},"files":[{"provider":"assisted","project":"gear","release":"r9","name":"gear.zip","state":{"kind":"downloaded"}}]}
+        ]}
+        """;
 
     /// <summary>Refresh loads, sorts and selects registered instances.</summary>
     /// <returns>A task representing the test.</returns>
@@ -255,14 +273,14 @@ public sealed class MainViewModelTests
                 return new CommandResult(0, SearchJson, string.Empty);
             }
 
-            if (arguments.Contains("add", StringComparer.Ordinal))
-            {
-                return new CommandResult(0, "{\"added\":[\"sodium\"],\"skipped\":[],\"unresolved\":[],\"incompatible\":[],\"substituted\":[]}", string.Empty);
-            }
-
             return new CommandResult(0, ModsJson, string.Empty);
-        });
-        MainViewModel vm = new(client) { SelectedInstance = "alpha", BrowseQuery = "rendering" };
+        })
+        {
+            Answer = (method, _) => string.Equals(method, "download.enqueue", StringComparison.Ordinal)
+                ? IrisQueuedJson
+                : $$"""{"next":1,"paused":false,"order":[1],"items":[{{IrisQueuedJson}}]}""",
+        };
+        MainViewModel vm = new(client) { SelectedInstance = "alpha", BrowseQuery = "rendering", IsDownloadQueueSupported = true };
 
         await vm.SearchBrowseCommand.ExecuteAsync(parameter: null);
         vm.SelectedBrowseResult = vm.BrowseResults[0];
@@ -271,86 +289,100 @@ public sealed class MainViewModelTests
         Assert.True(vm.BrowseResults[0].IsInstalled);
         Assert.True(vm.BrowseResults[0].IsMarked);
         Assert.Equal("1 selected", vm.MarkedBrowseResultCount);
-        vm.AddBrowseResultCommand.Execute(parameter: null);
-        await vm.DownloadsSettled.ConfigureAwait(true);
+        await vm.AddBrowseResultCommand.ExecuteAsync(parameter: null);
 
         Assert.Equal("Sodium", vm.SelectedBrowseResult.Title);
         Assert.Equal("https://cdn.modrinth.com/data/AANobbMI/icon.png", vm.SelectedBrowseResult.IconSource);
         Assert.Contains(calls, arguments => arguments.SequenceEqual(
             ["--format", "json", "search", "alpha", "rendering", "--profile", "default", "--limit", "30"],
             StringComparer.Ordinal));
-        Assert.Contains(calls, arguments => arguments.SequenceEqual(
-            ["--format", "json", "add", "alpha", "modrinth:iris", "--profile", "default", "--with-deps"],
-            StringComparer.Ordinal));
-        DownloadQueueItem download = Assert.Single(vm.FinishedDownloads);
+        JsonElement enqueued = client.LastParameters("download.enqueue");
+        Assert.Equal("alpha", enqueued.GetProperty("instance").GetString());
+        Assert.Equal("default", enqueued.GetProperty("profile").GetString());
+        Assert.Equal("modrinth:iris", enqueued.GetProperty("source").GetString());
+        Assert.True(enqueued.GetProperty("with_deps").GetBoolean());
+        Assert.Equal("Iris", enqueued.GetProperty("title").GetString());
+        DownloadQueueItem download = Assert.Single(vm.QueuedDownloads);
         Assert.Equal("Iris", download.Title);
-        Assert.Equal(DownloadState.Completed, download.State);
-        Assert.Equal("Added 1 mod", download.Detail);
-        Assert.Null(vm.ActiveDownload);
-        Assert.Empty(vm.QueuedDownloads);
-        Assert.Contains("Added Iris to default", vm.StatusMessage, StringComparison.Ordinal);
+        Assert.Equal(DownloadState.Queued, download.State);
+        Assert.Equal("modrinth · alpha / default", download.Summary);
+        Assert.Equal("Queued 1 mod(s) for default.", vm.StatusMessage);
         Assert.Empty(vm.MarkedBrowseResults);
     }
 
-    /// <summary>The download queue runs in order, honours reordering and pausing, and retries failures.</summary>
+    /// <summary>Downloads shows the daemon's queue in order, and sends the queue's controls to the daemon.</summary>
     /// <returns>A task representing the test.</returns>
     [Fact]
-    public async Task DownloadQueueRunsInOrderPausesAndRetries()
+    public async Task DownloadsMirrorTheDaemonQueueAndSendItsControls()
     {
-        TaskCompletionSource<CommandResult> sodium = new();
-        bool brokenFails = true;
-        List<string> added = [];
-        MainViewModel vm = new(DownloadQueueClient(sodium.Task, () => brokenFails, added)) { SelectedInstance = "alpha", BrowseQuery = "mods" };
+        TestClient client = DownloadQueueClient(() => QueueJson);
+        MainViewModel vm = new(client) { SelectedInstance = "alpha", IsDownloadQueueSupported = true };
 
-        await vm.SearchBrowseCommand.ExecuteAsync(parameter: null);
-        foreach (BrowseResultItem result in vm.BrowseResults)
-        {
-            result.IsMarked = true;
-        }
-
-        vm.AddBrowseResultCommand.Execute(parameter: null);
+        await vm.RefreshDownloadsCommand.ExecuteAsync(parameter: null);
 
         Assert.Equal("Sodium", vm.ActiveDownload?.Title);
-        Assert.Equal(["Iris", "Broken"], vm.QueuedDownloads.Select(download => download.Title));
+        Assert.Equal(["Iris", "Tool"], vm.QueuedDownloads.Select(download => download.Title));
         Assert.Equal(3, vm.PendingDownloadCount);
         Assert.Equal("Downloading Sodium · 2 queued", vm.DownloadSummary);
+        DownloadQueueItem tool = vm.QueuedDownloads[1];
+        Assert.True(tool.IsAwaitingUser);
+        Assert.Equal("Start the download at https://www.example.test/tool", tool.Detail);
+        Assert.Equal(0L, client.LastParameters("download.list").GetProperty("after").GetInt64());
 
-        vm.MoveDownloadUpCommand.Execute(vm.QueuedDownloads[1]);
-        vm.RemoveQueuedDownloadCommand.Execute(vm.QueuedDownloads[1]);
-        vm.ToggleDownloadQueuePausedCommand.Execute(parameter: null);
+        await vm.MoveDownloadUpCommand.ExecuteAsync(tool);
+        JsonElement moved = client.LastParameters("download.move");
+        Assert.Equal(3L, moved.GetProperty("id").GetInt64());
+        Assert.Equal(1, moved.GetProperty("position").GetInt32());
+        Assert.Equal(3L, client.LastParameters("download.list").GetProperty("after").GetInt64());
+        await vm.RemoveQueuedDownloadCommand.ExecuteAsync(vm.QueuedDownloads[0]);
+        Assert.Equal(2L, client.LastParameters("download.cancel").GetProperty("id").GetInt64());
+        await vm.ToggleDownloadQueuePausedCommand.ExecuteAsync(parameter: null);
+        Assert.Equal(JsonValueKind.Null, client.LastParameters("download.pause").ValueKind);
+    }
 
-        Assert.Equal(["Broken"], vm.QueuedDownloads.Select(download => download.Title));
-        Assert.Equal("Downloading Sodium · queue paused", vm.DownloadSummary);
+    /// <summary>Downloads announces what the daemon added, retries failures, and adds a link that arrived on its own to the selected profile.</summary>
+    /// <returns>A task representing the test.</returns>
+    [Fact]
+    public async Task DownloadsRetryFailuresAndAddStrayLinksToTheSelectedProfile()
+    {
+        string queue = QueueJson;
+        TestClient client = DownloadQueueClient(() => queue);
+        MainViewModel vm = new(client) { SelectedInstance = "alpha", IsDownloadQueueSupported = true };
+        await vm.RefreshDownloadsCommand.ExecuteAsync(parameter: null);
 
-        sodium.SetResult(new CommandResult(0, AddedJson, string.Empty));
-        await vm.DownloadsSettled.ConfigureAwait(true);
+        queue = FinishedQueueJson;
+        await vm.RefreshDownloadsCommand.ExecuteAsync(parameter: null);
 
         Assert.Null(vm.ActiveDownload);
-        Assert.Equal(["Broken"], vm.QueuedDownloads.Select(download => download.Title));
-        Assert.Equal(DownloadState.Completed, Assert.Single(vm.FinishedDownloads).State);
+        Assert.True(vm.IsDownloadQueuePaused);
+        Assert.Equal("Resume queue", vm.DownloadQueueToggleLabel);
+        Assert.Equal(["Tool", "Iris", "Sodium"], vm.FinishedDownloads.Select(download => download.Title));
+        Assert.Equal("Added 1 mod", vm.FinishedDownloads[2].Detail);
+        Assert.Equal("Added Sodium to default. Review deployment to apply it.", vm.StatusMessage);
+        DownloadQueueItem stray = Assert.Single(vm.QueuedDownloads);
+        Assert.True(stray.NeedsProfile);
+        Assert.Equal("gear.zip", stray.Title);
+        Assert.Equal("assisted · no profile yet", stray.Summary);
         Assert.Equal("Paused · 1 queued", vm.DownloadSummary);
 
-        vm.ToggleDownloadQueuePausedCommand.Execute(parameter: null);
-        await vm.DownloadsSettled.ConfigureAwait(true);
+        DownloadQueueItem failed = vm.FinishedDownloads[0];
+        Assert.Equal("the link expired", failed.Detail);
+        await vm.RetryDownloadCommand.ExecuteAsync(failed);
+        Assert.Equal(3L, client.LastParameters("download.retry").GetProperty("id").GetInt64());
+        await vm.AddDownloadToProfileCommand.ExecuteAsync(stray);
+        JsonElement confirmed = client.LastParameters("download.confirm");
+        Assert.Equal(4L, confirmed.GetProperty("id").GetInt64());
+        Assert.Equal("alpha", confirmed.GetProperty("instance").GetString());
+        Assert.Equal("default", confirmed.GetProperty("profile").GetString());
+        await vm.ToggleDownloadQueuePausedCommand.ExecuteAsync(parameter: null);
+        Assert.Equal(JsonValueKind.Null, client.LastParameters("download.resume").ValueKind);
 
-        DownloadQueueItem broken = vm.FinishedDownloads[0];
-        Assert.Equal(DownloadState.Failed, broken.State);
-        Assert.Equal("no compatible release", broken.Detail);
-        Assert.Empty(vm.QueuedDownloads);
+        queue = """{"next":8,"paused":false,"order":[4],"items":[]}""";
+        await vm.ClearFinishedDownloadsCommand.ExecuteAsync(parameter: null);
 
-        brokenFails = false;
-        vm.RetryDownloadCommand.Execute(broken);
-        await vm.DownloadsSettled.ConfigureAwait(true);
-
-        Assert.Equal(DownloadState.Completed, broken.State);
-        Assert.Same(broken, vm.FinishedDownloads[0]);
-        Assert.Equal(2, vm.FinishedDownloads.Count);
-        Assert.Equal(["modrinth:sodium", "modrinth:broken", "modrinth:broken"], added);
-
-        vm.ClearFinishedDownloadsCommand.Execute(parameter: null);
-
+        Assert.Contains(client.Invocations, call => string.Equals(call.Method, "download.clear", StringComparison.Ordinal));
         Assert.False(vm.HasFinishedDownloads);
-        Assert.Equal("No downloads in progress", vm.DownloadSummary);
+        Assert.Equal("1 queued", vm.DownloadSummary);
     }
 
     /// <summary>Profile creation can clone the current profile and selects the result.</summary>
@@ -713,35 +745,30 @@ public sealed class MainViewModelTests
             : new CommandResult(0, """{"target":{"loader":"fabric","loader_version":"0.16.10","side":"client"},"order":[],"components":{},"mods":{},"configs":{}}""", string.Empty);
     }
 
-    private static TestClient DownloadQueueClient(Task<CommandResult> sodium, Func<bool> brokenFails, List<string> added)
+    /// <summary>A client whose daemon lists <paramref name="queue" /> and accepts every download control.</summary>
+    private static TestClient DownloadQueueClient(Func<string> queue)
     {
         const string StatusJson = """{"name":"alpha","root":"/games/alpha","plan_id":"minecraft","plan_version":"1","loader":"fabric","game_version":"1.21.1","deployed_profile":"default","deployed_files":0}""";
         const string ProfilesJson = """{"profiles":["default"],"deployed":"default"}""";
         const string ModsJson = """{"order":[],"components":{},"mods":{}}""";
-        const string SearchJson = """[{"provider":"modrinth","project":"AANobbMI","slug":"sodium","title":"Sodium","description":"","icon_url":null,"downloads":1},{"provider":"modrinth","project":"YL57xq9U","slug":"iris","title":"Iris","description":"","icon_url":null,"downloads":1},{"provider":"modrinth","project":"BROKEN00","slug":"broken","title":"Broken","description":"","icon_url":null,"downloads":1}]""";
         return new TestClient(arguments =>
         {
-            if (arguments.Contains("add", StringComparer.Ordinal))
-            {
-                string source = arguments[4];
-                added.Add(source);
-                return source switch
-                {
-                    "modrinth:sodium" => sodium,
-                    "modrinth:broken" when brokenFails() => Task.FromResult(new CommandResult(1, string.Empty, "no compatible release")),
-                    _ => Task.FromResult(new CommandResult(0, AddedJson, string.Empty)),
-                };
-            }
-
-            string output = arguments.FirstOrDefault(argument => argument is "status" or "list" or "search") switch
+            string output = arguments.FirstOrDefault(argument => argument is "status" or "list") switch
             {
                 "status" => StatusJson,
                 "list" => ProfilesJson,
-                "search" => SearchJson,
                 _ => ModsJson,
             };
-            return Task.FromResult(new CommandResult(0, output, string.Empty));
-        });
+            return new CommandResult(0, output, string.Empty);
+        })
+        {
+            Answer = (method, _) => method switch
+            {
+                "download.list" => queue(),
+                "download.cancel" or "download.retry" or "download.confirm" => """{"id":2,"revision":9,"attempts":0,"state":{"kind":"queued"},"files":[]}""",
+                _ => EmptyQueueJson,
+            },
+        };
     }
 
     private sealed class TestFolderLauncher : IFolderLauncher
@@ -777,6 +804,9 @@ public sealed class MainViewModelTests
 
         public List<(string Method, JsonElement Parameters)> Invocations { get; } = [];
 
+        /// <summary>Gets or sets the result JSON for an RPC method and its parameters, before <c>invoke</c> is asked.</summary>
+        public Func<string, JsonElement, string?>? Answer { get; set; }
+
         public Task<DaemonInfo> GetInfoAsync(CancellationToken cancellationToken) => Task.FromResult(new DaemonInfo("test", 3, DataDirectory));
 
         public Task<IReadOnlyList<GameInfo>> GetGamesAsync(CancellationToken cancellationToken) => Task.FromResult<IReadOnlyList<GameInfo>>(
@@ -803,7 +833,7 @@ public sealed class MainViewModelTests
 
             using JsonDocument parameters = JsonDocument.Parse(buffer.WrittenMemory);
             this.Invocations.Add((method, parameters.RootElement.Clone()));
-            string result = this.invoke?.Invoke(method) ?? throw new InvalidOperationException($"Unexpected RPC {method}.");
+            string result = this.Answer?.Invoke(method, parameters.RootElement) ?? this.invoke?.Invoke(method) ?? throw new InvalidOperationException($"Unexpected RPC {method}.");
             using JsonDocument document = JsonDocument.Parse(result);
             return Task.FromResult(document.RootElement.Clone());
         }

@@ -21,7 +21,7 @@ use msbe_rpc_schema::{JobEvent, JobEventRecord, JobState, JobStatus};
 use serde_json::Value;
 
 use crate::{
-    Connector,
+    Connector, Downloads,
     pack::{self, Plan},
 };
 
@@ -34,12 +34,15 @@ pub(crate) enum Work {
     SnapshotCreate { instance: Name, output: PathBuf },
     /// Restores an instance snapshot.
     SnapshotRestore { input: PathBuf },
+    /// Adds a download queue item's files to its profile: the queue's instance lane.
+    DownloadAdd { id: u64 },
 }
 
 /// What a job runs against.
 pub(crate) struct Environment {
     pub(crate) home: Option<PathBuf>,
     pub(crate) connect: Connector,
+    pub(crate) downloads: Arc<Downloads>,
 }
 
 impl fmt::Debug for Environment {
@@ -113,6 +116,11 @@ impl Jobs {
             Err(TryLockError::Poisoned(poisoned)) => Ok(poisoned.into_inner()),
             Err(TryLockError::WouldBlock) => Err(Busy),
         }
+    }
+
+    /// The instance-state lock, once a running job releases it.
+    pub(crate) fn lock_state(&self) -> MutexGuard<'_, ()> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Job `id`'s state and its events after sequence `after`.

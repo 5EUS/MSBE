@@ -1169,6 +1169,116 @@ fn usage_errors_and_bad_references_have_distinct_exit_codes() {
 }
 
 #[test]
+fn download_and_handoff_commands_run_as_typed_daemon_calls() {
+    let queued = crate::daemon_calls([
+        "msbe",
+        "--format",
+        "json",
+        "download",
+        "add",
+        "mc",
+        "modrinth:sodium",
+        "https://files.example.test/extra.jar",
+        "--profile",
+        "modded",
+        "--with-deps",
+    ])
+    .unwrap();
+    let enqueue = |source: &str| {
+        (
+            "download.enqueue",
+            json!({ "instance": "mc", "profile": "modded", "source": source, "with_deps": true }),
+        )
+    };
+    assert_eq!(
+        queued.calls,
+        [
+            enqueue("modrinth:sodium"),
+            enqueue("https://files.example.test/extra.jar")
+        ]
+    );
+    let calls = |args: &[&str]| {
+        crate::daemon_calls(std::iter::once("msbe").chain(args.iter().copied()))
+            .map(|calls| calls.calls)
+    };
+    assert_eq!(
+        calls(&["download", "pause"]),
+        Some(vec![("download.pause", json!({ "id": null }))])
+    );
+    assert_eq!(
+        calls(&["download", "move", "4", "0"]),
+        Some(vec![("download.move", json!({ "id": 4, "position": 0 }))])
+    );
+    assert_eq!(
+        calls(&["download", "confirm", "4", "mc"]),
+        Some(vec![(
+            "download.confirm",
+            json!({ "id": 4, "instance": "mc", "profile": "default" })
+        )])
+    );
+    assert_eq!(
+        calls(&["handoff", "handoff://game/files/1/2?key=k"]),
+        Some(vec![(
+            "handoff.submit",
+            json!({ "uri": "handoff://game/files/1/2?key=k" })
+        )])
+    );
+    assert_eq!(calls(&["status", "mc"]), None);
+    assert_eq!(
+        calls(&["download", "move", "four"]),
+        None,
+        "command.run reports usage errors"
+    );
+
+    let world = World::new();
+    let refused = world.msbe(&["download", "list"]);
+    assert_eq!(refused.code, exit::FAILURE);
+    assert!(
+        refused.err.contains("run in the local daemon"),
+        "{}",
+        refused.err
+    );
+}
+
+#[test]
+fn a_queue_listing_says_what_each_download_waits_for() {
+    let awaiting = json!({ "kind": "awaiting_user", "page": "https://www.example.test/sprocket", "scheme": "handoff" });
+    let queue = json!({
+        "next": 4, "paused": true, "order": [3, 4],
+        "items": [
+            {
+                "id": 3, "revision": 3, "source": "assisted:sprocket", "attempts": 1,
+                "target": { "instance": "mc", "profile": "default" }, "state": awaiting,
+                "files": [{
+                    "provider": "assisted", "project": "sprocket", "release": "r1",
+                    "name": "sprocket.jar", "state": awaiting
+                }]
+            },
+            {
+                "id": 4, "revision": 4, "attempts": 1, "state": { "kind": "downloaded" },
+                "files": [{
+                    "provider": "assisted", "project": "gear", "release": "r9",
+                    "name": "gear.jar", "state": { "kind": "downloaded" }
+                }]
+            }
+        ]
+    });
+    let mut out = Vec::new();
+    crate::daemon_calls(["msbe", "download", "list"])
+        .unwrap()
+        .print("download.list", &queue, &mut out)
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(out).unwrap(),
+        "The queue is paused; links are still received.\n\
+         #3 awaiting user: assisted:sprocket for mc/default, 0 of 1 file(s)\n  \
+         Start the download at https://www.example.test/sprocket; MSBE receives the link.\n\
+         #4 downloaded: assisted:gear with no profile yet, 1 of 1 file(s)\n  \
+         Choose its profile with `msbe download confirm 4 INSTANCE`.\n"
+    );
+}
+
+#[test]
 fn direct_urls_install_with_pinned_checksums_and_refuse_plain_http() {
     let world = World::new();
     // A direct download needs no game version.

@@ -267,6 +267,13 @@ preview, rather than copied into the game's mod directory.
 | `extension sign INPUT --key KEY_FILE --version VERSION [--id ID] [--output DIRECTORY]`                                                           | **Implemented** | Sign a WebAssembly pack codec or a provider program, writing its envelope.  |
 | `extension verify ENVELOPE`                                                                                                                      | **Implemented** | Check a signed codec or program against the local trust root.               |
 | `extension list`                                                                                                                                 | **Implemented** | List installed codecs and programs, and why any is refused.                 |
+| `download add INSTANCE SOURCE... [-p PROFILE] [--with-deps]`                                                                                     | **Implemented** | Queue provider content in the daemon to download and add.                   |
+| `download list`                                                                                                                                  | **Implemented** | Show the queue and what each download waits for.                            |
+| `download pause [ID]`, `download resume [ID]`                                                                                                    | **Implemented** | Hold or release one download, or the whole queue.                           |
+| `download cancel ID`, `download retry ID`, `download move ID POSITION`                                                                           | **Implemented** | Cancel, retry or reorder one download.                                      |
+| `download confirm ID INSTANCE [-p PROFILE]`                                                                                                      | **Implemented** | Choose the profile for a download a link started.                           |
+| `download clear`                                                                                                                                 | **Implemented** | Remove completed, failed and cancelled downloads.                           |
+| `handoff URI`                                                                                                                                    | **Implemented** | Submit a provider link to the download queue.                               |
 
 Pack commands are codec-driven: `pack formats` and `pack options` list what the reviewed registry
 provides, and the CLI names no format itself. Every pack command previews first. `--dry-run`
@@ -313,6 +320,23 @@ A key file is created readable only by its owner and is never replaced; `sign` r
 other users can read. `sign` loads the module in the sandbox first, so only a module MSBE can run as a
 codec is signed.
 
+Download commands run in the daemon, which owns the queue and keeps working through it while no
+client is open ([03 §3.4](03-architecture.md)). `download add` queues each source for a profile and
+returns at once. The daemon resolves it, downloads its files, and adds them to the profile together,
+with their dependencies when `--with-deps` is given. `download list` shows what each download waits
+for. A file its provider hands over through the browser waits for you, with the page to start it on;
+the link that page hands over reaches the queue through `msbe handoff`
+([06 §6.7](06-providers-and-policy.md)). A link nothing waits on becomes a download of its own, and
+`download confirm` adds it to a profile. Download and handoff commands use the running daemon's data
+directory, and refuse a different `--home`.
+
+```sh
+"$MSBE" download add mc modrinth:sodium modrinth:iris --with-deps
+"$MSBE" download list
+"$MSBE" download pause
+"$MSBE" download confirm 7 mc --profile default
+```
+
 ## 7. Planned command surface
 
 These commands are part of the documented product direction, but they are not available
@@ -326,7 +350,7 @@ in the current binary. Their names and arguments can change before implementatio
 | Plans and registry        | `plan`, `registry`                                                                    | M7                        |
 | Diagnostics and store     | `doctor`, `store`, `bundle`                                                           | M2 and later              |
 | Daemon control            | `daemon start`, `stop`, `status`; Windows named-pipe transport                        | M1 follow-up              |
-| Credentials and downloads | `auth`, `download`, Nexus `nxm://`, browser assistance                                | M5                        |
+| Credentials and links     | `auth`, `handler` for Nexus `nxm://` links, browser assistance                        | M5                        |
 | Steam Workshop            | Opt-in user-installed SteamCMD acquisition or local import; optional item-ID metadata | Future, subject to policy |
 | Game launch               | `launch`                                                                              | Future                    |
 

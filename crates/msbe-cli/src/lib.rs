@@ -41,6 +41,12 @@ use msbe_providers::{
     VerifiedExtension, codecs_directory, providers_directory, sign_codec, sign_program, trust_file,
     verify_extension,
 };
+use msbe_rpc_schema::{
+    DOWNLOAD_CANCEL_METHOD, DOWNLOAD_CLEAR_METHOD, DOWNLOAD_CONFIRM_METHOD,
+    DOWNLOAD_ENQUEUE_METHOD, DOWNLOAD_LIST_METHOD, DOWNLOAD_MOVE_METHOD, DOWNLOAD_PAUSE_METHOD,
+    DOWNLOAD_RESUME_METHOD, DOWNLOAD_RETRY_METHOD, DownloadFileState, DownloadItem, DownloadList,
+    DownloadState, HANDOFF_SUBMIT_METHOD, HandoffReceipt,
+};
 use serde::Serialize;
 
 #[cfg(test)]
@@ -140,11 +146,16 @@ enum Command {
         #[arg(long)]
         with_deps: bool,
     },
-    /// Submit a browser-assisted provider link to the local daemon.
+    /// Submit a browser-assisted provider link to the local daemon, which downloads it at once and
+    /// adds it with the download it completes.
     Handoff {
         /// The provider link received from the browser or operating system.
         uri: String,
     },
+    /// Queue provider content to download and add to profiles, and control the queue. The local
+    /// daemon owns the queue and keeps working through it while no client is open.
+    #[command(subcommand)]
+    Download(DownloadCommand),
     /// Search every provider that supports it for mods compatible with a profile target.
     Search {
         /// The instance.
@@ -222,6 +233,66 @@ enum Command {
         /// The instance.
         instance: String,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum DownloadCommand {
+    /// Queue sources to download and add to a profile. Each is added, with the dependencies it
+    /// brings, once every one of its files has arrived.
+    Add {
+        /// The instance.
+        instance: String,
+        /// <provider>:<project>[@<version>] references or https:// URLs.
+        #[arg(required = true, value_name = "SOURCE")]
+        sources: Vec<String>,
+        /// The profile to add to.
+        #[arg(long, short, default_value = DEFAULT_PROFILE)]
+        profile: String,
+        /// Also download every required dependency, and add them together.
+        #[arg(long)]
+        with_deps: bool,
+    },
+    /// Show the queue.
+    List,
+    /// Hold a download before its next step, or the whole queue. Links are still received.
+    Pause {
+        /// The download. Defaults to the whole queue.
+        id: Option<u64>,
+    },
+    /// Release a paused download, or the whole queue.
+    Resume {
+        /// The download. Defaults to the whole queue.
+        id: Option<u64>,
+    },
+    /// Cancel a download that is not being added.
+    Cancel {
+        /// The download.
+        id: u64,
+    },
+    /// Queue a failed or cancelled download again, keeping the files it already downloaded.
+    Retry {
+        /// The download.
+        id: u64,
+    },
+    /// Move a download to a position in the queue, counting from zero.
+    Move {
+        /// The download.
+        id: u64,
+        /// Its new position.
+        position: usize,
+    },
+    /// Choose the profile for a download that a link started on its own.
+    Confirm {
+        /// The download.
+        id: u64,
+        /// The instance to add it to.
+        instance: String,
+        /// The profile to add it to.
+        #[arg(long, short, default_value = DEFAULT_PROFILE)]
+        profile: String,
+    },
+    /// Remove completed, failed and cancelled downloads.
+    Clear,
 }
 
 #[derive(Debug, Subcommand)]
@@ -658,8 +729,8 @@ enum CliError {
     },
     #[error("pass exactly one of --bad or --good")]
     BisectVerdict,
-    #[error("handoff links must be submitted to the local daemon")]
-    HandoffViaDaemon,
+    #[error("{0} commands run in the local daemon, which owns the download queue")]
+    DaemonOnly(&'static str),
     #[error("cannot create scratch space for downloads: {0}")]
     Scratch(#[source] io::Error),
     #[error("cannot read config {}: {source}", .path.display())]
@@ -822,6 +893,200 @@ where
     }
 }
 
+/// The typed daemon calls a command line runs instead of `command.run`: the `handoff` and
+/// `download` commands, whose state lives in the daemon rather than the data directory.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DaemonCalls {
+    /// Each call's method and parameters, in order.
+    pub calls: Vec<(&'static str, serde_json::Value)>,
+    json: bool,
+}
+
+/// The typed daemon calls for `args`, which include the program name, when they name `handoff` or
+/// `download`. Any other command line, and one that does not parse, returns `None` and runs
+/// through `command.run`, which reports its errors.
+pub fn daemon_calls<I, T>(args: I) -> Option<DaemonCalls>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<OsString> + Clone,
+{
+    let cli = Cli::try_parse_from(args).ok()?;
+    let calls = match cli.command {
+        Command::Handoff { uri } => {
+            vec![(HANDOFF_SUBMIT_METHOD, serde_json::json!({ "uri": uri }))]
+        }
+        Command::Download(command) => download_calls(command),
+        _ => return None,
+    };
+    Some(DaemonCalls {
+        calls,
+        json: cli.format == Format::Json,
+    })
+}
+
+fn download_calls(command: DownloadCommand) -> Vec<(&'static str, serde_json::Value)> {
+    use serde_json::{Value, json};
+
+    match command {
+        DownloadCommand::Add {
+            instance,
+            sources,
+            profile,
+            with_deps,
+        } => sources
+            .into_iter()
+            .map(|source| {
+                let params = json!({
+                    "instance": instance, "profile": profile, "source": source, "with_deps": with_deps
+                });
+                (DOWNLOAD_ENQUEUE_METHOD, params)
+            })
+            .collect(),
+        DownloadCommand::List => vec![(DOWNLOAD_LIST_METHOD, Value::Null)],
+        DownloadCommand::Pause { id } => vec![(DOWNLOAD_PAUSE_METHOD, json!({ "id": id }))],
+        DownloadCommand::Resume { id } => vec![(DOWNLOAD_RESUME_METHOD, json!({ "id": id }))],
+        DownloadCommand::Cancel { id } => vec![(DOWNLOAD_CANCEL_METHOD, json!({ "id": id }))],
+        DownloadCommand::Retry { id } => vec![(DOWNLOAD_RETRY_METHOD, json!({ "id": id }))],
+        DownloadCommand::Move { id, position } => vec![(
+            DOWNLOAD_MOVE_METHOD,
+            json!({ "id": id, "position": position }),
+        )],
+        DownloadCommand::Confirm {
+            id,
+            instance,
+            profile,
+        } => vec![(
+            DOWNLOAD_CONFIRM_METHOD,
+            json!({ "id": id, "instance": instance, "profile": profile }),
+        )],
+        DownloadCommand::Clear => vec![(DOWNLOAD_CLEAR_METHOD, Value::Null)],
+    }
+}
+
+impl DaemonCalls {
+    /// Writes the daemon's answer to one call: JSON with `--format json`, and text otherwise.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `out` cannot be written.
+    pub fn print(
+        &self,
+        method: &str,
+        result: &serde_json::Value,
+        out: &mut dyn Write,
+    ) -> io::Result<()> {
+        if self.json {
+            serde_json::to_writer_pretty(&mut *out, result).map_err(io::Error::other)?;
+            return writeln!(out);
+        }
+        match method {
+            HANDOFF_SUBMIT_METHOD => match serde_json::from_value::<HandoffReceipt>(result.clone())
+            {
+                Ok(receipt) => print_receipt(out, &receipt),
+                Err(_) => writeln!(out, "{result}"),
+            },
+            DOWNLOAD_ENQUEUE_METHOD
+            | DOWNLOAD_CANCEL_METHOD
+            | DOWNLOAD_RETRY_METHOD
+            | DOWNLOAD_CONFIRM_METHOD => {
+                match serde_json::from_value::<DownloadItem>(result.clone()) {
+                    Ok(item) => print_download(out, &item),
+                    Err(_) => writeln!(out, "{result}"),
+                }
+            }
+            _ => match serde_json::from_value::<DownloadList>(result.clone()) {
+                Ok(list) => print_downloads(out, &list),
+                Err(_) => writeln!(out, "{result}"),
+            },
+        }
+    }
+}
+
+fn print_receipt(out: &mut dyn Write, receipt: &HandoffReceipt) -> io::Result<()> {
+    let file = format!(
+        "{}:{} release {}",
+        receipt.provider, receipt.project, receipt.release
+    );
+    if receipt.matched {
+        writeln!(out, "Received {file} for download #{}.", receipt.id)
+    } else {
+        writeln!(
+            out,
+            "Received {file} as download #{id}. Choose its profile with `msbe download confirm {id} INSTANCE`.",
+            id = receipt.id
+        )
+    }
+}
+
+fn print_downloads(out: &mut dyn Write, list: &DownloadList) -> io::Result<()> {
+    if list.paused {
+        writeln!(out, "The queue is paused; links are still received.")?;
+    }
+    if list.order.is_empty() {
+        return writeln!(out, "The download queue is empty.");
+    }
+    for id in &list.order {
+        if let Some(item) = list.items.iter().find(|item| item.id == *id) {
+            print_download(out, item)?;
+        }
+    }
+    Ok(())
+}
+
+fn print_download(out: &mut dyn Write, item: &DownloadItem) -> io::Result<()> {
+    let label = item
+        .title
+        .clone()
+        .or_else(|| item.source.clone())
+        .or_else(|| {
+            item.files
+                .first()
+                .map(|file| format!("{}:{}", file.provider, file.project))
+        })
+        .unwrap_or_default();
+    let target = item.target.as_ref().map_or_else(
+        || "with no profile yet".to_owned(),
+        |target| format!("for {}/{}", target.instance, target.profile),
+    );
+    let downloaded = item
+        .files
+        .iter()
+        .filter(|file| file.state == DownloadFileState::Downloaded)
+        .count();
+    writeln!(
+        out,
+        "#{} {}: {label} {target}, {downloaded} of {} file(s)",
+        item.id,
+        item.state.name().replace('_', " "),
+        item.files.len()
+    )?;
+    match &item.state {
+        DownloadState::AwaitingUser { page, .. } => {
+            writeln!(
+                out,
+                "  Start the download at {page}; MSBE receives the link."
+            )?;
+        }
+        DownloadState::Failed { message } => writeln!(out, "  {message}")?,
+        DownloadState::Downloaded if item.target.is_none() => writeln!(
+            out,
+            "  Choose its profile with `msbe download confirm {} INSTANCE`.",
+            item.id
+        )?,
+        _ => {}
+    }
+    if !item.added.is_empty() {
+        writeln!(out, "  Added {}", item.added.join(", "))?;
+    }
+    if !item.skipped.is_empty() {
+        writeln!(out, "  Already in the profile: {}", item.skipped.join(", "))?;
+    }
+    for warning in &item.warnings {
+        writeln!(out, "  {warning}")?;
+    }
+    Ok(())
+}
+
 fn execute(cli: &Cli, console: &mut Console<'_>) -> Result<u8, CliError> {
     let home = match &cli.home {
         Some(dir) => Home::at(dir),
@@ -847,7 +1112,8 @@ fn execute(cli: &Cli, console: &mut Console<'_>) -> Result<u8, CliError> {
         } => add(
             &providers, &home, instance, profile, sources, *with_deps, console,
         ),
-        Command::Handoff { .. } => Err(CliError::HandoffViaDaemon),
+        Command::Handoff { .. } => Err(CliError::DaemonOnly("handoff")),
+        Command::Download(_) => Err(CliError::DaemonOnly("download")),
         Command::Search {
             instance,
             query,
@@ -2222,7 +2488,7 @@ fn add(
 }
 
 /// The profile's provider releases, which resolution keeps as they are.
-fn installed_releases(profile: &Profile) -> Vec<InstalledRelease> {
+pub fn installed_releases(profile: &Profile) -> Vec<InstalledRelease> {
     profile
         .mods
         .values()
@@ -2642,7 +2908,12 @@ fn status(home: &Home, instance: &str, console: &mut Console<'_>) -> Result<u8, 
     Ok(exit::OK)
 }
 
-fn target(instance: &Instance, profile: &Name) -> Result<Target, CliError> {
+/// What every release selected for `profile` must be compatible with.
+///
+/// # Errors
+///
+/// Returns [`InstanceError`] when the profile does not exist or has no usable target.
+pub fn target(instance: &Instance, profile: &Name) -> Result<Target, InstanceError> {
     let profile_target = instance.profile_target(profile)?;
     Ok(Target {
         game: instance.plan().id.clone(),
@@ -2657,7 +2928,7 @@ fn target(instance: &Instance, profile: &Name) -> Result<Target, CliError> {
 }
 
 /// The mod in `profile` recorded as `project` from `provider`, if any.
-fn installed_from<'p>(profile: &'p Profile, provider: &str, project: &str) -> Option<&'p Name> {
+pub fn installed_from<'p>(profile: &'p Profile, provider: &str, project: &str) -> Option<&'p Name> {
     profile
         .mods
         .iter()

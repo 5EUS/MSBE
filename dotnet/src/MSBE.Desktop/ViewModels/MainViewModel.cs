@@ -59,6 +59,7 @@ internal sealed partial class MainViewModel : ViewModelBase
             DaemonInfo daemon = await this.client.GetInfoAsync(CancellationToken.None).ConfigureAwait(true);
             this.IsPackConfigurationSupported = daemon.RpcVersion >= 3;
             this.IsTypedPackSupported = daemon.RpcVersion >= 4;
+            this.IsDownloadQueueSupported = daemon.RpcVersion >= 5;
             this.DataDirectory = daemon.DataDirectory;
             IReadOnlyList<GameInfo> games = await this.client.GetGamesAsync(CancellationToken.None).ConfigureAwait(true);
             this.Games.Clear();
@@ -73,6 +74,11 @@ internal sealed partial class MainViewModel : ViewModelBase
             await this.RefreshInstancesAsync().ConfigureAwait(true);
             await this.LoadExportCodecsAsync().ConfigureAwait(true);
             await this.LoadExtensionsAsync().ConfigureAwait(true);
+            if (this.IsDownloadQueueSupported)
+            {
+                this.StartDownloadPolling();
+            }
+
             this.StatusMessage = this.IsPackConfigurationSupported
                 ? $"Connected to daemon {daemon.Version} (RPC {daemon.RpcVersion})."
                 : $"Daemon RPC {daemon.RpcVersion} is outdated; restart MSBE to enable Pack configuration.";

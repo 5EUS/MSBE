@@ -482,6 +482,7 @@ pub(crate) fn execute(
             let preview = msbe_pack::preview_restore(&home, &input)?;
             value(&msbe_pack::restore_snapshot(&home, &preview, progress)?)
         }
+        Work::DownloadAdd { id } => crate::downloads::add(&environment.downloads, &home, id),
     }
 }
 

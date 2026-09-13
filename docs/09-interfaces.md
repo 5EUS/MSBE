@@ -48,7 +48,8 @@ msbe plan      list | show | new | validate | test | explain
 msbe registry  update | sources | trust
 
 msbe auth      login <provider> | logout | status
-msbe download  queue | resume | cancel
+msbe download  add | list | pause | resume | cancel | retry | move | confirm | clear
+msbe handoff   <uri>            # a provider link from the browser, into the download queue
 
 msbe doctor                     # environment diagnosis
 msbe bisect                     # find the mod that broke it

@@ -125,37 +125,56 @@ internal sealed partial class MainViewModel
     }
 
     [RelayCommand]
-    private void AddBrowseResult()
+    private async Task AddBrowseResultAsync()
     {
-        if (this.SelectedInstance is null || this.SelectedProfile is null || !this.CanInstallMarkedBrowseResults)
+        if (this.SelectedInstance is not { } instance || this.SelectedProfile is not { } profile || !this.CanInstallMarkedBrowseResults)
         {
             return;
         }
 
-        BrowseResultItem[] marked = [.. this.MarkedBrowseResults];
-        int queued = 0;
-        foreach (BrowseResultItem resultItem in marked)
+        if (!this.IsDownloadQueueSupported)
         {
-            var download = new DownloadQueueItem(
-                resultItem.Title,
-                resultItem.Source,
-                resultItem.Provider,
-                resultItem.IconSource,
-                this.SelectedInstance,
-                this.SelectedProfile,
-                this.BrowseWithDependencies);
-            if (this.TryQueueDownload(download))
-            {
-                queued++;
-            }
-
-            resultItem.IsMarked = false;
+            this.StatusMessage = "This daemon has no download queue; restart MSBE to update it.";
+            return;
         }
 
-        this.StatusMessage = queued == marked.Length
-            ? $"Queued {queued} mod(s) for {this.SelectedProfile}."
-            : $"Queued {queued} mod(s) for {this.SelectedProfile}; {marked.Length - queued} already in the queue.";
-        this.StartDownloads();
+        BrowseResultItem[] marked = [.. this.MarkedBrowseResults];
+        HashSet<long> queued = [];
+        try
+        {
+            foreach (BrowseResultItem resultItem in marked)
+            {
+                DownloadInfo download = await this.client.EnqueueDownloadAsync(
+                    instance,
+                    profile,
+                    resultItem.Source,
+                    this.BrowseWithDependencies,
+                    resultItem.Title,
+                    CancellationToken.None).ConfigureAwait(true);
+                if (resultItem.IconSource is { } icon)
+                {
+                    this.downloadIcons.TryAdd(download.Id, icon);
+                }
+
+                if (!this.downloads.ContainsKey(download.Id))
+                {
+                    queued.Add(download.Id);
+                }
+
+                resultItem.IsMarked = false;
+            }
+        }
+        catch (Exception exception) when (exception is IOException or SocketException or JsonException or InvalidOperationException or KeyNotFoundException)
+        {
+            this.StatusMessage = $"Could not queue {profile} downloads: {exception.Message}";
+            await this.RefreshDownloadsAsync().ConfigureAwait(true);
+            return;
+        }
+
+        await this.RefreshDownloadsAsync().ConfigureAwait(true);
+        this.StatusMessage = queued.Count == marked.Length
+            ? $"Queued {queued.Count} mod(s) for {profile}."
+            : $"Queued {queued.Count} mod(s) for {profile}; {marked.Length - queued.Count} already in the queue.";
     }
 
     private void OnBrowseResultsChanged(object? sender, NotifyCollectionChangedEventArgs eventArgs)

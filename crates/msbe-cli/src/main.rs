@@ -12,7 +12,7 @@ use std::{
     process::{Command, ExitCode, Stdio},
 };
 
-use msbe_rpc_schema::{COMMAND_METHOD, HANDOFF_SUBMIT_METHOD, Request};
+use msbe_rpc_schema::{COMMAND_METHOD, INFO_METHOD, Request};
 use serde_json::{Value, json};
 
 fn main() -> ExitCode {
@@ -41,35 +41,25 @@ fn run_via_daemon(args: Vec<OsString>) -> Result<u8, String> {
 
     let command = daemon_command(args)?;
     let socket = msbe_rpc_schema::default_socket();
-    let mut stream = if let Ok(stream) = UnixStream::connect(&socket) {
+    let stream = if let Ok(stream) = UnixStream::connect(&socket) {
         stream
     } else {
         start_daemon(&socket)?;
         connect_daemon(&socket, &thread::sleep, &Duration::from_millis(50))?
     };
-    let request = handoff_uri(&command).map_or_else(
-        || Request::new(json!(1), COMMAND_METHOD, json!({"args": command})),
-        |uri| Request::new(json!(1), HANDOFF_SUBMIT_METHOD, json!({"uri": uri})),
-    );
-    serde_json::to_writer(&mut stream, &request).map_err(|error| error.to_string())?;
-    stream.write_all(b"\n").map_err(|error| error.to_string())?;
-    stream.flush().map_err(|error| error.to_string())?;
-
-    let mut response = String::new();
-    io::BufReader::new(stream)
-        .read_line(&mut response)
-        .map_err(|error| error.to_string())?;
-    let response: Value = serde_json::from_str(&response).map_err(|error| error.to_string())?;
-    let result = response.get("result").ok_or_else(|| rpc_error(&response))?;
-    if request.method == HANDOFF_SUBMIT_METHOD {
-        serde_json::to_writer_pretty(&mut io::stdout().lock(), result)
-            .map_err(|error| error.to_string())?;
-        io::stdout()
-            .lock()
-            .write_all(b"\n")
-            .map_err(|error| error.to_string())?;
+    let mut daemon = Connection::new(stream)?;
+    let program = std::iter::once("msbe".to_owned()).chain(command.iter().cloned());
+    if let Some(calls) = msbe_cli::daemon_calls(program) {
+        check_home(&mut daemon, &command)?;
+        for (method, params) in &calls.calls {
+            let result = daemon.call(method, params.clone())?;
+            calls
+                .print(method, &result, &mut io::stdout().lock())
+                .map_err(|error| error.to_string())?;
+        }
         return Ok(0);
     }
+    let result = daemon.call(COMMAND_METHOD, json!({"args": command}))?;
     let stdout = result
         .get("stdout")
         .and_then(Value::as_str)
@@ -93,21 +83,66 @@ fn run_via_daemon(args: Vec<OsString>) -> Result<u8, String> {
     u8::try_from(exit_code).map_err(|_| "daemon returned an invalid exit code".to_owned())
 }
 
-/// Returns the protocol URI when this invocation is the narrow handoff command.
+/// One connection to the daemon, which answers each request line with one response line.
 #[cfg(unix)]
-fn handoff_uri(command: &[String]) -> Option<&str> {
-    let mut arguments = command.iter();
-    while let Some(argument) = arguments.next() {
-        match argument.as_str() {
-            "--home" | "--format" => {
-                arguments.next()?;
-            }
-            argument if argument.starts_with("--home=") || argument.starts_with("--format=") => {}
-            "handoff" => return arguments.next().map(String::as_str),
-            _ => return None,
-        }
+struct Connection {
+    writer: std::os::unix::net::UnixStream,
+    reader: io::BufReader<std::os::unix::net::UnixStream>,
+    next: u64,
+}
+
+#[cfg(unix)]
+impl Connection {
+    fn new(stream: std::os::unix::net::UnixStream) -> Result<Self, String> {
+        Ok(Self {
+            reader: io::BufReader::new(stream.try_clone().map_err(|error| error.to_string())?),
+            writer: stream,
+            next: 0,
+        })
     }
-    None
+
+    /// Calls `method` and returns its result, or the daemon's error message.
+    fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        self.next += 1;
+        let request = Request::new(json!(self.next), method, params);
+        serde_json::to_writer(&mut self.writer, &request).map_err(|error| error.to_string())?;
+        self.writer
+            .write_all(b"\n")
+            .and_then(|()| self.writer.flush())
+            .map_err(|error| error.to_string())?;
+        let mut line = String::new();
+        self.reader
+            .read_line(&mut line)
+            .map_err(|error| error.to_string())?;
+        let response: Value = serde_json::from_str(&line).map_err(|error| error.to_string())?;
+        response
+            .get("result")
+            .cloned()
+            .ok_or_else(|| rpc_error(&response))
+    }
+}
+
+/// Typed calls act on the running daemon's data directory, which `--home` cannot change, so a
+/// different one is refused rather than silently ignored.
+#[cfg(unix)]
+fn check_home(daemon: &mut Connection, command: &[String]) -> Result<(), String> {
+    let requested = command.iter().enumerate().find_map(|(index, argument)| {
+        argument.strip_prefix("--home=").or_else(|| {
+            (argument == "--home")
+                .then(|| command.get(index + 1).map(String::as_str))
+                .flatten()
+        })
+    });
+    let info = daemon.call(INFO_METHOD, Value::Null)?;
+    let served = info.get("data_directory").and_then(Value::as_str);
+    match (requested, served) {
+        (Some(requested), Some(served)) if Path::new(requested) != Path::new(served) => {
+            Err(format!(
+                "the running daemon serves {served}, not {requested}; download and handoff commands use the daemon's data directory"
+            ))
+        }
+        _ => Ok(()),
+    }
 }
 
 #[cfg(unix)]

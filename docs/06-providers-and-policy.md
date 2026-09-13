@@ -494,8 +494,8 @@ Firefox loses nothing.
 
 **Status: in progress.** A program selects `browser_assisted` acquisition with `scheme = "nxm"`,
 so every file is typed as needing the user and names its page (§6.3). Its `[handoff]` section lets
-the reviewed runtime read a link and redeem it with the user's key (§6.4). Registering the protocol
-handler, and receiving links into the download queue, remain.
+the reviewed runtime read a link and redeem it with the user's key (§6.4). `msbe handoff <uri>`
+submits a link to the daemon's download queue (§6.7). Registering the protocol handler remains.
 
 ## 6.7 Assisted download queue (the large-modpack case)
 
@@ -515,6 +515,15 @@ access control exactly where the site put it. Rate-limited, resumable, and cance
 
 Optionally an "auto-advance" toggle moves to the next page after a successful capture.
 There is no toggle that clicks the download button.
+
+**Status: the queue is implemented; browser navigation is not.** The daemon owns the queue
+([03 §3.4](03-architecture.md)). A source queued with `msbe download add`, or from Desktop's Browse
+page, resolves to a group of files, including dependencies when asked. A file its provider hands
+over through the browser waits for the user with the page to start it on, and the link that page
+hands over fills the file the queue waits on. A link nothing waits on becomes a download of its own,
+which waits for the user to choose its profile and is never dropped. The group is added to the
+profile once every file has arrived. Navigating the integrated browser and auto-advance arrive with
+`msbe-browser`.
 
 ## 6.8 Operational asks
 

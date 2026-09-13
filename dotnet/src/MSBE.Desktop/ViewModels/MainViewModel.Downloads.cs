@@ -10,27 +10,40 @@ using MSBE.Client;
 
 namespace MSBE.Desktop.ViewModels;
 
-/// <content>The download queue, which adds provider projects to profiles one at a time.</content>
+/// <content>
+/// The Downloads page: a view over the daemon's download queue, which downloads provider projects and
+/// adds them to profiles while no window is open.
+/// </content>
 internal sealed partial class MainViewModel
 {
-    private Task downloadWorker = Task.CompletedTask;
-    private bool isDownloadWorkerRunning;
+    private static readonly TimeSpan BusyDownloadPollInterval = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan IdleDownloadPollInterval = TimeSpan.FromSeconds(5);
 
-    /// <summary>Gets downloads waiting to start, in the order they will run.</summary>
+    private readonly Dictionary<long, DownloadQueueItem> downloads = [];
+    private readonly Dictionary<long, string> downloadIcons = [];
+    private List<long> downloadOrder = [];
+    private long downloadRevision;
+    private Task? downloadPoller;
+
+    /// <summary>Gets unfinished downloads waiting their turn or waiting for the user, in queue order.</summary>
     public ObservableCollection<DownloadQueueItem> QueuedDownloads { get; } = [];
 
     /// <summary>Gets finished downloads, newest first.</summary>
     public ObservableCollection<DownloadQueueItem> FinishedDownloads { get; } = [];
 
-    /// <summary>Gets or sets the download that is running.</summary>
+    /// <summary>Gets or sets the download the daemon is working on.</summary>
     [ObservableProperty]
     public partial DownloadQueueItem? ActiveDownload { get; set; }
 
-    /// <summary>Gets or sets whether the queue holds off starting the next download.</summary>
+    /// <summary>Gets or sets a value indicating whether the queue holds off starting the next download.</summary>
     [ObservableProperty]
     public partial bool IsDownloadQueuePaused { get; set; }
 
-    /// <summary>Gets a value indicating whether a download is running.</summary>
+    /// <summary>Gets or sets a value indicating whether the daemon owns a download queue.</summary>
+    [ObservableProperty]
+    public partial bool IsDownloadQueueSupported { get; set; }
+
+    /// <summary>Gets a value indicating whether the daemon is working on a download.</summary>
     public bool IsDownloading => this.ActiveDownload is not null;
 
     /// <summary>Gets the number of downloads running or waiting.</summary>
@@ -51,9 +64,9 @@ internal sealed partial class MainViewModel
         (null, 0) => "No downloads in progress",
         (null, int queued) when this.IsDownloadQueuePaused => $"Paused · {queued} queued",
         (null, int queued) => $"{queued} queued",
-        ({ } active, 0) => $"Downloading {active.Title}",
-        ({ } active, _) when this.IsDownloadQueuePaused => $"Downloading {active.Title} · queue paused",
-        ({ } active, int queued) => $"Downloading {active.Title} · {queued} queued",
+        ({ } active, 0) => $"{active.StatusText} {active.Title}",
+        ({ } active, _) when this.IsDownloadQueuePaused => $"{active.StatusText} {active.Title} · queue paused",
+        ({ } active, int queued) => $"{active.StatusText} {active.Title} · {queued} queued",
     };
 
     /// <summary>Gets the label of the pause toggle.</summary>
@@ -64,178 +77,187 @@ internal sealed partial class MainViewModel
 
     /// <summary>Gets the hint shown while nothing is downloading.</summary>
     public string DownloadIdleHint => this.IsDownloadQueuePaused && this.HasQueuedDownloads
-        ? "Resume the queue to start the next download."
-        : "Mods you install from Browse line up here and download one at a time.";
+        ? "Resume the queue to start the next download. Links from your browser are still received."
+        : "Mods you install from Browse line up here, and MSBE keeps downloading them while this window is closed.";
 
-    /// <summary>Gets a task that completes once the queue has nothing it may run.</summary>
-    internal Task DownloadsSettled => this.downloadWorker;
-
-    private static string DescribeAddition(string output)
+    private static void Replace(ObservableCollection<DownloadQueueItem> target, List<DownloadQueueItem> items)
     {
-        try
+        if (target.SequenceEqual(items))
         {
-            using JsonDocument document = JsonDocument.Parse(output);
-            JsonElement report = document.RootElement;
-            int added = ArrayLength(report, "added");
-            int unresolved = ArrayLength(report, "unresolved") + ArrayLength(report, "incompatible");
-            string summary = (added, ArrayLength(report, "skipped")) switch
-            {
-                (0, > 0) => "Already in profile",
-                (0, _) => "Nothing was added",
-                (1, _) => "Added 1 mod",
-                _ => $"Added {added} mods",
-            };
-            return unresolved == 0 ? summary : $"{summary} · {unresolved} unresolved";
+            return;
         }
-        catch (JsonException)
+
+        target.Clear();
+        foreach (DownloadQueueItem item in items)
         {
-            return "Added";
+            target.Add(item);
         }
     }
-
-    private static int ArrayLength(JsonElement report, string property) =>
-        report.ValueKind == JsonValueKind.Object && report.TryGetProperty(property, out JsonElement value) && value.ValueKind == JsonValueKind.Array
-            ? value.GetArrayLength()
-            : 0;
 
     partial void OnActiveDownloadChanged(DownloadQueueItem? value) => this.NotifyDownloadsChanged();
 
     partial void OnIsDownloadQueuePausedChanged(bool value) => this.NotifyDownloadsChanged();
 
-    [RelayCommand]
-    private void MoveDownloadUp(DownloadQueueItem? download) => this.MoveQueuedDownload(download, -1);
-
-    [RelayCommand]
-    private void MoveDownloadDown(DownloadQueueItem? download) => this.MoveQueuedDownload(download, 1);
-
-    [RelayCommand]
-    private void RemoveQueuedDownload(DownloadQueueItem? download)
+    /// <summary>Follows the daemon's download queue, often while downloads are pending and seldom otherwise.</summary>
+    private async Task PollDownloadsAsync()
     {
-        if (download is not null)
+        while (this.IsDownloadQueueSupported)
         {
-            this.QueuedDownloads.Remove(download);
+            await this.RefreshDownloadsAsync().ConfigureAwait(true);
+            await Task.Delay(this.HasPendingDownloads ? BusyDownloadPollInterval : IdleDownloadPollInterval, this.time).ConfigureAwait(true);
         }
+
+        this.downloadPoller = null;
     }
 
+    /// <summary>Starts following the daemon's download queue, unless it already is.</summary>
+    private void StartDownloadPolling() => this.downloadPoller ??= this.PollDownloadsAsync();
+
     [RelayCommand]
-    private void RetryDownload(DownloadQueueItem? download)
+    private async Task RefreshDownloadsAsync()
     {
-        if (download is not { IsFailed: true } || this.IsDownloadQueued(download))
+        if (!this.IsDownloadQueueSupported)
         {
             return;
         }
 
-        this.FinishedDownloads.Remove(download);
-        download.State = DownloadState.Queued;
-        download.Detail = string.Empty;
-        this.QueuedDownloads.Add(download);
-        this.StartDownloads();
-    }
-
-    [RelayCommand]
-    private void ClearFinishedDownloads() => this.FinishedDownloads.Clear();
-
-    [RelayCommand]
-    private void ToggleDownloadQueuePaused()
-    {
-        this.IsDownloadQueuePaused = !this.IsDownloadQueuePaused;
-        this.StartDownloads();
-    }
-
-    /// <summary>Queues a download unless the same project is already headed for the same profile.</summary>
-    /// <param name="download">The download to queue.</param>
-    /// <returns><see langword="true" /> if the download was queued.</returns>
-    /// <remarks>Call <see cref="StartDownloads" /> once everything is queued.</remarks>
-    private bool TryQueueDownload(DownloadQueueItem download)
-    {
-        if (this.IsDownloadQueued(download))
+        try
         {
-            return false;
+            DownloadListInfo list = await this.client.ListDownloadsAsync(this.downloadRevision, CancellationToken.None).ConfigureAwait(true);
+            await this.ApplyDownloadsAsync(list).ConfigureAwait(true);
+        }
+        catch (Exception exception) when (exception is IOException or SocketException or JsonException or InvalidOperationException or KeyNotFoundException)
+        {
+            this.StatusMessage = $"Could not read the download queue: {exception.Message}";
+        }
+    }
+
+    [RelayCommand]
+    private Task MoveDownloadUpAsync(DownloadQueueItem? download) => this.MoveQueuedDownloadAsync(download, -1);
+
+    [RelayCommand]
+    private Task MoveDownloadDownAsync(DownloadQueueItem? download) => this.MoveQueuedDownloadAsync(download, 1);
+
+    [RelayCommand]
+    private Task RemoveQueuedDownloadAsync(DownloadQueueItem? download) => download is null
+        ? Task.CompletedTask
+        : this.ChangeDownloadsAsync(() => this.client.CancelDownloadAsync(download.Id, CancellationToken.None), "Could not cancel the download");
+
+    [RelayCommand]
+    private Task RetryDownloadAsync(DownloadQueueItem? download) => download is not { IsFailed: true }
+        ? Task.CompletedTask
+        : this.ChangeDownloadsAsync(() => this.client.RetryDownloadAsync(download.Id, CancellationToken.None), "Could not retry the download");
+
+    [RelayCommand]
+    private Task AddDownloadToProfileAsync(DownloadQueueItem? download)
+    {
+        if (download is not { NeedsProfile: true } || this.SelectedInstance is not { } instance || this.SelectedProfile is not { } profile)
+        {
+            return Task.CompletedTask;
         }
 
-        this.QueuedDownloads.Add(download);
-        return true;
+        return this.ChangeDownloadsAsync(() => this.client.ConfirmDownloadAsync(download.Id, instance, profile, CancellationToken.None), "Could not add the download");
     }
 
-    private bool IsDownloadQueued(DownloadQueueItem download) =>
-        (this.ActiveDownload is { } active && active.Targets(download)) || this.QueuedDownloads.Any(download.Targets);
+    [RelayCommand]
+    private Task ClearFinishedDownloadsAsync() =>
+        this.ChangeDownloadsAsync(() => this.client.ClearDownloadsAsync(CancellationToken.None), "Could not clear finished downloads");
 
-    private void MoveQueuedDownload(DownloadQueueItem? download, int offset)
+    [RelayCommand]
+    private Task ToggleDownloadQueuePausedAsync() => this.IsDownloadQueuePaused
+        ? this.ChangeDownloadsAsync(() => this.client.ResumeDownloadsAsync(id: null, CancellationToken.None), "Could not resume the queue")
+        : this.ChangeDownloadsAsync(() => this.client.PauseDownloadsAsync(id: null, CancellationToken.None), "Could not pause the queue");
+
+    private Task MoveQueuedDownloadAsync(DownloadQueueItem? download, int offset)
     {
         int index = download is null ? -1 : this.QueuedDownloads.IndexOf(download);
         int target = index + offset;
-        if (index >= 0 && target >= 0 && target < this.QueuedDownloads.Count)
+        if (download is null || index < 0 || target < 0 || target >= this.QueuedDownloads.Count)
         {
-            this.QueuedDownloads.Move(index, target);
+            return Task.CompletedTask;
         }
+
+        int position = this.downloadOrder.IndexOf(this.QueuedDownloads[target].Id);
+        return position < 0
+            ? Task.CompletedTask
+            : this.ChangeDownloadsAsync(() => this.client.MoveDownloadAsync(download.Id, position, CancellationToken.None), "Could not move the download");
     }
 
-    /// <summary>Starts working through the queue unless it is paused, empty, or already running.</summary>
-    private void StartDownloads()
+    /// <summary>Asks the daemon to change the queue, then shows the queue as it now is.</summary>
+    private async Task ChangeDownloadsAsync(Func<Task> change, string failure)
     {
-        if (this.isDownloadWorkerRunning || this.IsDownloadQueuePaused || this.QueuedDownloads.Count == 0)
+        if (!this.IsDownloadQueueSupported)
         {
             return;
         }
 
-        this.isDownloadWorkerRunning = true;
-        this.downloadWorker = this.RunDownloadsAsync();
-    }
-
-    private async Task RunDownloadsAsync()
-    {
         try
         {
-            while (!this.IsDownloadQueuePaused && this.QueuedDownloads.Count > 0)
-            {
-                DownloadQueueItem download = this.QueuedDownloads[0];
-                this.QueuedDownloads.RemoveAt(0);
-                download.State = DownloadState.Downloading;
-                this.ActiveDownload = download;
-                await this.DownloadAsync(download).ConfigureAwait(true);
-                this.ActiveDownload = null;
-                this.FinishedDownloads.Insert(0, download);
-            }
+            await change().ConfigureAwait(true);
         }
-        finally
+        catch (Exception exception) when (exception is IOException or SocketException or JsonException or InvalidOperationException or KeyNotFoundException)
         {
-            this.isDownloadWorkerRunning = false;
-        }
-    }
-
-    private async Task DownloadAsync(DownloadQueueItem download)
-    {
-        try
-        {
-            List<string> arguments = ["--format", "json", "add", download.Instance, download.Source, "--profile", download.Profile];
-            if (download.WithDependencies)
-            {
-                arguments.Add("--with-deps");
-            }
-
-            CommandResult result = await this.client.RunCommandAsync(arguments, CancellationToken.None).ConfigureAwait(true);
-            if (result.ExitCode != 0)
-            {
-                string error = result.StandardError.Trim();
-                throw new InvalidOperationException(error.Length > 0 ? error : $"The add command exited with code {result.ExitCode}.");
-            }
-
-            download.Detail = DescribeAddition(result.StandardOutput);
-            download.State = DownloadState.Completed;
-            this.StatusMessage = $"Added {download.Title} to {download.Profile}. Review deployment to apply it.";
-        }
-        catch (Exception exception) when (exception is IOException or SocketException or InvalidOperationException)
-        {
-            download.Detail = exception.Message;
-            download.State = DownloadState.Failed;
-            this.StatusMessage = $"Could not download {download.Title}.";
+            this.StatusMessage = $"{failure}: {exception.Message}";
             return;
         }
 
-        if (string.Equals(this.SelectedInstance, download.Instance, StringComparison.Ordinal) &&
-            string.Equals(this.SelectedProfile, download.Profile, StringComparison.Ordinal))
+        await this.RefreshDownloadsAsync().ConfigureAwait(true);
+    }
+
+    private async Task ApplyDownloadsAsync(DownloadListInfo list)
+    {
+        bool announce = this.downloadRevision > 0;
+        this.downloadRevision = list.Next;
+        this.IsDownloadQueuePaused = list.IsPaused;
+        List<DownloadQueueItem> added = [];
+        foreach (DownloadInfo download in list.Items)
         {
-            await this.LoadModsAsync(download.Instance, download.Profile).ConfigureAwait(true);
+            if (this.downloads.TryGetValue(download.Id, out DownloadQueueItem? item))
+            {
+                bool wasCompleted = item.IsCompleted;
+                item.Update(download);
+                if (!wasCompleted && item.IsCompleted)
+                {
+                    added.Add(item);
+                }
+            }
+            else
+            {
+                item = new DownloadQueueItem(download, this.downloadIcons.GetValueOrDefault(download.Id));
+                this.downloads[download.Id] = item;
+                if (announce && item.IsCompleted)
+                {
+                    added.Add(item);
+                }
+            }
+        }
+
+        HashSet<long> listed = [.. list.Order];
+        foreach (long cleared in this.downloads.Keys.Where(id => !listed.Contains(id)).ToList())
+        {
+            this.downloads.Remove(cleared);
+            this.downloadIcons.Remove(cleared);
+        }
+
+        this.downloadOrder = [.. list.Order];
+        List<DownloadQueueItem> ordered = [.. list.Order.Where(this.downloads.ContainsKey).Select(id => this.downloads[id])];
+        DownloadQueueItem? active = ordered.Find(item => item.IsActive);
+        this.ActiveDownload = active;
+        Replace(this.QueuedDownloads, [.. ordered.Where(item => !item.IsFinished && !ReferenceEquals(item, active))]);
+        Replace(this.FinishedDownloads, [.. Enumerable.Reverse(ordered).Where(item => item.IsFinished)]);
+        this.NotifyDownloadsChanged();
+
+        if (added.Count == 0)
+        {
+            return;
+        }
+
+        DownloadQueueItem last = added[^1];
+        this.StatusMessage = $"Added {last.Title} to {last.Profile}. Review deployment to apply it.";
+        if (this.SelectedInstance is { } instance && this.SelectedProfile is { } profile &&
+            added.Exists(item => string.Equals(item.Instance, instance, StringComparison.Ordinal) && string.Equals(item.Profile, profile, StringComparison.Ordinal)))
+        {
+            await this.LoadModsAsync(instance, profile).ConfigureAwait(true);
         }
     }
 

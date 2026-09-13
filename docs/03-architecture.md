@@ -178,6 +178,38 @@ the latest. Cancellation is cooperative: operations check it between steps and b
 so a cancelled job leaves no partial profile or output. Pack execute methods and snapshots run only
 as jobs ([17](17-pack-formats-and-native-bundles.md) §17.13).
 
+Contract 5 adds the download queue. The daemon owns it, so downloads continue while no client is
+open, and a link clicked in a browser always has somewhere to land.
+
+```
+download.enqueue  { instance, profile, source, with_deps?, title? } -> item
+download.list     { after? }                        -> { next, paused, order, items changed after `after` }
+download.pause    { id? }  download.resume { id? }  -> queue      # no id: the whole queue
+download.cancel   { id }   download.retry  { id }   -> item
+download.move     { id, position }                  -> queue
+download.confirm  { id, instance, profile }         -> item       # a link that arrived on its own
+download.clear                                      -> queue
+handoff.submit    { uri }                           -> { id, provider, game, project, release, matched }
+```
+
+An item is a source, the profile it is added to, and the group of files the source resolved to,
+with its dependencies when asked. It moves through two lanes:
+
+- **The network lane** resolves the source and downloads its files into quarantine under
+  `downloads/<id>/`. It takes the instance-state lock only to read the profile, never while it
+  downloads. Links a browser hands over are redeemed on a lane of their own as soon as they arrive,
+  because their keys expire; a link is kept only in memory.
+- **The instance lane** adds the group's files to the profile together, once every one of them
+  has downloaded, as a short job. A long queue therefore never holds up a deploy.
+
+`download.list` is a cursor poll like `job.events`: a client passes the last queue revision it saw
+and receives the items changed since, with every item's ID in queue order. A link that fills a file
+the queue waits on advances that item. Any other link becomes an item of its own, which is never
+dropped and waits for `download.confirm` to choose its profile. The queue is persisted in
+`downloads/queue.json`. A daemon that stops part-way resolves interrupted items again when it
+starts, keeping the files they already downloaded, and a file whose link was lost waits for the user
+again.
+
 The `Question` event and `job.answer` arrive with the first installer-question producer. The
 `Question` event is how an interactive install wizard works identically in the GUI
 (a dialog), the CLI (a prompt), and CI (`--non-interactive` → fail with the unanswered

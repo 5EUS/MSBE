@@ -39,7 +39,7 @@
                                 <TextBlock Classes="download-hero-title" Text="{Binding ActiveDownload.Title}" TextTrimming="CharacterEllipsis" />
                                 <TextBlock Classes="download-meta" Text="{Binding ActiveDownload.Summary}" TextTrimming="CharacterEllipsis" />
                             </StackPanel>
-                            <TextBlock Grid.Column="2" Classes="download-status" VerticalAlignment="Center" Text="DOWNLOADING" />
+                            <TextBlock Grid.Column="2" Classes="download-status" VerticalAlignment="Center" Text="{Binding ActiveDownload.StatusText}" />
                             <ProgressBar Grid.Row="1" Grid.ColumnSpan="3" Classes="download-progress" IsIndeterminate="True" />
                         </Grid>
 
@@ -72,7 +72,7 @@
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="vm:DownloadQueueItem">
                                 <Border Classes="download-row">
-                                    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
+                                    <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="12">
                                         <Border Classes="download-icon" Width="36" Height="36" ClipToBounds="True">
                                             <Panel>
                                                 <LucideIcon Kind="PackageSearch" Size="17" StrokeWidth="1.8" />
@@ -84,8 +84,17 @@
                                         <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
                                             <TextBlock Classes="download-title" Text="{Binding Title}" TextTrimming="CharacterEllipsis" />
                                             <TextBlock Classes="download-meta" Text="{Binding Summary}" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Classes="download-meta" Text="{Binding Detail}" TextWrapping="Wrap" MaxLines="2" IsVisible="{Binding HasDetail}" />
                                         </StackPanel>
-                                        <StackPanel Grid.Column="2" Classes="download-actions" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
+                                        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                            <TextBlock Classes="download-meta" VerticalAlignment="Center" Text="{Binding StatusText}" />
+                                            <Button Classes="secondary-button"
+                                                    IsVisible="{Binding NeedsProfile}"
+                                                    Content="Add to selected profile"
+                                                    Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).AddDownloadToProfileCommand}"
+                                                    CommandParameter="{Binding}" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="3" Classes="download-actions" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
                                             <Button Classes="icon-button"
                                                     ToolTip.Tip="Move up"
                                                     AutomationProperties.Name="Move up"

@@ -14,33 +14,40 @@ use std::{
 use msbe_core::config::Home;
 use msbe_provider_api::{HttpClient, HttpError};
 use msbe_rpc_schema::{
-    COMMAND_METHOD, CONTRACT_VERSION, DaemonInfo, EXTENSION_LIST_METHOD, GAME_LIST_METHOD,
+    COMMAND_METHOD, CONTRACT_VERSION, DOWNLOAD_CANCEL_METHOD, DOWNLOAD_CLEAR_METHOD,
+    DOWNLOAD_CONFIRM_METHOD, DOWNLOAD_ENQUEUE_METHOD, DOWNLOAD_LIST_METHOD, DOWNLOAD_MOVE_METHOD,
+    DOWNLOAD_PAUSE_METHOD, DOWNLOAD_RESUME_METHOD, DOWNLOAD_RETRY_METHOD, DaemonInfo,
+    DownloadItemId, DownloadListRequest, DownloadPause, EXTENSION_LIST_METHOD, GAME_LIST_METHOD,
     HANDOFF_SUBMIT_METHOD, INFO_METHOD, JOB_CANCEL_METHOD, JOB_EVENTS_METHOD, JOB_METHODS,
     JOB_START_METHOD, PACK_CAPTURE_PREVIEW_METHOD, PACK_CODEC_LIST_METHOD,
     PACK_CODEC_OPTIONS_METHOD, PACK_EXPORT_PREVIEW_METHOD, PACK_IMPORT_PREVIEW_METHOD,
     PACK_UPDATE_PREVIEW_METHOD, PLAN_LOAD_METHOD, PLAN_UNLOAD_METHOD, Request, Response,
 };
 use msbe_secrets::SystemClock;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
+mod downloads;
 mod handoff;
 mod jobs;
 mod pack;
 mod registry;
 
+pub use downloads::{Downloads, Lanes};
 pub use jobs::Jobs;
 pub use registry::{Game, PlanRegistry, RegistryError};
 
 /// Opens a network client for a job that acquires content.
 pub type Connector = Arc<dyn Fn() -> Result<Box<dyn HttpClient>, HttpError> + Send + Sync>;
 
-/// The daemon's state: loaded game support, previews awaiting execution, and the job queue.
+/// The daemon's state: loaded game support, previews awaiting execution, the job queue, and the
+/// download queue.
 pub struct Daemon {
     registry: PlanRegistry,
     home: Option<PathBuf>,
     plans: pack::Plans,
     jobs: Arc<Jobs>,
+    downloads: Arc<Downloads>,
     connect: Connector,
 }
 
@@ -63,6 +70,7 @@ impl Daemon {
             home: None,
             plans: pack::Plans::default(),
             jobs: Arc::new(Jobs::default()),
+            downloads: Arc::new(Downloads::default()),
             connect: Arc::new(|| {
                 msbe_http::UreqClient::connect()
                     .map(|client| -> Box<dyn HttpClient> { Box::new(client) })
@@ -89,6 +97,16 @@ impl Daemon {
         Arc::clone(&self.jobs)
     }
 
+    /// The download queue and what its lanes run against, for the lane threads.
+    pub fn lanes(&self) -> Lanes {
+        Lanes {
+            downloads: Arc::clone(&self.downloads),
+            jobs: Arc::clone(&self.jobs),
+            home: self.home.clone(),
+            connect: Arc::clone(&self.connect),
+        }
+    }
+
     /// Handles one fully decoded request.
     pub fn handle(&mut self, request: &Request) -> Response {
         if !request.is_versioned() {
@@ -100,13 +118,9 @@ impl Daemon {
             COMMAND_METHOD => self.command(id, request.params.clone()),
             HANDOFF_SUBMIT_METHOD => handoff::respond(
                 id,
-                handoff::submit(
-                    &request.params,
-                    self.home().as_ref(),
-                    &self.connect,
-                    &SystemClock,
-                ),
+                handoff::submit(&request.params, &self.lanes(), &SystemClock),
             ),
+            method if method.starts_with("download.") => self.download(id, method, &request.params),
             GAME_LIST_METHOD => game_list(id, &request.params, &self.registry),
             PLAN_LOAD_METHOD => plan_load(id, request.params.clone(), &mut self.registry),
             PLAN_UNLOAD_METHOD => plan_unload(id, request.params.clone(), &mut self.registry),
@@ -224,11 +238,73 @@ impl Daemon {
                 jobs::Environment {
                     home: self.home.clone(),
                     connect: Arc::clone(&self.connect),
+                    downloads: Arc::clone(&self.downloads),
                 },
             );
             json!({ "job_id": job })
         });
         pack::respond(id, result)
+    }
+
+    /// The download queue's methods. They never wait for a job: the queue is not instance state.
+    fn download(&self, id: Value, method: &str, params: &Value) -> Response {
+        let lanes = self.lanes();
+        match method {
+            DOWNLOAD_ENQUEUE_METHOD => answer(id, typed(params).and_then(|r| lanes.enqueue(r))),
+            DOWNLOAD_LIST_METHOD => answer(
+                id,
+                optional::<DownloadListRequest>(params).and_then(|r| lanes.list(r.after)),
+            ),
+            DOWNLOAD_PAUSE_METHOD => answer(
+                id,
+                optional::<DownloadPause>(params).and_then(|r| lanes.pause(r.id)),
+            ),
+            DOWNLOAD_RESUME_METHOD => answer(
+                id,
+                optional::<DownloadPause>(params).and_then(|r| lanes.resume(r.id)),
+            ),
+            DOWNLOAD_CANCEL_METHOD => answer(
+                id,
+                typed::<DownloadItemId>(params).and_then(|r| lanes.cancel(r.id)),
+            ),
+            DOWNLOAD_RETRY_METHOD => answer(
+                id,
+                typed::<DownloadItemId>(params).and_then(|r| lanes.retry(r.id)),
+            ),
+            DOWNLOAD_MOVE_METHOD => answer(id, typed(params).and_then(|r| lanes.move_item(r))),
+            DOWNLOAD_CONFIRM_METHOD => answer(id, typed(params).and_then(|r| lanes.confirm(r))),
+            DOWNLOAD_CLEAR_METHOD => answer(
+                id,
+                optional::<Empty>(params).and_then(|Empty {}| lanes.clear()),
+            ),
+            _ => Response::error(id, -32601, "method not found"),
+        }
+    }
+}
+
+/// A method that takes no parameters.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Empty {}
+
+fn typed<T: DeserializeOwned>(params: &Value) -> Result<T, String> {
+    serde_json::from_value(params.clone()).map_err(|error| error.to_string())
+}
+
+fn optional<T: DeserializeOwned + Default>(params: &Value) -> Result<T, String> {
+    if params.is_null() {
+        Ok(T::default())
+    } else {
+        typed(params)
+    }
+}
+
+/// A download queue result as a response; a refusal is an invalid-parameter error.
+fn answer<T: Serialize>(id: Value, result: Result<T, String>) -> Response {
+    match result.map(|result| serde_json::to_value(result)) {
+        Ok(Ok(result)) => Response::success(id, result),
+        Ok(Err(error)) => Response::error(id, -32603, error.to_string()),
+        Err(error) => Response::error(id, -32602, error),
     }
 }
 
@@ -354,6 +430,23 @@ pub fn serve(socket: &Path, plans: &Path, home: Option<PathBuf>) -> io::Result<(
                 worker.wait_and_run();
             }
         })?;
+    let lanes = daemon.lanes();
+    lanes.recover();
+    let network = lanes.clone();
+    thread::Builder::new()
+        .name("msbe-downloads".to_owned())
+        .spawn(move || {
+            loop {
+                network.wait_and_run();
+            }
+        })?;
+    thread::Builder::new()
+        .name("msbe-links".to_owned())
+        .spawn(move || {
+            loop {
+                lanes.wait_and_run_link();
+            }
+        })?;
     for stream in listener.incoming() {
         serve_stream(stream?, &mut daemon)?;
     }
@@ -411,19 +504,33 @@ fn redact_strings(value: &mut Value) {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::PathBuf};
+    use std::{
+        collections::BTreeMap,
+        fs,
+        io::Write,
+        path::{Path, PathBuf},
+        sync::{Arc, Mutex},
+    };
 
+    use msbe_provider_api::{
+        ExtensionCapability, ExtensionEnvelope, ExtensionProvide, HostApiRange, HttpClient,
+        HttpError, HttpRequest, HttpResponse, ProviderProgram, ProviderProgramEnvelope, SigningKey,
+        hex,
+    };
     use serde_json::{Value, json};
     use tempfile::TempDir;
 
     use super::{
-        COMMAND_METHOD, Daemon, EXTENSION_LIST_METHOD, GAME_LIST_METHOD, HANDOFF_SUBMIT_METHOD,
-        INFO_METHOD, PLAN_UNLOAD_METHOD, PlanRegistry,
+        COMMAND_METHOD, Connector, Daemon, EXTENSION_LIST_METHOD, GAME_LIST_METHOD,
+        HANDOFF_SUBMIT_METHOD, INFO_METHOD, Jobs, PLAN_UNLOAD_METHOD, PlanRegistry,
     };
     use msbe_rpc_schema::{
-        CONTRACT_VERSION, JOB_CANCEL_METHOD, JOB_EVENTS_METHOD, JOB_START_METHOD,
-        PACK_CODEC_LIST_METHOD, PACK_EXPORT_EXECUTE_METHOD, PACK_EXPORT_PREVIEW_METHOD,
-        PLAN_LOAD_METHOD, Request, Response, SNAPSHOT_CREATE_METHOD, codes,
+        CONTRACT_VERSION, DOWNLOAD_CANCEL_METHOD, DOWNLOAD_CLEAR_METHOD, DOWNLOAD_CONFIRM_METHOD,
+        DOWNLOAD_ENQUEUE_METHOD, DOWNLOAD_LIST_METHOD, DOWNLOAD_MOVE_METHOD, DOWNLOAD_PAUSE_METHOD,
+        DOWNLOAD_RESUME_METHOD, DOWNLOAD_RETRY_METHOD, JOB_CANCEL_METHOD, JOB_EVENTS_METHOD,
+        JOB_START_METHOD, PACK_CODEC_LIST_METHOD, PACK_EXPORT_EXECUTE_METHOD,
+        PACK_EXPORT_PREVIEW_METHOD, PLAN_LOAD_METHOD, Request, Response, SNAPSHOT_CREATE_METHOD,
+        codes,
     };
 
     const PLAN: &str = r#"
@@ -515,9 +622,16 @@ bootstrap = "none"
 
     impl Fixture {
         fn new() -> Self {
+            Self::with(&Web::default())
+        }
+
+        /// A fixture whose network is `web`.
+        fn with(web: &Web) -> Self {
             let (plans, registry) = registry();
             let root = TempDir::new().unwrap();
-            let daemon = Daemon::new(registry).with_home(root.path().join("home"));
+            let daemon = Daemon::new(registry)
+                .with_home(root.path().join("home"))
+                .with_connector(web.connector());
             let mut fixture = Self {
                 _plans: plans,
                 root,
@@ -560,6 +674,10 @@ bootstrap = "none"
 
         fn output(&self) -> PathBuf {
             self.root.path().join("demo.msbepack")
+        }
+
+        fn home(&self) -> PathBuf {
+            self.root.path().join("home")
         }
 
         fn preview_export(&mut self) -> (String, String) {
@@ -627,6 +745,399 @@ bootstrap = "none"
                 .get("stdout")
                 .and_then(Value::as_str)
                 .is_some_and(|output| output.contains("msbe"))
+        );
+    }
+
+    /// Canned JSON and files by URL, served to every network client the daemon opens. Once given
+    /// the job queue, it checks that no download runs while the instance-state lock is held.
+    #[derive(Clone, Default)]
+    struct Web {
+        json: BTreeMap<String, Value>,
+        files: BTreeMap<String, Vec<u8>>,
+        jobs: Arc<Mutex<Option<Arc<Jobs>>>>,
+    }
+
+    impl Web {
+        fn connector(&self) -> Connector {
+            let web = self.clone();
+            Arc::new(move || -> Result<Box<dyn HttpClient>, HttpError> {
+                Ok(Box::new(web.clone()))
+            })
+        }
+    }
+
+    impl HttpClient for Web {
+        fn send(&self, request: &HttpRequest<'_>) -> Result<HttpResponse, HttpError> {
+            self.json
+                .get(request.url)
+                .map(|body| serde_json::to_vec(body).unwrap().into())
+                .ok_or_else(|| HttpError::Status {
+                    url: request.url.to_owned(),
+                    status: 404,
+                })
+        }
+
+        fn download(
+            &self,
+            request: &HttpRequest<'_>,
+            sink: &mut dyn Write,
+        ) -> Result<u64, HttpError> {
+            if let Some(jobs) = self.jobs.lock().unwrap().as_ref() {
+                assert!(
+                    jobs.try_state().is_ok(),
+                    "downloads never hold the instance-state lock"
+                );
+            }
+            let body = self
+                .files
+                .get(request.url)
+                .ok_or_else(|| HttpError::Status {
+                    url: request.url.to_owned(),
+                    status: 404,
+                })?;
+            sink.write_all(body).unwrap();
+            Ok(u64::try_from(body.len()).unwrap())
+        }
+    }
+
+    /// A browser-assisted catalog for plan `example`, whose links use the `handoff` scheme.
+    const ASSISTED: &str = r#"
+runtime = "catalog-v1"
+capabilities = ["project", "releases"]
+
+[games]
+example = "game"
+
+[provider]
+schema = 1
+id = "assisted"
+name = "Assisted"
+[provider.source]
+type = "prefixed"
+prefix = "assisted:"
+[provider.metadata]
+api_base = "https://api.assisted.test"
+[provider.acquisition]
+type = "browser_assisted"
+scheme = "handoff"
+[provider.policy]
+requires_auth = false
+respects_distribution_flag = false
+tos_url = ""
+ack_required = false
+
+[routes]
+project = "/projects/{reference}"
+releases = "/projects/{project}/releases"
+
+[pages]
+release = "https://www.assisted.test/{game}/mods/{project}?file={release}"
+
+[handoff]
+host = "game"
+path = ["files", "{project}", "{release}"]
+redeem = "/links/{project}/{release}"
+
+[releases]
+order = "newest-first"
+
+[mappings.project]
+id = "/id"
+title = "/title"
+
+[mappings.release]
+id = "/id"
+number = "/number"
+published = "/published"
+files = { single = "" }
+
+[mappings.release.file]
+url = "/url"
+name = "/name"
+
+[mappings.handoff]
+urls = "/url"
+"#;
+
+    /// Installs [`ASSISTED`] as a signed program its signer is granted.
+    fn install_assisted(home: &Path) {
+        let key = SigningKey::from_bytes(&[7; 32]);
+        let payload: ProviderProgram = toml::from_str(ASSISTED).unwrap();
+        let mut envelope = ExtensionEnvelope {
+            schema: 1,
+            package_digest: ProviderProgramEnvelope::digest_for(&payload).unwrap(),
+            id: payload.provider.id.clone(),
+            version: "0.1.0".to_owned(),
+            provides: vec![ExtensionProvide::ProviderProgramV1],
+            host_api: HostApiRange {
+                minimum: 1,
+                maximum: 1,
+            },
+            capabilities: vec![ExtensionCapability::Network],
+            signer: "publisher".to_owned(),
+            signature: "00".repeat(64),
+            payload,
+        };
+        envelope.sign(&key).unwrap();
+        let programs = home.join("extensions/providers");
+        fs::create_dir_all(&programs).unwrap();
+        fs::write(
+            programs.join("assisted.toml"),
+            toml::to_string(&ProviderProgramEnvelope(envelope)).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            home.join("extensions/trust.toml"),
+            format!(
+                "[[signer]]\nid = \"publisher\"\nkey = \"{}\"\nprograms = [\"assisted\"]\n",
+                hex(key.verifying_key().as_bytes())
+            ),
+        )
+        .unwrap();
+    }
+
+    fn at<'a>(value: &'a Value, pointer: &str) -> &'a Value {
+        value
+            .pointer(pointer)
+            .unwrap_or_else(|| panic!("no {pointer} in {value}"))
+    }
+
+    fn enqueue(daemon: &mut Daemon, source: &str) -> u64 {
+        let item = success(call(
+            daemon,
+            DOWNLOAD_ENQUEUE_METHOD,
+            json!({ "instance": "demo", "profile": "default", "source": source }),
+        ));
+        at(&item, "/id").as_u64().unwrap()
+    }
+
+    /// Download `id` as the queue lists it.
+    fn item(daemon: &mut Daemon, id: u64) -> Value {
+        let list = success(call(daemon, DOWNLOAD_LIST_METHOD, Value::Null));
+        at(&list, "/items")
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item.get("id") == Some(&json!(id)))
+            .cloned()
+            .unwrap_or_else(|| panic!("no download {id} in {list}"))
+    }
+
+    fn state(daemon: &mut Daemon, id: u64) -> String {
+        at(&item(daemon, id), "/state/kind")
+            .as_str()
+            .unwrap()
+            .to_owned()
+    }
+
+    fn refusal(response: &Response) -> &str {
+        match response {
+            Response::Error { error, .. } if error.code == -32602 => &error.message,
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn downloads_are_controlled_through_a_persisted_queue_read_as_a_cursor() {
+        let mut fixture = Fixture::new();
+        let daemon = &mut fixture.daemon;
+        let first = enqueue(daemon, "https://files.example.test/one.txt");
+        let second = enqueue(daemon, "https://files.example.test/two.txt");
+        assert_eq!(
+            enqueue(daemon, "https://files.example.test/one.txt"),
+            first,
+            "an unfinished source is queued once"
+        );
+        let listed = success(call(daemon, DOWNLOAD_LIST_METHOD, Value::Null));
+        assert_eq!(at(&listed, "/order"), &json!([first, second]));
+        let seen = at(&listed, "/next").as_u64().unwrap();
+        let unchanged = success(call(daemon, DOWNLOAD_LIST_METHOD, json!({ "after": seen })));
+        assert_eq!(at(&unchanged, "/items"), &json!([]));
+
+        let paused = success(call(daemon, DOWNLOAD_PAUSE_METHOD, Value::Null));
+        assert_eq!(at(&paused, "/paused"), &json!(true));
+        assert!(!daemon.lanes().run_next(), "a paused queue starts nothing");
+        success(call(daemon, DOWNLOAD_RESUME_METHOD, Value::Null));
+
+        success(call(daemon, DOWNLOAD_PAUSE_METHOD, json!({ "id": second })));
+        assert_eq!(state(daemon, second), "paused");
+        let resumed = call(daemon, DOWNLOAD_RESUME_METHOD, json!({ "id": first }));
+        assert!(refusal(&resumed).contains("cannot resume while queued"));
+        let cancelled = success(call(
+            daemon,
+            DOWNLOAD_CANCEL_METHOD,
+            json!({ "id": second }),
+        ));
+        assert_eq!(at(&cancelled, "/state/kind"), "cancelled");
+        let retried = success(call(daemon, DOWNLOAD_RETRY_METHOD, json!({ "id": second })));
+        assert_eq!(at(&retried, "/state/kind"), "queued");
+        let moved = success(call(
+            daemon,
+            DOWNLOAD_MOVE_METHOD,
+            json!({ "id": second, "position": 0 }),
+        ));
+        assert_eq!(at(&moved, "/order"), &json!([second, first]));
+        let changed = success(call(daemon, DOWNLOAD_LIST_METHOD, json!({ "after": seen })));
+        let changed: Vec<&Value> = at(&changed, "/items")
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| at(item, "/id"))
+            .collect();
+        assert_eq!(changed, [&json!(second)]);
+
+        success(call(daemon, DOWNLOAD_CANCEL_METHOD, json!({ "id": first })));
+        let cleared = success(call(daemon, DOWNLOAD_CLEAR_METHOD, Value::Null));
+        assert_eq!(at(&cleared, "/order"), &json!([second]));
+
+        let local = call(
+            daemon,
+            DOWNLOAD_ENQUEUE_METHOD,
+            json!({ "instance": "demo", "profile": "default", "source": "/tmp/mod.txt" }),
+        );
+        assert!(refusal(&local).contains("msbe add"), "{local:?}");
+        let unknown = call(
+            daemon,
+            DOWNLOAD_ENQUEUE_METHOD,
+            json!({ "instance": "missing", "profile": "default", "source": "https://a.test/b" }),
+        );
+        assert!(refusal(&unknown).contains("no instance missing"));
+
+        let (_plans, registry) = registry();
+        let mut restarted = Daemon::new(registry).with_home(fixture.home());
+        let restored = success(call(&mut restarted, DOWNLOAD_LIST_METHOD, Value::Null));
+        assert_eq!(at(&restored, "/order"), &json!([second]));
+    }
+
+    #[test]
+    fn a_queued_url_downloads_outside_the_state_lock_and_a_job_adds_it() {
+        let url = "https://files.example.test/extra.txt";
+        let mut web = Web::default();
+        web.files.insert(url.to_owned(), b"extra".to_vec());
+        let probe = Arc::clone(&web.jobs);
+        let mut fixture = Fixture::with(&web);
+        *probe.lock().unwrap() = Some(fixture.daemon.jobs());
+        let id = enqueue(&mut fixture.daemon, url);
+
+        assert!(fixture.daemon.lanes().run_next());
+        assert_eq!(state(&mut fixture.daemon, id), "downloaded");
+        let quarantine = fixture.home().join(format!("downloads/{id}"));
+        assert!(quarantine.is_dir());
+        assert!(fixture.daemon.jobs().run_next());
+        let done = item(&mut fixture.daemon, id);
+        assert_eq!(at(&done, "/state/kind"), "completed", "{done}");
+        assert_eq!(at(&done, "/added"), &json!(["extra"]));
+        assert!(!quarantine.exists(), "added files leave quarantine");
+        let shown = success(call(
+            &mut fixture.daemon,
+            COMMAND_METHOD,
+            json!({ "args": ["--format", "json", "profile", "show", "demo"] }),
+        ));
+        assert!(text(&shown, "stdout").contains("\"extra\""), "{shown}");
+
+        let again = enqueue(&mut fixture.daemon, url);
+        assert_ne!(again, id, "a finished source can be queued again");
+        assert!(fixture.daemon.lanes().run_next());
+        assert!(fixture.daemon.jobs().run_next());
+        let skipped = item(&mut fixture.daemon, again);
+        assert_eq!(at(&skipped, "/state/kind"), "completed", "{skipped}");
+        assert_eq!(at(&skipped, "/skipped"), &json!(["extra"]));
+    }
+
+    #[test]
+    fn an_assisted_file_waits_for_its_link_and_a_stray_link_waits_for_a_profile() {
+        let mut web = Web::default();
+        web.json.extend([
+            (
+                "https://api.assisted.test/projects/sprocket".to_owned(),
+                json!({ "id": "sprocket", "title": "Sprocket" }),
+            ),
+            (
+                "https://api.assisted.test/projects/sprocket/releases".to_owned(),
+                json!([{
+                    "id": "r1", "number": "1.0.0", "published": "2026-09-01",
+                    "url": "https://files.assisted.test/sprocket.txt", "name": "sprocket.txt"
+                }]),
+            ),
+            (
+                "https://api.assisted.test/links/sprocket/r1".to_owned(),
+                json!({ "url": "https://files.assisted.test/sprocket.txt" }),
+            ),
+            (
+                "https://api.assisted.test/links/gear/r9".to_owned(),
+                json!({ "url": "https://files.assisted.test/gear.txt" }),
+            ),
+        ]);
+        web.files.extend([
+            (
+                "https://files.assisted.test/sprocket.txt".to_owned(),
+                b"sprocket".to_vec(),
+            ),
+            (
+                "https://files.assisted.test/gear.txt".to_owned(),
+                b"gear".to_vec(),
+            ),
+        ]);
+        let mut fixture = Fixture::with(&web);
+        install_assisted(&fixture.home());
+        let lanes = fixture.daemon.lanes();
+        let id = enqueue(&mut fixture.daemon, "assisted:sprocket");
+
+        assert!(lanes.run_next());
+        let waiting = item(&mut fixture.daemon, id);
+        assert_eq!(
+            at(&waiting, "/state"),
+            &json!({
+                "kind": "awaiting_user",
+                "page": "https://www.assisted.test/game/mods/sprocket?file=r1",
+                "scheme": "handoff"
+            }),
+            "{waiting}"
+        );
+        let receipt = success(call(
+            &mut fixture.daemon,
+            HANDOFF_SUBMIT_METHOD,
+            json!({ "uri": "handoff://game/files/sprocket/r1" }),
+        ));
+        assert_eq!(
+            receipt,
+            json!({
+                "id": id, "provider": "assisted", "game": "example",
+                "project": "sprocket", "release": "r1", "matched": true
+            })
+        );
+        assert_eq!(state(&mut fixture.daemon, id), "downloading");
+        assert!(lanes.run_next_link());
+        assert_eq!(state(&mut fixture.daemon, id), "downloaded");
+        assert!(fixture.daemon.jobs().run_next());
+        let done = item(&mut fixture.daemon, id);
+        assert_eq!(at(&done, "/state/kind"), "completed", "{done}");
+        assert_eq!(at(&done, "/added"), &json!(["sprocket"]));
+
+        let stray = success(call(
+            &mut fixture.daemon,
+            HANDOFF_SUBMIT_METHOD,
+            json!({ "uri": "handoff://game/files/gear/r9" }),
+        ));
+        assert_eq!(at(&stray, "/matched"), &json!(false));
+        let stray = at(&stray, "/id").as_u64().unwrap();
+        assert!(lanes.run_next_link());
+        let parked = item(&mut fixture.daemon, stray);
+        assert_eq!(at(&parked, "/state/kind"), "downloaded", "{parked}");
+        assert!(parked.get("target").is_none());
+        assert!(
+            !fixture.daemon.jobs().run_next(),
+            "an item without a profile is never added"
+        );
+        success(call(
+            &mut fixture.daemon,
+            DOWNLOAD_CONFIRM_METHOD,
+            json!({ "id": stray, "instance": "demo", "profile": "default" }),
+        ));
+        assert!(fixture.daemon.jobs().run_next());
+        assert_eq!(
+            at(&item(&mut fixture.daemon, stray), "/added"),
+            &json!(["gear"])
         );
     }
 

@@ -27,8 +27,40 @@ pub const INFO_METHOD: &str = "daemon.info";
 /// methods below.
 pub const COMMAND_METHOD: &str = "command.run";
 
-/// Submits a browser-assisted provider link: `{ uri }` returns its acquired artifact receipt.
+/// Submits a browser-assisted provider link: `{ uri }` returns a [`HandoffReceipt`]. The link is
+/// redeemed and downloaded at once, because its key expires; the profile change waits its turn.
 pub const HANDOFF_SUBMIT_METHOD: &str = "handoff.submit";
+
+/// Queues a source to download and add to a profile: [`DownloadEnqueue`] returns the
+/// [`DownloadItem`], or the unfinished item already queued for the same source and profile.
+pub const DOWNLOAD_ENQUEUE_METHOD: &str = "download.enqueue";
+
+/// Reads the download queue: `{ after? }` returns a [`DownloadList`] holding the items changed
+/// since the revision `after`. A cursor poll, like [`JOB_EVENTS_METHOD`].
+pub const DOWNLOAD_LIST_METHOD: &str = "download.list";
+
+/// Holds one item, or with no `id` the whole queue, before its next network step: [`DownloadPause`].
+pub const DOWNLOAD_PAUSE_METHOD: &str = "download.pause";
+
+/// Releases one paused item, or with no `id` the whole queue: [`DownloadPause`].
+pub const DOWNLOAD_RESUME_METHOD: &str = "download.resume";
+
+/// Cancels an unfinished item that is not being added: [`DownloadItemId`].
+pub const DOWNLOAD_CANCEL_METHOD: &str = "download.cancel";
+
+/// Queues a failed or cancelled item again, keeping the files it already downloaded:
+/// [`DownloadItemId`].
+pub const DOWNLOAD_RETRY_METHOD: &str = "download.retry";
+
+/// Moves an item to a position in the queue order: [`DownloadMove`] returns the [`DownloadList`].
+pub const DOWNLOAD_MOVE_METHOD: &str = "download.move";
+
+/// Chooses the profile for an item a link created on its own: [`DownloadConfirm`].
+pub const DOWNLOAD_CONFIRM_METHOD: &str = "download.confirm";
+
+/// Removes completed, failed and cancelled items and their downloaded files; returns the
+/// [`DownloadList`].
+pub const DOWNLOAD_CLEAR_METHOD: &str = "download.clear";
 
 /// The method that lists games supported by the daemon's loaded plans.
 pub const GAME_LIST_METHOD: &str = "game.list";
@@ -133,6 +165,254 @@ pub struct DaemonInfo {
     /// Absent from daemons that predate it, which clients must tolerate.
     #[serde(default)]
     pub data_directory: Option<String>,
+}
+
+/// Where a download queue item is.
+///
+/// ```text
+/// queued → resolving → downloading | awaiting_user → downloaded → adding
+///        → completed | failed | cancelled
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DownloadState {
+    /// Waiting for the network lane.
+    Queued,
+    /// Held by the user until resumed.
+    Paused,
+    /// Its source is being resolved to the files it needs.
+    Resolving,
+    /// Files are being downloaded into quarantine.
+    Downloading,
+    /// Every file left needs the user to start its download on a provider page.
+    AwaitingUser {
+        /// The page of the first file waiting.
+        page: String,
+        /// The URI scheme of the link that page hands over.
+        scheme: String,
+    },
+    /// Every file is in quarantine; the item waits for the instance lane, or for its profile to
+    /// be confirmed.
+    Downloaded,
+    /// Its files are being added to the profile.
+    Adding,
+    /// Its files were added to the profile.
+    Completed,
+    /// It stopped with an error, and can be retried.
+    Failed {
+        /// What went wrong.
+        message: String,
+    },
+    /// The user cancelled it, and can retry it.
+    Cancelled,
+}
+
+impl DownloadState {
+    /// Whether nothing more happens to the item unless it is retried.
+    pub const fn is_finished(&self) -> bool {
+        matches!(
+            self,
+            Self::Completed | Self::Failed { .. } | Self::Cancelled
+        )
+    }
+
+    /// The state's name, as it is serialized.
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::Paused => "paused",
+            Self::Resolving => "resolving",
+            Self::Downloading => "downloading",
+            Self::AwaitingUser { .. } => "awaiting_user",
+            Self::Downloaded => "downloaded",
+            Self::Adding => "adding",
+            Self::Completed => "completed",
+            Self::Failed { .. } => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
+/// Where one file of a download queue item is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DownloadFileState {
+    /// Not downloaded yet.
+    Pending,
+    /// The user starts its download on a provider page, which hands MSBE a link.
+    AwaitingUser {
+        /// The page to start the download on.
+        page: String,
+        /// The URI scheme of the link the page hands over.
+        scheme: String,
+    },
+    /// Being downloaded.
+    Downloading,
+    /// In quarantine and verified.
+    Downloaded,
+}
+
+/// The profile a download queue item is added to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DownloadTarget {
+    /// The instance.
+    pub instance: String,
+    /// The profile.
+    pub profile: String,
+}
+
+/// One file of a download queue item.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DownloadFile {
+    /// The provider.
+    pub provider: String,
+    /// The provider's project id.
+    pub project: String,
+    /// The provider's release id.
+    pub release: String,
+    /// The file name. Empty for a link that arrived on its own until it is redeemed.
+    pub name: String,
+    /// Its size in bytes, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    /// Where it is.
+    pub state: DownloadFileState,
+}
+
+/// One entry in the download queue: a requested source and the group of files it resolved to,
+/// which are added to the profile together once every one has downloaded.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DownloadItem {
+    /// The daemon's identifier for it.
+    pub id: u64,
+    /// The queue revision that last changed it.
+    pub revision: u64,
+    /// A display title the client that queued it supplied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// The source it was queued for, absent for an item a link created on its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// The profile it is added to, absent until confirmed for an item a link created.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<DownloadTarget>,
+    /// Whether required dependencies are resolved into its group.
+    #[serde(default)]
+    pub with_deps: bool,
+    /// How many times it has been resolved or redeemed.
+    pub attempts: u32,
+    /// Where it is.
+    pub state: DownloadState,
+    /// The files it resolved to.
+    #[serde(default)]
+    pub files: Vec<DownloadFile>,
+    /// The mods it added.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub added: Vec<String>,
+    /// Mods already in the profile, which it left as they were.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skipped: Vec<String>,
+    /// Requirements resolution could not meet, and declared incompatibilities.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+}
+
+/// The download queue as [`DOWNLOAD_LIST_METHOD`] reports it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DownloadList {
+    /// The current revision, to pass as `after` next time.
+    pub next: u64,
+    /// Whether the network lane is paused. Links are still redeemed, because their keys expire.
+    pub paused: bool,
+    /// Every item's ID, in queue order. An item missing from it was cleared.
+    pub order: Vec<u64>,
+    /// The items changed after the requested revision.
+    pub items: Vec<DownloadItem>,
+}
+
+/// Parameters of [`DOWNLOAD_ENQUEUE_METHOD`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DownloadEnqueue {
+    /// The instance.
+    pub instance: String,
+    /// The profile.
+    pub profile: String,
+    /// A `<provider>:<project>[@<version>]` reference or an https URL.
+    pub source: String,
+    /// Whether to resolve required dependencies into the item's group.
+    #[serde(default)]
+    pub with_deps: bool,
+    /// A display title to keep with the item.
+    #[serde(default)]
+    pub title: Option<String>,
+}
+
+/// Parameters of [`DOWNLOAD_LIST_METHOD`]; `null` reads the whole queue.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DownloadListRequest {
+    /// The revision the client last saw.
+    #[serde(default)]
+    pub after: u64,
+}
+
+/// Parameters naming one download queue item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DownloadItemId {
+    /// The item.
+    pub id: u64,
+}
+
+/// Parameters of [`DOWNLOAD_PAUSE_METHOD`] and [`DOWNLOAD_RESUME_METHOD`]; `null` means the
+/// whole queue.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DownloadPause {
+    /// The item, or none for the whole queue.
+    #[serde(default)]
+    pub id: Option<u64>,
+}
+
+/// Parameters of [`DOWNLOAD_MOVE_METHOD`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DownloadMove {
+    /// The item.
+    pub id: u64,
+    /// Its new zero-based position.
+    pub position: usize,
+}
+
+/// Parameters of [`DOWNLOAD_CONFIRM_METHOD`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DownloadConfirm {
+    /// The item a link created.
+    pub id: u64,
+    /// The instance to add it to.
+    pub instance: String,
+    /// The profile to add it to.
+    pub profile: String,
+}
+
+/// What [`HANDOFF_SUBMIT_METHOD`] accepted. It never repeats the link, whose query carries a key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HandoffReceipt {
+    /// The queue item the link fills.
+    pub id: u64,
+    /// The provider.
+    pub provider: String,
+    /// The plan game the link names.
+    pub game: String,
+    /// The provider's project id.
+    pub project: String,
+    /// The provider's release id.
+    pub release: String,
+    /// Whether the link fills a file an item was waiting on. A link that does not creates an item
+    /// whose profile must be confirmed with [`DOWNLOAD_CONFIRM_METHOD`].
+    pub matched: bool,
 }
 
 /// Where a job is in its life.
