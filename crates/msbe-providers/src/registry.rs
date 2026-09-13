@@ -15,6 +15,7 @@ use msbe_provider_api::{
     model::{Request, SearchResult},
     resolve::{Adapters, ResolveError},
 };
+use msbe_secrets::{Access, StoreError};
 use msbe_wasm_codec::WasmPackCodec;
 use thiserror::Error;
 
@@ -57,6 +58,10 @@ pub struct Providers {
     codecs: CodecTable,
     extensions: Vec<ExtensionPin>,
     overlay: Overlay,
+    /// Each program provider's canonical program digest, which an acknowledgement is bound to.
+    programs: BTreeMap<String, String>,
+    /// Which providers have a credential, and which terms were acknowledged.
+    access: Access,
 }
 
 #[derive(Debug)]
@@ -153,15 +158,17 @@ impl Providers {
     }
 
     /// The providers MSBE ships, plus the WebAssembly pack codecs installed in `home` that its
-    /// `extensions/trust.toml` trusts (`docs/18-wasm-extensions.md` §18.3).
+    /// `extensions/trust.toml` trusts (`docs/18-wasm-extensions.md` §18.3), authorized by the
+    /// credentials and acknowledgements `home` records (`docs/07-browser-and-secrets.md` §7.5).
     ///
     /// # Errors
     ///
     /// Returns [`RegistryError::InstalledExtension`] for an unreadable or malformed trust root or
     /// envelope, and [`RegistryError::InstalledCodec`] naming the envelope of a refused codec. One
-    /// refused codec refuses them all, so nothing runs with trust the user did not intend.
+    /// refused codec refuses them all, so nothing runs with trust the user did not intend. Returns
+    /// [`RegistryError::Access`] when the credential records or acknowledgements cannot be read.
     pub fn installed(home: &Home) -> Result<Self, RegistryError> {
-        let mut providers = Self::builtins()?;
+        let mut providers = Self::builtins()?.with_access(Access::load(home)?);
         let found = installed::read(&home.root().join(installed::DIRECTORY))?;
         for codec in found.codecs {
             providers
@@ -261,11 +268,16 @@ impl Providers {
                 .push(program_pin(registration, program)?);
             assembly.overlay.extend_from_slice(registration.overlay);
         }
+        let mut programs = BTreeMap::new();
         for program in shipped
             .iter()
             .map(|(_, program)| program.clone())
             .chain(signed)
         {
+            programs.insert(
+                program.provider.id.clone(),
+                ProviderProgramEnvelope::digest_for(&program)?,
+            );
             assembly.add_program(&catalog, program)?;
         }
         let mut providers = Self {
@@ -274,6 +286,8 @@ impl Providers {
             codecs: assembly.codecs,
             extensions: assembly.extensions,
             overlay: Overlay::from_toml(&assembly.overlay)?,
+            programs,
+            access: Access::none(),
         };
         let modules = registrations
             .iter()
@@ -291,6 +305,14 @@ impl Providers {
             }
         }
         Ok(providers)
+    }
+
+    /// This registry, admitting a provider that needs a credential or acknowledged terms once
+    /// `access` records them. Until then, every such provider is refused.
+    #[must_use]
+    pub fn with_access(mut self, access: Access) -> Self {
+        self.access = access;
+        self
     }
 
     /// The overlay entries every registered adapter ships.
@@ -332,7 +354,7 @@ impl Providers {
                 registered.provider.as_ref().is_none_or(|provider_id| {
                     self.catalog
                         .provider(provider_id)
-                        .is_ok_and(|provider| authorize(provider).is_ok())
+                        .is_ok_and(|provider| self.authorize(provider).is_ok())
                 })
             })
             .map(|registered| registered.codec.descriptor())
@@ -370,7 +392,7 @@ impl Providers {
             .get(id)
             .ok_or_else(|| RegistryError::UnknownCodec(id.to_owned()))?;
         if let Some(provider_id) = &registered.provider {
-            authorize(self.catalog.provider(provider_id)?)?;
+            self.authorize(self.catalog.provider(provider_id)?)?;
         }
         Ok(registered.codec.as_ref())
     }
@@ -444,11 +466,32 @@ impl Providers {
     }
 
     fn permitted(&self, provider: &Provider) -> Result<&dyn Adapter, RegistryError> {
-        authorize(provider)?;
+        self.authorize(provider)?;
         self.adapters
             .get(&provider.id)
             .map(Box::as_ref)
             .ok_or_else(|| RegistryError::UnavailableAdapter(provider.id.clone()))
+    }
+
+    /// Refuses a provider whose terms must be acknowledged, or that needs a credential, until its
+    /// [`Access`] records them. Terms come first: signing in to a service means accepting them.
+    fn authorize(&self, provider: &Provider) -> Result<(), RegistryError> {
+        let policy = &provider.policy;
+        let program = self.programs.get(&provider.id).map(String::as_str);
+        if policy.ack_required
+            && !self
+                .access
+                .has_acknowledged(&provider.id, &policy.tos_url, program)
+        {
+            return Err(RegistryError::AcknowledgementRequired {
+                provider: provider.id.clone(),
+                terms: policy.tos_url.clone(),
+            });
+        }
+        if policy.requires_auth && !self.access.is_authenticated(&provider.id) {
+            return Err(RegistryError::AuthenticationRequired(provider.id.clone()));
+        }
+        Ok(())
     }
 }
 
@@ -575,19 +618,6 @@ impl Adapters for Providers {
                 reason: error.to_string(),
             })
     }
-}
-
-fn authorize(provider: &Provider) -> Result<(), RegistryError> {
-    if provider.policy.requires_auth {
-        return Err(RegistryError::AuthenticationRequired(provider.id.clone()));
-    }
-    if provider.policy.ack_required {
-        return Err(RegistryError::AcknowledgementRequired {
-            provider: provider.id.clone(),
-            terms: provider.policy.tos_url.clone(),
-        });
-    }
-    Ok(())
 }
 
 /// Registered codecs, with the detection hints each has claimed.
@@ -867,13 +897,11 @@ pub enum RegistryError {
     /// The adapter does not support search.
     #[error("provider {0:?} does not support search")]
     SearchUnavailable(String),
-    /// The provider requires an authentication flow this release does not implement.
-    #[error("provider {0:?} requires authentication, which is not implemented in this release")]
+    /// The provider needs a credential, and none is stored or set in the environment.
+    #[error("provider {0:?} requires signing in, and no credential is stored for it")]
     AuthenticationRequired(String),
-    /// The provider requires a persisted terms acknowledgement this release does not implement.
-    #[error(
-        "provider {provider:?} requires acknowledgement of {terms:?}, which is not implemented in this release"
-    )]
+    /// The provider's current terms, under its current program, have not been acknowledged.
+    #[error("provider {provider:?} requires acknowledging its terms {terms:?} before it is used")]
     AcknowledgementRequired {
         /// The provider id.
         provider: String,
@@ -883,6 +911,9 @@ pub enum RegistryError {
     /// The provider's adapter rejected a reference or failed a request.
     #[error(transparent)]
     Adapter(#[from] AdapterError),
+    /// The data directory's credential records or acknowledgements cannot be read.
+    #[error(transparent)]
+    Access(#[from] StoreError),
 }
 
 #[cfg(test)]

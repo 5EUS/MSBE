@@ -25,8 +25,13 @@ fn main() -> ExitCode {
             1
         }
     };
+    // Without a daemon to redact its responses, output is redacted on its way to the terminal.
     #[cfg(not(unix))]
-    let code = msbe_cli::run(args, &mut io::stdout().lock(), &mut io::stderr().lock());
+    let code = msbe_cli::run(
+        args,
+        &mut msbe_secrets::redact::RedactingWriter::new(io::stdout().lock()),
+        &mut msbe_secrets::redact::RedactingWriter::new(io::stderr().lock()),
+    );
     ExitCode::from(code)
 }
 

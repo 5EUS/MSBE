@@ -31,6 +31,7 @@ msbe-pack            = { version = "0.0.0", path = "../msbe-pack" }
 msbe-provider-api    = { version = "0.0.0", path = "../msbe-provider-api" }
 msbe-providers       = { version = "0.0.0", path = "../msbe-providers" }
 msbe-rpc-schema      = { version = "0.0.0", path = "../msbe-rpc-schema" }
+msbe-secrets         = { version = "0.0.0", path = "../msbe-secrets" }
 serde.workspace      = true
 serde_json.workspace = true
 tempfile.workspace   = true

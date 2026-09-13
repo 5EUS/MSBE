@@ -73,6 +73,7 @@ crates/
   msbe-providers/     reviewed adapter and codec registrations, behind the policy gate
   msbe-pack/          provider-neutral pack orchestration: options, blob policy, previews, snapshots
   msbe-http/          the one crate that links TLS: ureq + rustls/ring, OS trust store
+  msbe-secrets/       provider credentials (environment, keyring, encrypted file), acknowledgements, redaction
   msbe-daemon/        JSON-RPC server, job queue, session auth
   msbe-cli/           clap; --format json; stable exit codes
   msbe-rpc-schema/    the RPC contract; generates C# client + TS types + JSON Schema

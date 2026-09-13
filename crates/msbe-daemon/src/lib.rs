@@ -356,11 +356,41 @@ fn serve_stream(stream: std::os::unix::net::UnixStream, daemon: &mut Daemon) -> 
             Ok(request) => daemon.handle(&request),
             Err(error) => Response::error(Value::Null, -32700, error.to_string()),
         };
-        serde_json::to_writer(&mut writer, &response).map_err(io::Error::other)?;
+        serde_json::to_writer(&mut writer, &redacted(&response)?).map_err(io::Error::other)?;
         writer.write_all(b"\n")?;
         writer.flush()?;
     }
     Ok(())
+}
+
+/// `response` as JSON, with every secret the daemon has held redacted from its strings. This is
+/// the filter in front of everything the daemon writes (`docs/07-browser-and-secrets.md` §7.5),
+/// so no handler has to remember to redact.
+#[cfg(any(unix, test))]
+fn redacted(response: &Response) -> io::Result<Value> {
+    let mut value = serde_json::to_value(response).map_err(io::Error::other)?;
+    redact_strings(&mut value);
+    Ok(value)
+}
+
+#[cfg(any(unix, test))]
+fn redact_strings(value: &mut Value) {
+    use std::borrow::Cow;
+
+    match value {
+        Value::String(text) => {
+            let clean = match msbe_secrets::redact::redact(text) {
+                Cow::Owned(clean) => Some(clean),
+                Cow::Borrowed(_) => None,
+            };
+            if let Some(clean) = clean {
+                *text = clean;
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(redact_strings),
+        Value::Object(fields) => fields.values_mut().for_each(redact_strings),
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
 }
 
 #[cfg(test)]
@@ -412,6 +442,24 @@ bootstrap = "none"
 
     fn text<'a>(value: &'a Value, key: &str) -> &'a str {
         value.get(key).and_then(Value::as_str).unwrap()
+    }
+
+    #[test]
+    fn responses_are_written_with_every_held_secret_redacted() {
+        let secret = msbe_secrets::Secret::new("daemon-held-token-7".to_owned()).unwrap();
+        let response = Response::error_with_data(
+            json!(1),
+            -32603,
+            format!("request with {} failed", secret.expose()),
+            Some(json!({ "issues": [{ "detail": ["nested", secret.expose()] }] })),
+        );
+        let written = super::redacted(&response).unwrap().to_string();
+        assert!(!written.contains(secret.expose()), "{written}");
+        assert!(
+            written.contains("request with <redacted> failed"),
+            "{written}"
+        );
+        assert!(written.contains(r#"["nested","<redacted>"]"#), "{written}");
     }
 
     /// A daemon with a home holding instance `demo` whose default profile has one local mod.

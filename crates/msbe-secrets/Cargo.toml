@@ -1,0 +1,44 @@
+[package]
+name        = "msbe-secrets"
+description = "Provider credentials, terms acknowledgements and output redaction: the daemon's secrets module."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+homepage.workspace     = true
+readme.workspace       = true
+keywords.workspace     = true
+categories.workspace   = true
+publish.workspace      = true
+
+[lints]
+workspace = true
+
+[dependencies]
+msbe-core           = { version = "0.0.0", path = "../msbe-core" }
+msbe-fsops          = { version = "0.0.0", path = "../msbe-fsops" }
+# Only raw key derivation and the AEAD: no password-hash strings and no bundled RNG.
+argon2              = { version = "0.5.3", default-features = false, features = ["alloc", "zeroize"] }
+chacha20poly1305    = { version = "0.11.0", default-features = false, features = ["alloc", "zeroize"] }
+getrandom           = "0.4.3"
+keyring-core        = "1.0.0"
+serde.workspace     = true
+thiserror.workspace = true
+toml.workspace      = true
+zeroize             = "1.9.0"
+
+# The platform keyrings. Secret Service is spoken over zbus with pure-Rust crypto, so neither
+# libdbus nor OpenSSL is linked (deny.toml bans OpenSSL).
+[target.'cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))'.dependencies]
+zbus-secret-service-keyring-store = { version = "1.0.1", features = ["crypto-rust"] }
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+apple-native-keyring-store = { version = "1.0.2", features = ["keychain"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-native-keyring-store = "1.1.0"
+
+[dev-dependencies]
+keyring-core       = "1.0.0"
+tempfile.workspace = true

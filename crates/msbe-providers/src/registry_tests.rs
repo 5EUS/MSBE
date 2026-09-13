@@ -13,6 +13,7 @@ use msbe_provider_api::{
     PackProbe, PackageId, ProgramError, Provider, ProviderProgram, ProviderProgramEnvelope,
     Registration, SigningKey, SupportSet, Target, model::Request,
 };
+use msbe_secrets::{Access, Acknowledgement};
 use serde_json::json;
 
 use super::{ExtensionTrust, ProgramTrust, Providers, RegistryError, Routed};
@@ -516,6 +517,102 @@ fn authentication_required_providers_are_blocked_before_use() {
         providers.request("example:mod"),
         Err(RegistryError::AuthenticationRequired(id)) if id == "example"
     ));
+}
+
+fn acknowledgement(terms: &str, program: Option<&str>) -> Acknowledgement {
+    Acknowledgement {
+        provider: "example".to_owned(),
+        terms: terms.to_owned(),
+        program: program.map(str::to_owned),
+        acknowledged: 0,
+    }
+}
+
+#[test]
+fn recorded_access_admits_a_provider_once_its_terms_and_credential_are_in_place() {
+    const TERMS: &str = "https://example.test/terms";
+    let manifest = EXAMPLE
+        .replace("requires_auth = false", "requires_auth = true")
+        .replace("ack_required = false", "ack_required = true")
+        .replace("tos_url = \"\"", &format!("tos_url = \"{TERMS}\""));
+    let request = |access: Access| {
+        Providers::new(&[], &[&manifest])
+            .unwrap()
+            .with_access(access)
+            .request("example:mod")
+    };
+
+    assert!(matches!(
+        request(Access::none().with_credential("example")),
+        Err(RegistryError::AcknowledgementRequired { terms, .. }) if terms == TERMS
+    ));
+    assert!(matches!(
+        request(
+            Access::none()
+                .with_credential("example")
+                .with_acknowledgement(acknowledgement("https://example.test/old-terms", None))
+        ),
+        Err(RegistryError::AcknowledgementRequired { .. })
+    ));
+    assert!(matches!(
+        request(Access::none().with_acknowledgement(acknowledgement(TERMS, None))),
+        Err(RegistryError::AuthenticationRequired(id)) if id == "example"
+    ));
+    // Policy is satisfied, so the request reaches the adapter lookup, and this manifest has none.
+    assert!(matches!(
+        request(
+            Access::none()
+                .with_credential("example")
+                .with_acknowledgement(acknowledgement(TERMS, None))
+        ),
+        Err(RegistryError::UnavailableAdapter(id)) if id == "example"
+    ));
+}
+
+#[test]
+fn a_program_providers_acknowledgement_is_bound_to_its_program_digest() {
+    let document = program(
+        r#"
+        [program]
+        runtime = "direct-url-v1"
+        [program.provider]
+        schema = 1
+        id = "example"
+        name = "Example"
+        [program.provider.source]
+        type = "https_url"
+        [program.provider.acquisition]
+        type = "direct_https"
+        [program.provider.policy]
+        requires_auth = false
+        respects_distribution_flag = false
+        tos_url = ""
+        ack_required = true
+    "#,
+    );
+    let digest = ProviderProgramEnvelope::from_toml(&document)
+        .unwrap()
+        .0
+        .package_digest;
+    let url = format!("https://example.test/mod.jar#sha256={}", "a".repeat(64));
+    let request = |access: Access| {
+        Providers::new_with_programs(&[], &[], &[&document], &trust())
+            .unwrap()
+            .with_access(access)
+            .request(&url)
+    };
+
+    assert!(matches!(
+        request(Access::none().with_acknowledgement(acknowledgement("", None))),
+        Err(RegistryError::AcknowledgementRequired { .. })
+    ));
+    assert!(matches!(
+        request(Access::none().with_acknowledgement(acknowledgement("", Some("0000")))),
+        Err(RegistryError::AcknowledgementRequired { .. })
+    ));
+    let routed =
+        request(Access::none().with_acknowledgement(acknowledgement("", Some(&digest)))).unwrap();
+    assert_eq!(routed.provider, "example");
 }
 
 #[test]

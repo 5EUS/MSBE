@@ -144,13 +144,13 @@ fn checked(
         let retry_after = header_seconds(&response, "retry-after")
             .or_else(|| header_seconds(&response, "x-ratelimit-reset"));
         return Err(HttpError::RateLimited {
-            url: url.to_owned(),
+            url: shown(url).to_owned(),
             retry_after,
         });
     }
     if !status.is_success() {
         return Err(HttpError::Status {
-            url: url.to_owned(),
+            url: shown(url).to_owned(),
             status: status.as_u16(),
         });
     }
@@ -172,9 +172,40 @@ fn read_limited(url: &str, response: Response<Body>, limit: u64) -> Result<Vec<u
 
 fn too_large(url: &str, limit: u64) -> HttpError {
     HttpError::TooLarge {
-        url: url.to_owned(),
+        url: shown(url).to_owned(),
         limit,
     }
+}
+
+/// `url` without its query or fragment, for an error. Signed download links carry their
+/// credentials in the query, and an error message is somewhere they must not go
+/// (`docs/07-browser-and-secrets.md` §7.5).
+fn shown(url: &str) -> &str {
+    url.split(['?', '#']).next().unwrap_or(url)
+}
+
+/// `message` with the query and fragment removed from every URL in it.
+fn without_queries(message: &str) -> String {
+    let mut shown_message = String::with_capacity(message.len());
+    let mut rest = message;
+    while let Some(start) = rest.find("://") {
+        let (before, after) = rest.split_at(start);
+        shown_message.push_str(before);
+        let end = after
+            .find(|character: char| {
+                character.is_whitespace()
+                    || matches!(
+                        character,
+                        '"' | '\'' | '<' | '>' | '(' | ')' | '[' | ']' | ','
+                    )
+            })
+            .unwrap_or(after.len());
+        let (url, tail) = after.split_at(end);
+        shown_message.push_str(shown(url));
+        rest = tail;
+    }
+    shown_message.push_str(rest);
+    shown_message
 }
 
 fn header_seconds(response: &Response<Body>, name: &str) -> Option<u64> {
@@ -193,8 +224,8 @@ fn transport(url: &str, error: &ureq::Error) -> HttpError {
         // The reader limit carries one byte of headroom; report the caller's limit.
         ureq::Error::BodyExceedsLimit(limit) => too_large(url, limit.saturating_sub(1)),
         other => HttpError::Transport {
-            url: url.to_owned(),
-            message: other.to_string(),
+            url: shown(url).to_owned(),
+            message: without_queries(&other.to_string()),
         },
     }
 }
@@ -209,7 +240,7 @@ mod tests {
 
     use msbe_provider_api::{HttpClient, HttpError};
 
-    use super::{USER_AGENT, UreqClient};
+    use super::{USER_AGENT, UreqClient, without_queries};
 
     /// Serves one canned HTTP response on a loopback port. Returns the URL and a handle that
     /// yields the request the server received: its head, then its body.
@@ -373,6 +404,33 @@ mod tests {
             "{result:?}"
         );
         server.join().unwrap();
+    }
+
+    #[test]
+    fn errors_never_repeat_a_query_or_fragment() {
+        let client = loopback_client();
+        let (url, server) =
+            serve_once("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        let signed = format!("{url}?key=signed-download-key&expires=1#part");
+        let result = client.download(&signed, &mut Vec::new(), 64);
+        assert!(
+            matches!(&result, Err(HttpError::Status { url: reported, status: 403 }) if *reported == url),
+            "{result:?}"
+        );
+        server.join().unwrap();
+
+        let refused = UreqClient::connect()
+            .expect("the system trust store has certificates")
+            .get("http://127.0.0.1:9/never?key=signed-download-key", &[], 64);
+        let described = format!("{refused:?}");
+        assert!(!described.contains("signed-download-key"), "{described}");
+
+        assert_eq!(
+            without_queries(
+                "redirected from https://a.test/x?key=one to \"https://b.test/y#key=two\", then (ftp://c.test/?z)"
+            ),
+            "redirected from https://a.test/x to \"https://b.test/y\", then (ftp://c.test/)"
+        );
     }
 
     #[test]

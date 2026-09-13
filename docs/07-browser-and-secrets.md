@@ -84,29 +84,58 @@ and nothing else. Never: mod content, never game paths, never anything large.
 
 | Platform | Backend |
 |---|---|
-| Linux | Secret Service (`libsecret`) → GNOME Keyring / KWallet |
+| Linux | Secret Service over D-Bus (pure-Rust `zbus`, no `libsecret`) → GNOME Keyring / KWallet |
 | Windows | DPAPI via Credential Manager |
 | macOS | Keychain Services |
 | Headless / CI / container | encrypted file fallback, below |
 
-Via the Rust `keyring` crate in `msbe-daemon` — **the UI never holds a secret**. The
-C# client asks the daemon "am I authenticated with Nexus?" and gets a boolean and a
-username, never a token. This keeps the entire secret surface inside one Rust process
-and out of a managed heap that is hard to zeroize.
+The `msbe-secrets` crate, running in the daemon — **the UI never stores or reads back a
+secret**. A key the user pastes passes through the client once, on its way to the
+daemon. After that the C# client asks "am I signed in to this provider?" and gets a
+boolean and an account name, never a token. This keeps the entire secret surface inside
+one Rust process and out of a managed heap that is hard to zeroize.
+
+A provider's credential is looked up in this order:
+
+1. `MSBE_<PROVIDER>_TOKEN`, the provider id uppercased with each `-` as `_` (the CI and
+   container path), which overrides a stored credential;
+2. the platform keyring, under the service `msbe` with the provider id as the user;
+3. the encrypted file, `<home>/auth/secrets.toml`, once it is unlocked.
+
+A new credential goes to the keyring when one can be reached, and otherwise to the
+unlocked encrypted file.
 
 **Headless fallback** is required, not optional — a Minecraft server admin has no
-D-Bus session and no keyring daemon. In order of preference:
+D-Bus session and no keyring daemon. The encrypted file is XChaCha20-Poly1305 under a
+key derived with Argon2id (64 MiB and three passes by default) from a passphrase, and
+is unlocked once per daemon lifetime. Its Argon2id costs, salt and nonce are
+authenticated with the ciphertext, so an altered header fails exactly like a wrong
+passphrase, and a file asking for more than 4 GiB of memory is refused before any key
+is derived. `--token-from-stdin` and `--token-file` for one-shot commands arrive with
+`msbe auth`.
 
-1. `MSBE_<PROVIDER>_TOKEN` environment variable (the CI path);
-2. `--token-from-stdin` / `--token-file` for one-shot commands;
-3. an age-encrypted secrets file, key derived with Argon2id from a passphrase,
-   unlocked once per daemon lifetime.
+`<home>/auth/` is readable only by its owner. Beside the encrypted file it holds
+`credentials.toml`, which records each provider's store, account name, and when its
+credential was stored and last used, and `acknowledgements.toml`, the terms
+acknowledged for each provider. Neither holds a secret. The provider policy gate reads
+only these two files and the environment, never the keyring: a provider declaring
+`ack_required` is refused until its current terms URL, under its current program
+digest, is acknowledged, and one declaring `requires_auth` is refused until it has a
+credential.
 
 Discipline around them:
-- tokens are `Zeroizing<String>` and never `Debug`-printed;
-- a **redaction filter sits in front of the logger**, not at each call site, and is
-  property-tested — "we remembered to redact everywhere" is not a security control;
-- `msbe bundle` (support bundle) runs the same redactor and prints a summary of what
-  it removed so the user can see it worked before mailing the file to a stranger;
-- token scopes are minimal, expiry is honoured, and `msbe auth status` shows exactly
-  which credentials exist and when they were last used.
+- a secret is a zeroizing value that `Debug` never shows and that has no `Display`,
+  `Serialize` or `Clone`. A value shorter than 8 characters, with surrounding
+  whitespace, or with a control character is refused, because it could not be redacted
+  or sent in a header safely;
+- **redaction works on values, not call sites**: every secret the process holds is
+  registered, every daemon response passes through the filter before it is written, and
+  so does CLI output on platforms that run without the daemon. It is property-tested —
+  "we remembered to redact everywhere" is not a security control. There is no logger
+  yet; when one lands, it goes behind the same filter;
+- HTTP errors never repeat a URL's query or fragment, where signed download links carry
+  their credentials;
+- `msbe bundle` (support bundle, planned) runs the same redactor and prints a summary of
+  what it removed so the user can see it worked before mailing the file to a stranger;
+- token scopes are minimal, expiry is honoured, and `msbe auth status` (planned) shows
+  exactly which credentials exist and when they were last used.

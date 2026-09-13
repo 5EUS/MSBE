@@ -20,6 +20,7 @@ msbe-core              = { version = "0.0.0", path = "../msbe-core" }
 msbe-fsops             = { version = "0.0.0", path = "../msbe-fsops" }
 msbe-provider-api      = { version = "0.0.0", path = "../msbe-provider-api" }
 msbe-provider-local    = { version = "0.0.0", path = "../msbe-provider-local" }
+msbe-secrets           = { version = "0.0.0", path = "../msbe-secrets" }
 msbe-wasm-codec        = { version = "0.0.0", path = "../msbe-wasm-codec" }
 getrandom              = "0.4.3"
 serde_json.workspace      = true

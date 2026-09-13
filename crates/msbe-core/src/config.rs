@@ -181,6 +181,25 @@ impl Home {
     }
 }
 
+/// The environment variable that carries `provider`'s token for headless and CI use:
+/// `MSBE_<PROVIDER>_TOKEN`, with the provider id uppercased and each `-` written as `_`.
+pub fn provider_token_variable(provider: &str) -> String {
+    let mut name = String::from("MSBE_");
+    name.extend(provider.chars().map(|character| match character {
+        '-' => '_',
+        other => other.to_ascii_uppercase(),
+    }));
+    name.push_str("_TOKEN");
+    name
+}
+
+/// Reads `provider`'s token from its [`provider_token_variable`], when it is set and is text.
+///
+/// Only `msbe-secrets` should call this, so the value becomes a zeroized secret straight away.
+pub fn provider_token(provider: &str) -> Option<String> {
+    env(&provider_token_variable(provider)).and_then(|value| value.into_string().ok())
+}
+
 /// Reads one environment variable, treating an empty value as unset.
 fn env(key: &str) -> Option<OsString> {
     #[expect(
