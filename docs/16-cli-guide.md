@@ -206,7 +206,9 @@ effect again. `purge` undoes all deployments and returns the
 instance to the state recorded before MSBE first changed it. Mutable paths declared by a
 plan preserve runtime changes rather than being overwritten or removed.
 
-## 5. Current No Man's Sky workflow
+## 5. Current No Man's Sky and Blade & Sorcery workflows
+
+### 5.1 No Man's Sky
 
 The local-only No Man's Sky plan accepts local files and archives, preserving each
 non-hygiene source path beneath `GAMEDATA/MODS`. This supports generated `.pak` files and
@@ -224,6 +226,26 @@ component are not implemented.
 
 Text documentation and AMUMSS status files are quarantined and reported in the deployment
 preview, rather than copied into the game's mod directory.
+
+### 5.2 Blade & Sorcery
+
+The Blade & Sorcery plan places each mod folder beneath
+`BladeAndSorcery_Data/StreamingAssets/Mods`, where the game loads it. An archive may carry the mod
+folder at its root, inside `Mods/`, or inside the full `BladeAndSorcery_Data/StreamingAssets/Mods/`
+path; each lands the same. An archive whose `manifest.json` sits at its root names no folder and is
+not supported. The plan covers the PC VR game; the Nomad edition keeps mods on the headset.
+
+```sh
+"$MSBE" instance add bas \
+  --root "$HOME/.local/share/Steam/steamapps/common/Blade & Sorcery" \
+  --plan plans/bladeandsorcery/plan.toml \
+  --loader native
+"$MSBE" add bas "$HOME/Downloads/example-mod.zip"
+"$MSBE" deploy bas
+```
+
+Text documentation is quarantined and reported in the deployment preview. An installed provider
+program that lists `bladeandsorcery` among its games can also queue downloads for the instance.
 
 ## 6. Implemented command reference
 

@@ -1130,6 +1130,62 @@ fn no_mans_sky_plan_preserves_local_mod_source_trees_without_core_changes() {
 }
 
 #[test]
+fn blade_and_sorcery_plan_places_each_mod_folder_beneath_streaming_assets_mods() {
+    let mut world = World::new();
+    world.plan =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plans/bladeandsorcery/plan.toml");
+    world.add_instance_with_loader("native", None);
+    let root = world.zip(
+        "crossbows.zip",
+        &[
+            ("Crossbows/manifest.json", b"{\"Name\":\"Crossbows\"}"),
+            ("Crossbows/Crossbows.bundle", b"crossbow bundle"),
+            ("Crossbows/Readme.txt", b"not a mod input"),
+        ],
+    );
+    let wrapped = world.zip(
+        "spells.zip",
+        &[
+            ("Mods/Spells/manifest.json", b"{\"Name\":\"Spells\"}"),
+            ("Mods/Spells/Spells.dll", b"spell assembly"),
+        ],
+    );
+    let game_path = world.zip(
+        "armor.zip",
+        &[(
+            "BladeAndSorcery_Data/StreamingAssets/Mods/Armor/manifest.json",
+            b"{\"Name\":\"Armor\"}",
+        )],
+    );
+
+    world.json(&[
+        "add",
+        "mc",
+        root.as_str(),
+        wrapped.as_str(),
+        game_path.as_str(),
+    ]);
+    world.json(&["deploy", "mc"]);
+    let mods = world.game.join("BladeAndSorcery_Data/StreamingAssets/Mods");
+    assert_eq!(
+        fs::read(mods.join("Crossbows/Crossbows.bundle")).unwrap(),
+        b"crossbow bundle"
+    );
+    assert!(!mods.join("Crossbows/Readme.txt").exists());
+    assert_eq!(
+        fs::read(mods.join("Spells/Spells.dll")).unwrap(),
+        b"spell assembly"
+    );
+    assert!(mods.join("Armor/manifest.json").is_file());
+    assert!(!mods.join("Mods").exists());
+    assert!(!mods.join("BladeAndSorcery_Data").exists());
+
+    world.json(&["purge", "mc"]);
+    assert!(!mods.join("Crossbows/Crossbows.bundle").exists());
+    assert!(!mods.join("Spells/Spells.dll").exists());
+}
+
+#[test]
 fn usage_errors_and_bad_references_have_distinct_exit_codes() {
     let world = World::new();
     assert_eq!(world.msbe(&["deploy"]).code, exit::USAGE);

@@ -1,0 +1,57 @@
+# Blade & Sorcery (PC VR).
+#
+# The game loads each mod from its own folder beneath BladeAndSorcery_Data/StreamingAssets/Mods,
+# where a manifest.json sits beside the mod's catalogs, asset bundles and assemblies. Archives are
+# packaged three ways, and each lands the same: with the mod folder at the root, inside a Mods/
+# folder, or inside the full BladeAndSorcery_Data/StreamingAssets/Mods/ path. An archive with its
+# manifest.json at the root names no folder, so it has nowhere to go and is not supported.
+# Documentation stays in the store and is reported in the preview, but is not deployed.
+#
+# The Nomad (Quest) edition keeps mods on the headset and is out of scope.
+
+schema  = 1
+id      = "bladeandsorcery"
+name    = "Blade & Sorcery"
+version = "0.1.0"
+
+[[loaders]]
+id        = "native"
+bootstrap = "none"
+sides     = ["client"]
+targets   = [{ name = "mods", path = "BladeAndSorcery_Data/StreamingAssets/Mods" }]
+
+[[steps]]
+type = "extract"
+
+  [steps.with]
+  hygiene    = "default"
+  quarantine = ["**/*.txt", "**/*.md", "**/*.markdown", "**/*.pdf", "**/*.url"]
+
+# A mod folder at the archive root.
+[[steps]]
+type = "place"
+
+  [steps.with]
+  into    = "@loader.targets.mods"
+  exclude = ["Mods/**", "BladeAndSorcery_Data/**"]
+  flatten = false
+
+# A mod folder inside Mods/.
+[[steps]]
+type = "place"
+
+  [steps.with]
+  into         = "@loader.targets.mods"
+  include      = ["Mods/**"]
+  strip_prefix = "Mods"
+  flatten      = false
+
+# A mod folder inside the game's own path.
+[[steps]]
+type = "place"
+
+  [steps.with]
+  into         = "@loader.targets.mods"
+  include      = ["BladeAndSorcery_Data/StreamingAssets/Mods/**"]
+  strip_prefix = "BladeAndSorcery_Data/StreamingAssets/Mods"
+  flatten      = false
