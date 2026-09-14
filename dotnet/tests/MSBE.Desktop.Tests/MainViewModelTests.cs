@@ -385,6 +385,47 @@ public sealed class MainViewModelTests
         Assert.Equal("1 queued", vm.DownloadSummary);
     }
 
+    /// <summary>The MSBE browser controls open a waiting download's page, go to the next page without resending the setting, and close the browser.</summary>
+    /// <returns>A task representing the test.</returns>
+    [Fact]
+    public async Task BrowserControlsDriveTheDaemonBrowser()
+    {
+        const string Opened = """{"running":true,"provider":"assisted","item":3,"page":"https://www.example.test/tool","position":1,"waiting":2,"title":"Tool files","auto_advance":true}""";
+        const string Closed = """{"running":false,"waiting":2,"auto_advance":true,"message":"the MSBE browser was stopped: it reported a download outside its quarantine"}""";
+        TestClient client = DownloadQueueClient(() => QueueJson);
+        client.Answer = (method, _) => method switch
+        {
+            "download.list" => QueueJson,
+            "browser.open" => Opened,
+            "browser.status" or "browser.close" => Closed,
+            _ => EmptyQueueJson,
+        };
+        MainViewModel vm = new(client) { IsDownloadQueueSupported = true, IsBrowserAutoAdvancing = true };
+
+        await vm.RefreshDownloadsCommand.ExecuteAsync(parameter: null);
+
+        Assert.True(vm.CanOpenWaitingPages);
+        Assert.Equal("the MSBE browser was stopped: it reported a download outside its quarantine", vm.StatusMessage);
+        DownloadQueueItem tool = vm.QueuedDownloads[1];
+        await vm.OpenDownloadPageCommand.ExecuteAsync(tool);
+
+        JsonElement opened = client.LastParameters("browser.open");
+        Assert.Equal(3L, opened.GetProperty("id").GetInt64());
+        Assert.True(opened.GetProperty("auto_advance").GetBoolean());
+        Assert.True(vm.IsBrowserOpen);
+        Assert.False(vm.CanOpenWaitingPages);
+        Assert.Equal("assisted · 1 of 2 · Tool files", vm.BrowserSummary);
+
+        await vm.NextBrowserPageCommand.ExecuteAsync(parameter: null);
+        JsonElement next = client.LastParameters("browser.open");
+        Assert.False(next.TryGetProperty("id", out _));
+        Assert.False(next.TryGetProperty("auto_advance", out _));
+
+        await vm.CloseMsbeBrowserCommand.ExecuteAsync(parameter: null);
+        Assert.False(vm.IsBrowserOpen);
+        Assert.Contains(client.Invocations, call => string.Equals(call.Method, "browser.close", StringComparison.Ordinal));
+    }
+
     /// <summary>A pasted provider link goes to the daemon's queue, and the status names what arrived without repeating the link.</summary>
     /// <returns>A task representing the test.</returns>
     [Fact]

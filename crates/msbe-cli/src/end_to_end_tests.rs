@@ -1272,7 +1272,7 @@ fn a_queue_listing_says_what_each_download_waits_for() {
         String::from_utf8(out).unwrap(),
         "The queue is paused; links are still received.\n\
          #3 awaiting user: assisted:sprocket for mc/default, 0 of 1 file(s)\n  \
-         Start the download at https://www.example.test/sprocket; MSBE receives the link.\n\
+         Start the download at https://www.example.test/sprocket; MSBE receives the link. `msbe browser open 3` goes there.\n\
          #4 downloaded: assisted:gear with no profile yet, 1 of 1 file(s)\n  \
          Choose its profile with `msbe download confirm 4 INSTANCE`.\n"
     );
@@ -1999,4 +1999,33 @@ fn handler_commands_register_only_schemes_an_enabled_provider_hands_links_over_i
     let web = world.msbe(&["handler", "register", "https"]);
     assert_eq!(web.code, exit::FAILURE);
     assert!(web.err.contains("is not a link scheme"), "{}", web.err);
+}
+
+#[test]
+fn browser_commands_are_typed_daemon_calls() {
+    let calls = |args: &[&str]| {
+        crate::daemon_calls(std::iter::once("msbe").chain(args.iter().copied()))
+            .unwrap()
+            .calls
+    };
+    assert_eq!(
+        calls(&["browser", "open", "3", "--auto-advance"]),
+        [("browser.open", json!({ "id": 3, "auto_advance": true }))]
+    );
+    assert_eq!(
+        calls(&["browser", "open", "--no-auto-advance"]),
+        [("browser.open", json!({ "id": null, "auto_advance": false }))]
+    );
+    assert_eq!(
+        calls(&["browser", "open"]),
+        [("browser.open", json!({ "id": null, "auto_advance": null }))]
+    );
+    assert_eq!(
+        calls(&["browser", "status"]),
+        [("browser.status", Value::Null)]
+    );
+    assert_eq!(
+        calls(&["browser", "close"]),
+        [("browser.close", Value::Null)]
+    );
 }

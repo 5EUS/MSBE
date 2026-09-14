@@ -52,6 +52,12 @@ Flatpak and Snap need explicit attention: sandboxed filesystem access to Steam
 libraries and `nxm://` handler registration both require declared permissions, and both
 are tested rather than assumed ([08 §8.1](08-platforms-and-detection.md)).
 
+The MSBE browser, `crates/msbe-browser`, is its own artifact and is not a Cargo workspace member:
+CEF's build script downloads a Chromium distribution and needs cmake and ninja, and its build
+dependencies are outside `deny.toml`'s policy. `scripts/development/check.sh` type-checks and lints it
+with `--features dox`, which needs neither. Its artifact must carry CEF's libraries and resources
+beside the executable, and it is installed beside the daemon, which starts it from there.
+
 ## 12.4 Updates
 
 - Signed, delta where practical; the CEF component updates independently of the app.

@@ -4,7 +4,7 @@
              xmlns:vm="using:MSBE.Desktop.ViewModels"
              x:Class="MSBE.Desktop.Views.Pages.DownloadsPageView"
              x:DataType="vm:MainViewModel">
-    <Grid Margin="8" RowDefinitions="Auto,Auto,*" RowSpacing="18">
+    <Grid Margin="8" RowDefinitions="Auto,Auto,Auto,*" RowSpacing="18">
         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
             <StackPanel Spacing="3">
                 <TextBlock Classes="sectionHeading" Text="Downloads" />
@@ -38,7 +38,37 @@
             </Button>
         </Grid>
 
-        <ScrollViewer Grid.Row="2" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+        <Panel Grid.Row="2">
+            <Border Classes="download-row" IsVisible="{Binding IsBrowserOpen}">
+                <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto" ColumnSpacing="12">
+                    <LucideIcon Kind="Globe" Size="17" StrokeWidth="1.8" VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="1"
+                               Classes="download-meta"
+                               VerticalAlignment="Center"
+                               Text="{Binding BrowserSummary}"
+                               TextTrimming="CharacterEllipsis" />
+                    <ToggleSwitch Grid.Column="2"
+                                  OnContent="Auto-advance"
+                                  OffContent="Auto-advance"
+                                  AutomationProperties.Name="Go to the next page after each capture"
+                                  IsChecked="{Binding IsBrowserAutoAdvancing}"
+                                  Command="{Binding SetBrowserAutoAdvanceCommand}" />
+                    <Button Grid.Column="3" Classes="secondary-button" Content="Next page" Command="{Binding NextBrowserPageCommand}" />
+                    <Button Grid.Column="4" Classes="text-button" Content="Close browser" Command="{Binding CloseMsbeBrowserCommand}" />
+                </Grid>
+            </Border>
+            <Button Classes="secondary-button"
+                    HorizontalAlignment="Left"
+                    IsVisible="{Binding CanOpenWaitingPages}"
+                    Command="{Binding NextBrowserPageCommand}">
+                <StackPanel Orientation="Horizontal" Spacing="7">
+                    <LucideIcon Kind="Globe" Size="15" StrokeWidth="2" />
+                    <TextBlock Text="Open waiting pages in the MSBE browser" />
+                </StackPanel>
+            </Button>
+        </Panel>
+
+        <ScrollViewer Grid.Row="3" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
             <StackPanel Margin="0,0,4,8" Spacing="26">
                 <Border Classes="download-hero">
                     <Panel>
@@ -111,6 +141,14 @@
                                                     CommandParameter="{Binding}" />
                                         </StackPanel>
                                         <StackPanel Grid.Column="3" Classes="download-actions" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
+                                            <Button Classes="icon-button"
+                                                    IsVisible="{Binding IsAwaitingUser}"
+                                                    ToolTip.Tip="Open the page in the MSBE browser"
+                                                    AutomationProperties.Name="Open the page in the MSBE browser"
+                                                    Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).OpenDownloadPageCommand}"
+                                                    CommandParameter="{Binding}">
+                                                <LucideIcon Kind="Globe" Size="16" StrokeWidth="2" />
+                                            </Button>
                                             <Button Classes="icon-button"
                                                     ToolTip.Tip="Move up"
                                                     AutomationProperties.Name="Move up"

@@ -16,27 +16,29 @@ use msbe_os_integration::Handlers;
 use msbe_provider_api::{HttpClient, HttpError};
 use msbe_providers::Providers;
 use msbe_rpc_schema::{
-    COMMAND_METHOD, CONTRACT_VERSION, DOWNLOAD_CANCEL_METHOD, DOWNLOAD_CLEAR_METHOD,
-    DOWNLOAD_CONFIRM_METHOD, DOWNLOAD_ENQUEUE_METHOD, DOWNLOAD_LIST_METHOD, DOWNLOAD_MOVE_METHOD,
-    DOWNLOAD_PAUSE_METHOD, DOWNLOAD_RESUME_METHOD, DOWNLOAD_RETRY_METHOD, DaemonInfo,
-    DownloadItemId, DownloadListRequest, DownloadPause, EXTENSION_LIST_METHOD, GAME_LIST_METHOD,
-    HANDLER_REGISTER_METHOD, HANDLER_STATUS_METHOD, HANDLER_UNREGISTER_METHOD,
-    HANDOFF_SUBMIT_METHOD, HandlerRegister, HandlerScheme, HandlerStatusRequest, INFO_METHOD,
-    JOB_CANCEL_METHOD, JOB_EVENTS_METHOD, JOB_METHODS, JOB_START_METHOD,
-    PACK_CAPTURE_PREVIEW_METHOD, PACK_CODEC_LIST_METHOD, PACK_CODEC_OPTIONS_METHOD,
-    PACK_EXPORT_PREVIEW_METHOD, PACK_IMPORT_PREVIEW_METHOD, PACK_UPDATE_PREVIEW_METHOD,
-    PLAN_LOAD_METHOD, PLAN_UNLOAD_METHOD, Request, Response,
+    BROWSER_CLOSE_METHOD, BROWSER_OPEN_METHOD, BROWSER_STATUS_METHOD, BrowserOpen, COMMAND_METHOD,
+    CONTRACT_VERSION, DOWNLOAD_CANCEL_METHOD, DOWNLOAD_CLEAR_METHOD, DOWNLOAD_CONFIRM_METHOD,
+    DOWNLOAD_ENQUEUE_METHOD, DOWNLOAD_LIST_METHOD, DOWNLOAD_MOVE_METHOD, DOWNLOAD_PAUSE_METHOD,
+    DOWNLOAD_RESUME_METHOD, DOWNLOAD_RETRY_METHOD, DaemonInfo, DownloadItemId, DownloadListRequest,
+    DownloadPause, EXTENSION_LIST_METHOD, GAME_LIST_METHOD, HANDLER_REGISTER_METHOD,
+    HANDLER_STATUS_METHOD, HANDLER_UNREGISTER_METHOD, HANDOFF_SUBMIT_METHOD, HandlerRegister,
+    HandlerScheme, HandlerStatusRequest, INFO_METHOD, JOB_CANCEL_METHOD, JOB_EVENTS_METHOD,
+    JOB_METHODS, JOB_START_METHOD, PACK_CAPTURE_PREVIEW_METHOD, PACK_CODEC_LIST_METHOD,
+    PACK_CODEC_OPTIONS_METHOD, PACK_EXPORT_PREVIEW_METHOD, PACK_IMPORT_PREVIEW_METHOD,
+    PACK_UPDATE_PREVIEW_METHOD, PLAN_LOAD_METHOD, PLAN_UNLOAD_METHOD, Request, Response,
 };
 use msbe_secrets::SystemClock;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
+mod browser;
 mod downloads;
 mod handoff;
 mod jobs;
 mod pack;
 mod registry;
 
+pub use browser::{Browser, Launcher, Process, installed_launcher};
 pub use downloads::{Downloads, Lanes};
 pub use jobs::Jobs;
 pub use registry::{Game, PlanRegistry, RegistryError};
@@ -55,6 +57,7 @@ pub struct Daemon {
     connect: Connector,
     handlers: Handlers,
     handler_program: Option<PathBuf>,
+    browser: Arc<Browser>,
 }
 
 impl fmt::Debug for Daemon {
@@ -79,6 +82,7 @@ impl Daemon {
             downloads: Arc::new(Downloads::default()),
             handlers: Handlers::discover(),
             handler_program: None,
+            browser: Arc::new(Browser::new(installed_launcher())),
             connect: Arc::new(|| {
                 msbe_http::UreqClient::connect()
                     .map(|client| -> Box<dyn HttpClient> { Box::new(client) })
@@ -99,6 +103,13 @@ impl Daemon {
     pub fn with_handlers(mut self, handlers: Handlers, program: PathBuf) -> Self {
         self.handlers = handlers;
         self.handler_program = Some(program);
+        self
+    }
+
+    /// Starts the browser process through `launcher`, instead of `msbe-browser` beside the daemon.
+    #[must_use]
+    pub fn with_browser(mut self, launcher: Launcher) -> Self {
+        self.browser = Arc::new(Browser::new(launcher));
         self
     }
 
@@ -139,6 +150,7 @@ impl Daemon {
             ),
             method if method.starts_with("download.") => self.download(id, method, &request.params),
             method if method.starts_with("handler.") => self.handler(id, method, &request.params),
+            method if method.starts_with("browser.") => self.browser(id, method, &request.params),
             GAME_LIST_METHOD => game_list(id, &request.params, &self.registry),
             PLAN_LOAD_METHOD => plan_load(id, request.params.clone(), &mut self.registry),
             PLAN_UNLOAD_METHOD => plan_unload(id, request.params.clone(), &mut self.registry),
@@ -262,6 +274,27 @@ impl Daemon {
             json!({ "job_id": job })
         });
         pack::respond(id, result)
+    }
+
+    /// The browser methods. They never wait for a job: the browser holds no instance state.
+    fn browser(&self, id: Value, method: &str, params: &Value) -> Response {
+        let lanes = self.lanes();
+        match method {
+            BROWSER_STATUS_METHOD => answer(
+                id,
+                optional::<Empty>(params).and_then(|Empty {}| self.browser.status(&lanes)),
+            ),
+            BROWSER_OPEN_METHOD => answer(
+                id,
+                optional::<BrowserOpen>(params)
+                    .and_then(|request| self.browser.open(&lanes, request)),
+            ),
+            BROWSER_CLOSE_METHOD => answer(
+                id,
+                optional::<Empty>(params).and_then(|Empty {}| self.browser.close(&lanes)),
+            ),
+            _ => Response::error(id, -32601, "method not found"),
+        }
     }
 
     /// The link handler methods. They change the user's desktop, not instance state, so they never
@@ -740,6 +773,14 @@ bootstrap = "none"
             ]);
             fixture.add_mod("tool.txt");
             fixture
+        }
+
+        /// Starts browsers through `launcher`.
+        fn with_browser(mut self, launcher: crate::Launcher) -> Self {
+            let placeholder =
+                Daemon::new(PlanRegistry::discover(PathBuf::from("missing-test-plans")).unwrap());
+            self.daemon = std::mem::replace(&mut self.daemon, placeholder).with_browser(launcher);
+            self
         }
 
         fn run(&mut self, args: &[&str]) {
@@ -1244,6 +1285,308 @@ urls = "/url"
         );
         assert!(matches!(refused, Response::Error { error, .. }
             if error.code == -32602 && !error.message.contains("not-for-output")));
+    }
+
+    type FakeLaunch = (
+        msbe_browser_channel::Launch,
+        std::io::PipeReader,
+        std::io::PipeWriter,
+    );
+
+    /// A launcher whose browser is the test: each launch sends its arguments and the browser's ends
+    /// of the channel.
+    fn fake_browser() -> (crate::Launcher, std::sync::mpsc::Receiver<FakeLaunch>) {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let sender = Mutex::new(sender);
+        let launcher: crate::Launcher = Arc::new(move |launch: &msbe_browser_channel::Launch| {
+            let (daemon_reads, browser_writes) = std::io::pipe()?;
+            let (browser_reads, daemon_writes) = std::io::pipe()?;
+            sender
+                .lock()
+                .unwrap()
+                .send((launch.clone(), browser_reads, browser_writes))
+                .unwrap();
+            Ok(crate::Process {
+                reader: Box::new(daemon_reads),
+                writer: Box::new(daemon_writes),
+                stop: Box::new(|| {}),
+            })
+        });
+        (launcher, receiver)
+    }
+
+    fn next_launch(started: &std::sync::mpsc::Receiver<FakeLaunch>) -> FakeLaunch {
+        started
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the daemon started no browser")
+    }
+
+    /// The browser status once `done` holds, waiting for the daemon's channel thread.
+    fn browser_when(daemon: &mut Daemon, done: impl Fn(&Value) -> bool) -> Value {
+        for _ in 0..1000 {
+            let status = success(call(
+                daemon,
+                msbe_rpc_schema::BROWSER_STATUS_METHOD,
+                Value::Null,
+            ));
+            if done(&status) {
+                return status;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("the browser never reached the expected state");
+    }
+
+    /// A fixture with `projects` from the assisted catalog waiting on their pages, whose browsers
+    /// are started through `launcher`.
+    fn assisted_waiting(projects: &[&str], launcher: crate::Launcher) -> (Fixture, Vec<u64>) {
+        let mut web = Web::default();
+        for project in projects {
+            web.json.insert(
+                format!("https://api.assisted.test/projects/{project}"),
+                json!({ "id": project, "title": project }),
+            );
+            web.json.insert(
+                format!("https://api.assisted.test/projects/{project}/releases"),
+                json!([{
+                    "id": "r1", "number": "1.0.0", "published": "2026-09-01",
+                    "url": format!("https://files.assisted.test/{project}.txt"),
+                    "name": format!("{project}.txt")
+                }]),
+            );
+            web.json.insert(
+                format!("https://api.assisted.test/links/{project}/r1"),
+                json!({ "url": format!("https://files.assisted.test/{project}.txt") }),
+            );
+            web.files.insert(
+                format!("https://files.assisted.test/{project}.txt"),
+                project.as_bytes().to_vec(),
+            );
+        }
+        let mut fixture = Fixture::with(&web).with_browser(launcher);
+        install_assisted(&fixture.home());
+        let ids = projects
+            .iter()
+            .map(|project| enqueue(&mut fixture.daemon, &format!("assisted:{project}")))
+            .collect();
+        let lanes = fixture.daemon.lanes();
+        for _ in projects {
+            assert!(lanes.run_next());
+        }
+        (fixture, ids)
+    }
+
+    /// Saves `bytes` in the browser's quarantine under a random name, as a page's download lands,
+    /// reports it as `../sprocket.txt`, and returns its quarantine name.
+    fn report_download(
+        quarantine: &Path,
+        reports: &mut std::io::PipeWriter,
+        bytes: &[u8],
+    ) -> String {
+        let name = msbe_browser_channel::quarantine_name([7; 16]);
+        fs::write(quarantine.join(&name), bytes).unwrap();
+        msbe_browser_channel::write_frame(
+            reports,
+            &msbe_browser_channel::BrowserMessage::CapturedDownload {
+                suggested_name: "../sprocket.txt".to_owned(),
+                quarantine_file: name.clone(),
+                origin_url: "https://cdn.assisted.test/sprocket.txt".to_owned(),
+                size: u64::try_from(bytes.len()).unwrap(),
+            },
+        )
+        .unwrap();
+        name
+    }
+
+    fn page(project: &str) -> String {
+        format!("https://www.assisted.test/game/mods/{project}?file=r1")
+    }
+
+    #[test]
+    fn the_browser_captures_downloads_and_links_on_waiting_pages_and_advances() {
+        use msbe_browser_channel::{BrowserMessage, DaemonMessage, read_frame, write_frame};
+
+        let (launcher, started) = fake_browser();
+        let (mut fixture, ids) = assisted_waiting(&["sprocket", "gear"], launcher);
+        let [sprocket, gear] = ids.as_slice() else {
+            panic!("two downloads were queued");
+        };
+        let daemon = &mut fixture.daemon;
+        assert_eq!(
+            success(call(
+                daemon,
+                msbe_rpc_schema::BROWSER_STATUS_METHOD,
+                Value::Null
+            )),
+            json!({ "running": false, "waiting": 2, "auto_advance": false })
+        );
+        let missing = call(
+            daemon,
+            msbe_rpc_schema::BROWSER_OPEN_METHOD,
+            json!({ "id": 99 }),
+        );
+        assert_eq!(refusal(&missing), "download 99 does not wait on a page");
+
+        let opened = success(call(
+            daemon,
+            msbe_rpc_schema::BROWSER_OPEN_METHOD,
+            json!({ "auto_advance": true }),
+        ));
+        let (launch, mut commands, mut reports) = next_launch(&started);
+        let browser = fixture.root.path().join("home/browser/assisted");
+        assert_eq!(launch.profile, browser.join("profile"));
+        assert_eq!(launch.quarantine, browser.join("quarantine"));
+        assert_eq!(
+            launch
+                .origins
+                .iter()
+                .map(msbe_browser_channel::Origin::as_str)
+                .collect::<Vec<_>>(),
+            ["https://www.assisted.test"]
+        );
+        assert_eq!(launch.schemes, ["handoff"]);
+        assert_eq!(
+            read_frame::<DaemonMessage>(&mut commands).unwrap(),
+            Some(DaemonMessage::Navigate {
+                url: page("sprocket")
+            })
+        );
+        assert_eq!(
+            opened,
+            json!({
+                "running": true, "provider": "assisted", "item": sprocket, "page": page("sprocket"),
+                "position": 1, "waiting": 2, "auto_advance": true
+            })
+        );
+
+        // The user downloads the file from the page, which the browser saves under a random name.
+        write_frame(
+            &mut reports,
+            &BrowserMessage::NavigationState {
+                url: page("sprocket"),
+                title: "Sprocket files".to_owned(),
+            },
+        )
+        .unwrap();
+        let name = report_download(&launch.quarantine, &mut reports, b"sprocket bytes");
+        assert_eq!(
+            read_frame::<DaemonMessage>(&mut commands).unwrap(),
+            Some(DaemonMessage::Navigate { url: page("gear") }),
+            "auto-advance goes to the next waiting page"
+        );
+        let advanced = browser_when(daemon, |status| status.get("item") == Some(&json!(gear)));
+        assert_eq!(at(&advanced, "/title"), "Sprocket files");
+        assert_eq!(at(&advanced, "/position"), &json!(1));
+        assert_eq!(at(&advanced, "/waiting"), &json!(1));
+        let captured = item(daemon, *sprocket);
+        assert_eq!(at(&captured, "/state/kind"), "downloaded", "{captured}");
+        assert_eq!(at(&captured, "/files/0/name"), "sprocket.txt");
+        assert_eq!(at(&captured, "/files/0/size"), &json!(14));
+        assert!(!launch.quarantine.join(&name).exists());
+        assert!(daemon.jobs().run_next());
+        assert_eq!(state(daemon, *sprocket), "completed");
+
+        // The next page hands over a link instead, which the queue redeems like any other.
+        write_frame(
+            &mut reports,
+            &BrowserMessage::CapturedProtocolUrl {
+                url: "handoff://game/files/gear/r1".to_owned(),
+            },
+        )
+        .unwrap();
+        let received = browser_when(daemon, |status| status.get("waiting") == Some(&json!(0)));
+        assert!(received.get("item").is_none(), "{received}");
+        assert!(daemon.lanes().run_next_link());
+        assert_eq!(state(daemon, *gear), "downloaded");
+
+        let closed = success(call(
+            daemon,
+            msbe_rpc_schema::BROWSER_CLOSE_METHOD,
+            Value::Null,
+        ));
+        assert_eq!(at(&closed, "/running"), &json!(false));
+        assert_eq!(
+            read_frame::<DaemonMessage>(&mut commands).unwrap(),
+            Some(DaemonMessage::Close)
+        );
+    }
+
+    #[test]
+    fn a_report_the_browser_may_not_make_ends_its_session_without_repeating_it() {
+        type Report = fn(&mut std::io::PipeWriter);
+
+        use std::io::Write as _;
+
+        use msbe_browser_channel::{BrowserMessage, DaemonMessage, read_frame, write_frame};
+
+        let (launcher, started) = fake_browser();
+        let (mut fixture, ids) = assisted_waiting(&["sprocket"], launcher);
+        let daemon = &mut fixture.daemon;
+        let refusals: [(Report, &str); 3] = [
+            (
+                |pipe| {
+                    write_frame(
+                        pipe,
+                        &BrowserMessage::CapturedDownload {
+                            suggested_name: "queue.json".to_owned(),
+                            quarantine_file: "../../downloads/queue.json".to_owned(),
+                            origin_url: "https://cdn.assisted.test/x".to_owned(),
+                            size: 1,
+                        },
+                    )
+                    .unwrap();
+                },
+                "it reported a download outside its quarantine",
+            ),
+            (
+                |pipe| {
+                    write_frame(
+                        pipe,
+                        &BrowserMessage::CapturedProtocolUrl {
+                            url: "other://game?key=not-for-output".to_owned(),
+                        },
+                    )
+                    .unwrap();
+                },
+                "it reported a link in a scheme it does not capture",
+            ),
+            (
+                |pipe| {
+                    let body = br#"{"kind":"run_script","source":"key=not-for-output"}"#;
+                    pipe.write_all(&u32::try_from(body.len()).unwrap().to_be_bytes())
+                        .unwrap();
+                    pipe.write_all(body).unwrap();
+                },
+                "a browser channel frame is not a message the channel carries",
+            ),
+        ];
+        for (report, reason) in refusals {
+            success(call(
+                daemon,
+                msbe_rpc_schema::BROWSER_OPEN_METHOD,
+                Value::Null,
+            ));
+            let (_, mut commands, mut reports) = next_launch(&started);
+            assert!(matches!(
+                read_frame::<DaemonMessage>(&mut commands).unwrap(),
+                Some(DaemonMessage::Navigate { .. })
+            ));
+            report(&mut reports);
+            let stopped = browser_when(daemon, |status| {
+                status.get("running") == Some(&json!(false))
+            });
+            assert_eq!(
+                at(&stopped, "/message"),
+                &json!(format!("the MSBE browser was stopped: {reason}")),
+                "{stopped}"
+            );
+            assert!(!stopped.to_string().contains("not-for-output"));
+            assert_eq!(
+                read_frame::<DaemonMessage>(&mut commands).unwrap(),
+                Some(DaemonMessage::Close)
+            );
+        }
+        assert_eq!(state(daemon, *ids.first().unwrap()), "awaiting_user");
     }
 
     #[test]

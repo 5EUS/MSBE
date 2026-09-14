@@ -277,6 +277,9 @@ preview, rather than copied into the game's mod directory.
 | `handler status [SCHEME]`                                                                                                                        | **Implemented** | Show which application opens provider links.                                |
 | `handler register SCHEME [--replace]`                                                                                                            | **Implemented** | Open a scheme's links with MSBE; never silently.                            |
 | `handler unregister SCHEME`                                                                                                                      | **Implemented** | Give a scheme back to the application MSBE replaced.                        |
+| `browser status`                                                                                                                                 | **Implemented** | Show the MSBE browser and how many downloads wait on a page.                |
+| `browser open [ID] [--auto-advance\|--no-auto-advance]`                                                                                          | **Implemented** | Send the MSBE browser to a waiting page; it captures what the page hands over.|
+| `browser close`                                                                                                                                  | **Implemented** | Close the MSBE browser.                                                     |
 
 Pack commands are codec-driven: `pack formats` and `pack options` list what the reviewed registry
 provides, and the CLI names no format itself. Every pack command previews first. `--dry-run`
@@ -354,6 +357,20 @@ without a handler can be pasted into Desktop's Downloads page.
 "$MSBE" handler unregister example
 ```
 
+Browser commands drive the MSBE browser, an optional component installed beside the daemon
+([07 §7.2](07-browser-and-secrets.md)). `browser open` sends it to the next page a download waits on,
+or to download `ID`'s page. It captures the link or the file that page hands over and adds it to the
+queue; it never clicks for you. With `--auto-advance` it goes to the next waiting page after each
+capture, and `--auto-advance` alone while it shows a waiting page only changes that setting. A file
+whose page hands over the file itself waits for the browser, or for you to add the saved file with
+`add` and cancel the download.
+
+```sh
+"$MSBE" browser open --auto-advance
+"$MSBE" browser status
+"$MSBE" browser close
+```
+
 ## 7. Planned command surface
 
 These commands are part of the documented product direction, but they are not available
@@ -367,7 +384,7 @@ in the current binary. Their names and arguments can change before implementatio
 | Plans and registry        | `plan`, `registry`                                                                    | M7                        |
 | Diagnostics and store     | `doctor`, `store`, `bundle`                                                           | M2 and later              |
 | Daemon control            | `daemon start`, `stop`, `status`; Windows named-pipe transport                        | M1 follow-up              |
-| Credentials and links     | `auth`, browser assistance                                                            | M5                        |
+| Credentials and links     | `auth`                                                                                | M5                        |
 | Steam Workshop            | Opt-in user-installed SteamCMD acquisition or local import; optional item-ID metadata | Future, subject to policy |
 | Game launch               | `launch`                                                                              | Future                    |
 

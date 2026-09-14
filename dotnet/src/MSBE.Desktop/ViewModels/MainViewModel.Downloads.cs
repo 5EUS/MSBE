@@ -22,6 +22,7 @@ internal sealed partial class MainViewModel
     private readonly Dictionary<long, DownloadQueueItem> downloads = [];
     private readonly Dictionary<long, string> downloadIcons = [];
     private readonly List<string> pendingLinks = [];
+    private string? browserMessage;
     private List<long> downloadOrder = [];
     private long downloadRevision;
     private Task? downloadPoller;
@@ -47,6 +48,27 @@ internal sealed partial class MainViewModel
     /// <summary>Gets or sets a link the user pasted from a provider page, for when no link handler is registered.</summary>
     [ObservableProperty]
     public partial string HandoffLink { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets a value indicating whether the MSBE browser is open.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanOpenWaitingPages))]
+    public partial bool IsBrowserOpen { get; set; }
+
+    /// <summary>Gets or sets how many files wait for the user on a provider page.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanOpenWaitingPages))]
+    public partial long WaitingPageCount { get; set; }
+
+    /// <summary>Gets or sets a one-line account of what the MSBE browser shows.</summary>
+    [ObservableProperty]
+    public partial string BrowserSummary { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets a value indicating whether the MSBE browser goes to the next page once a download or link arrives.</summary>
+    [ObservableProperty]
+    public partial bool IsBrowserAutoAdvancing { get; set; }
+
+    /// <summary>Gets a value indicating whether files wait on a page and the MSBE browser is closed.</summary>
+    public bool CanOpenWaitingPages => this.WaitingPageCount > 0 && !this.IsBrowserOpen;
 
     /// <summary>Gets a value indicating whether the daemon is working on a download.</summary>
     public bool IsDownloading => this.ActiveDownload is not null;
@@ -149,7 +171,75 @@ internal sealed partial class MainViewModel
         catch (Exception exception) when (exception is IOException or SocketException or JsonException or InvalidOperationException or KeyNotFoundException)
         {
             this.StatusMessage = $"Could not read the download queue: {exception.Message}";
+            return;
         }
+
+        try
+        {
+            this.ApplyBrowserStatus(await this.client.GetBrowserStatusAsync(CancellationToken.None).ConfigureAwait(true));
+        }
+        catch (Exception exception) when (exception is IOException or SocketException or JsonException or InvalidOperationException or KeyNotFoundException)
+        {
+            // A daemon without the browser methods has no browser to show.
+            this.IsBrowserOpen = false;
+            this.WaitingPageCount = 0;
+        }
+    }
+
+    [RelayCommand]
+    private Task OpenDownloadPageAsync(DownloadQueueItem? download) => download is not { IsAwaitingUser: true }
+        ? Task.CompletedTask
+        : this.ChangeBrowserAsync(() => this.client.OpenBrowserAsync(download.Id, this.IsBrowserAutoAdvancing, CancellationToken.None), "Could not open the page");
+
+    [RelayCommand]
+    private Task NextBrowserPageAsync()
+    {
+        // While the browser shows a page the daemon already has the setting, and sending it alone would only change it.
+        bool? autoAdvance = this.IsBrowserOpen ? null : this.IsBrowserAutoAdvancing;
+        return this.ChangeBrowserAsync(() => this.client.OpenBrowserAsync(id: null, autoAdvance, CancellationToken.None), "Could not open the next page");
+    }
+
+    [RelayCommand]
+    private Task SetBrowserAutoAdvanceAsync() => this.IsBrowserOpen
+        ? this.ChangeBrowserAsync(() => this.client.OpenBrowserAsync(id: null, this.IsBrowserAutoAdvancing, CancellationToken.None), "Could not change auto-advance")
+        : Task.CompletedTask;
+
+    [RelayCommand]
+    private Task CloseMsbeBrowserAsync() =>
+        this.ChangeBrowserAsync(() => this.client.CloseBrowserAsync(CancellationToken.None), "Could not close the MSBE browser");
+
+    /// <summary>Asks the daemon to change the MSBE browser, then shows the browser as it now is.</summary>
+    private async Task ChangeBrowserAsync(Func<Task<BrowserStatusInfo>> change, string failure)
+    {
+        if (!this.IsDownloadQueueSupported)
+        {
+            return;
+        }
+
+        try
+        {
+            this.ApplyBrowserStatus(await change().ConfigureAwait(true));
+        }
+        catch (Exception exception) when (exception is IOException or SocketException or JsonException or InvalidOperationException or KeyNotFoundException)
+        {
+            this.StatusMessage = $"{failure}: {exception.Message}";
+        }
+    }
+
+    private void ApplyBrowserStatus(BrowserStatusInfo status)
+    {
+        this.IsBrowserOpen = status.IsRunning;
+        this.WaitingPageCount = status.Waiting;
+        this.IsBrowserAutoAdvancing = status.IsAutoAdvancing;
+        string position = status.Position is long at ? $"{at} of {status.Waiting}" : $"{status.Waiting} waiting";
+        string shown = status.Title is { Length: > 0 } title ? title : status.Location ?? status.Page ?? string.Empty;
+        this.BrowserSummary = shown.Length > 0 ? $"{status.Provider} · {position} · {shown}" : $"{status.Provider} · {position}";
+        if (status.Message is { } message && !string.Equals(message, this.browserMessage, StringComparison.Ordinal))
+        {
+            this.StatusMessage = message;
+        }
+
+        this.browserMessage = status.Message;
     }
 
     [RelayCommand]

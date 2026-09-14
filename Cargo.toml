@@ -1,6 +1,9 @@
 [workspace]
 resolver = "3"
 members  = ["crates/*"]
+# The CEF host downloads a Chromium distribution and needs cmake and ninja to build, so it is built
+# on its own, as its own artifact, and never by a workspace build (docs/07-browser-and-secrets.md).
+exclude  = ["crates/msbe-browser"]
 
 [workspace.package]
 version      = "0.0.0"

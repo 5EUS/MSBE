@@ -31,6 +31,18 @@ pub const COMMAND_METHOD: &str = "command.run";
 /// redeemed and downloaded at once, because its key expires; the profile change waits its turn.
 pub const HANDOFF_SUBMIT_METHOD: &str = "handoff.submit";
 
+/// Reports the MSBE browser and the downloads waiting on a page: returns a [`BrowserStatus`].
+pub const BROWSER_STATUS_METHOD: &str = "browser.status";
+
+/// Sends the MSBE browser to the page a download waits on, starting it when needed:
+/// [`BrowserOpen`] returns the [`BrowserStatus`]. With no `id` it goes to the next download waiting
+/// on a page after the current one, except that `auto_advance` alone, while the browser shows a
+/// waiting page, changes that setting and stays on the page.
+pub const BROWSER_OPEN_METHOD: &str = "browser.open";
+
+/// Closes the MSBE browser: returns the [`BrowserStatus`].
+pub const BROWSER_CLOSE_METHOD: &str = "browser.close";
+
 /// Reports which application opens links: [`HandlerStatusRequest`] returns a [`HandlerStatus`]
 /// for the scheme named, or one for every scheme an enabled provider hands links over in.
 pub const HANDLER_STATUS_METHOD: &str = "handler.status";
@@ -204,8 +216,10 @@ pub enum DownloadState {
     AwaitingUser {
         /// The page of the first file waiting.
         page: String,
-        /// The URI scheme of the link that page hands over.
-        scheme: String,
+        /// The URI scheme of the link that page hands over. A page without one hands over the
+        /// file itself, which the MSBE browser captures.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scheme: Option<String>,
     },
     /// Every file is in quarantine; the item waits for the instance lane, or for its profile to
     /// be confirmed.
@@ -259,8 +273,10 @@ pub enum DownloadFileState {
     AwaitingUser {
         /// The page to start the download on.
         page: String,
-        /// The URI scheme of the link the page hands over.
-        scheme: String,
+        /// The URI scheme of the link the page hands over. A page without one hands over the file
+        /// itself, which the MSBE browser captures.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scheme: Option<String>,
     },
     /// Being downloaded.
     Downloading,
@@ -429,6 +445,50 @@ pub struct HandoffReceipt {
     /// Whether the link fills a file an item was waiting on. A link that does not creates an item
     /// whose profile must be confirmed with [`DOWNLOAD_CONFIRM_METHOD`].
     pub matched: bool,
+}
+
+/// The MSBE browser, as [`BROWSER_STATUS_METHOD`] reports it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrowserStatus {
+    /// Whether the browser window is open.
+    pub running: bool,
+    /// The provider whose pages it shows, while it is open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    /// The download whose page it was sent to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item: Option<u64>,
+    /// The page it was sent to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<String>,
+    /// Where that page is among the files waiting on a page, counting from one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<u64>,
+    /// How many files wait on a page.
+    pub waiting: u64,
+    /// The URL the browser shows, which the user may have followed away from the page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// The title of the page the browser shows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Whether the browser goes to the next page once a download or link arrives.
+    pub auto_advance: bool,
+    /// Why the last capture was refused, or why the browser stopped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+/// Parameters of [`BROWSER_OPEN_METHOD`]; `null` goes to the next page.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserOpen {
+    /// The download whose page to show.
+    #[serde(default)]
+    pub id: Option<u64>,
+    /// Whether to go to the next page once a download or link arrives. Unchanged when absent.
+    #[serde(default)]
+    pub auto_advance: Option<bool>,
 }
 
 /// Which application opens a scheme's links.

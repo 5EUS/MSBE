@@ -10,6 +10,12 @@ printf '== tests ==\n';    cargo test --workspace --all-features
 printf '== architecture guards ==\n'; sh scripts/development/check-architecture.sh
 printf '== xaml guards ==\n'; sh scripts/development/check-xaml.sh
 
+# The browser host is not a workspace member: building it downloads CEF and needs cmake and ninja.
+# `dox` type-checks it against CEF's bindings without either.
+printf '== browser host ==\n'
+cargo fmt --manifest-path crates/msbe-browser/Cargo.toml --check
+cargo clippy --manifest-path crates/msbe-browser/Cargo.toml --all-targets --features dox -- -D warnings
+
 if command -v cargo-deny >/dev/null 2>&1; then
   printf '== cargo-deny ==\n'; cargo deny check
 else

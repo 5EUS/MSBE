@@ -158,7 +158,9 @@ multi-process isolation is inherent to CEF.
 keeps Chromium entirely out of the AOT-published C# process and removes the CefGlue plus
 NativeAOT compatibility risk the original plan carried.
 
-**Not proven.** No CEF build and no `nxm://` capture were attempted.
+**Not proven.** `crates/msbe-browser` is written against the `cef` 152.2.0 bindings and
+type-checks with `--features dox`, but no CEF build has run, and no link or download capture was
+tried.
 
 ## Still open
 
@@ -170,7 +172,8 @@ The remaining M0 work, tracked in [13](13-roadmap.md):
 4. A wasmtime component that reads a fixture and emits operations, with one denied import.
 5. Live probes on APFS, ReFS and Dev Drive, btrfs, XFS, and a network share.
 6. One loader installed into a Proton prefix by hand, through the registry route.
-7. A `cef-rs` build that captures an `nxm://` navigation.
+7. Build and run `crates/msbe-browser`: capture a custom-scheme link and a download into its
+   quarantine, with the platform sandbox on.
 
 ## Sources
 

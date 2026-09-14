@@ -78,7 +78,8 @@ crates/
   msbe-daemon/        JSON-RPC server, job queue, session auth
   msbe-cli/           clap; --format json; stable exit codes
   msbe-rpc-schema/    the RPC contract; generates C# client + TS types + JSON Schema
-  msbe-browser/       CEF host process via cef-rs, nxm:// capture, assisted queue
+  msbe-browser/       CEF host process via cef-rs, built outside the workspace; link and download capture
+  msbe-browser-channel/ the typed capture channel the daemon and msbe-browser share
 
 dotnet/
   Directory.Build.props    every setting, so .csproj files stay near-empty
@@ -194,6 +195,9 @@ handoff.submit    { uri }                           -> { id, provider, game, pro
 handler.status    { scheme? }                       -> [{ scheme, provider?, owner, current, previous? }]
 handler.register  { scheme, replace? }              -> status     # -32040 while another application opens it
 handler.unregister { scheme }                       -> status
+browser.status                                      -> { running, provider?, item?, page?, position?, waiting, url?, title?, auto_advance, message? }
+browser.open      { id?, auto_advance? }            -> status     # no id: the next waiting page
+browser.close                                       -> status
 ```
 
 An item is a source, the profile it is added to, and the group of files the source resolved to,
@@ -216,6 +220,9 @@ again.
 
 The `handler.*` methods register MSBE to open a provider's link scheme for the current user
 ([07 §7.4](07-browser-and-secrets.md)). They answer at once, since they touch no instance state.
+The `browser.*` methods start and drive the MSBE browser, a separate process that reports only over
+its capture channel ([07 §7.2](07-browser-and-secrets.md)). A download it captures fills the file
+whose page it was sent to, and a link goes where `handoff.submit` sends it.
 
 The `Question` event and `job.answer` arrive with the first installer-question producer. The
 `Question` event is how an interactive install wizard works identically in the GUI

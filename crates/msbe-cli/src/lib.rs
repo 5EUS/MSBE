@@ -42,6 +42,7 @@ use msbe_providers::{
     verify_extension,
 };
 use msbe_rpc_schema::{
+    BROWSER_CLOSE_METHOD, BROWSER_OPEN_METHOD, BROWSER_STATUS_METHOD, BrowserStatus,
     DOWNLOAD_CANCEL_METHOD, DOWNLOAD_CLEAR_METHOD, DOWNLOAD_CONFIRM_METHOD,
     DOWNLOAD_ENQUEUE_METHOD, DOWNLOAD_LIST_METHOD, DOWNLOAD_MOVE_METHOD, DOWNLOAD_PAUSE_METHOD,
     DOWNLOAD_RESUME_METHOD, DOWNLOAD_RETRY_METHOD, DownloadFileState, DownloadItem, DownloadList,
@@ -164,6 +165,10 @@ enum Command {
     /// gives the scheme back.
     #[command(subcommand)]
     Handler(HandlerCommand),
+    /// Drive the MSBE browser through the pages downloads wait on. It captures the links and files
+    /// those pages hand over; it never clicks for you.
+    #[command(subcommand)]
+    Browser(BrowserCommand),
     /// Search every provider that supports it for mods compatible with a profile target.
     Search {
         /// The instance.
@@ -301,6 +306,28 @@ enum DownloadCommand {
     },
     /// Remove completed, failed and cancelled downloads.
     Clear,
+}
+
+#[derive(Debug, Subcommand)]
+enum BrowserCommand {
+    /// Show whether the MSBE browser is open, the page it was sent to, and how many downloads wait
+    /// on a page.
+    Status,
+    /// Send the MSBE browser to the page a download waits on, starting it when needed. Defaults to
+    /// the next download waiting on a page.
+    Open {
+        /// The download.
+        id: Option<u64>,
+        /// Go to the next waiting page once a download or link arrives. Given alone while the
+        /// browser shows a waiting page, it only changes this and stays on the page.
+        #[arg(long, conflicts_with = "no_auto_advance")]
+        auto_advance: bool,
+        /// Stay on the page once a download or link arrives.
+        #[arg(long)]
+        no_auto_advance: bool,
+    },
+    /// Close the MSBE browser.
+    Close,
 }
 
 #[derive(Debug, Subcommand)]
@@ -929,8 +956,8 @@ where
     }
 }
 
-/// The typed daemon calls a command line runs instead of `command.run`: the `handoff` and
-/// `download` commands, whose state lives in the daemon rather than the data directory.
+/// The typed daemon calls a command line runs instead of `command.run`: the `handoff`, `download`
+/// and `browser` commands, whose state lives in the daemon rather than the data directory.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DaemonCalls {
     /// Each call's method and parameters, in order.
@@ -938,8 +965,8 @@ pub struct DaemonCalls {
     json: bool,
 }
 
-/// The typed daemon calls for `args`, which include the program name, when they name `handoff` or
-/// `download`. Any other command line, and one that does not parse, returns `None` and runs
+/// The typed daemon calls for `args`, which include the program name, when they name `handoff`,
+/// `download` or `browser`. Any other command line, and one that does not parse, returns `None` and runs
 /// through `command.run`, which reports its errors.
 pub fn daemon_calls<I, T>(args: I) -> Option<DaemonCalls>
 where
@@ -952,12 +979,33 @@ where
             vec![(HANDOFF_SUBMIT_METHOD, serde_json::json!({ "uri": uri }))]
         }
         Command::Download(command) => download_calls(command),
+        Command::Browser(command) => vec![browser_call(&command)],
         _ => return None,
     };
     Some(DaemonCalls {
         calls,
         json: cli.format == Format::Json,
     })
+}
+
+fn browser_call(command: &BrowserCommand) -> (&'static str, serde_json::Value) {
+    use serde_json::{Value, json};
+
+    match command {
+        BrowserCommand::Status => (BROWSER_STATUS_METHOD, Value::Null),
+        BrowserCommand::Open {
+            id,
+            auto_advance,
+            no_auto_advance,
+        } => {
+            let advance = (*auto_advance || *no_auto_advance).then_some(*auto_advance);
+            (
+                BROWSER_OPEN_METHOD,
+                json!({ "id": id, "auto_advance": advance }),
+            )
+        }
+        BrowserCommand::Close => (BROWSER_CLOSE_METHOD, Value::Null),
+    }
 }
 
 fn download_calls(command: DownloadCommand) -> Vec<(&'static str, serde_json::Value)> {
@@ -1021,6 +1069,12 @@ impl DaemonCalls {
                 Ok(receipt) => print_receipt(out, &receipt),
                 Err(_) => writeln!(out, "{result}"),
             },
+            BROWSER_STATUS_METHOD | BROWSER_OPEN_METHOD | BROWSER_CLOSE_METHOD => {
+                match serde_json::from_value::<BrowserStatus>(result.clone()) {
+                    Ok(status) => print_browser(out, &status),
+                    Err(_) => writeln!(out, "{result}"),
+                }
+            }
             DOWNLOAD_ENQUEUE_METHOD
             | DOWNLOAD_CANCEL_METHOD
             | DOWNLOAD_RETRY_METHOD
@@ -1036,6 +1090,47 @@ impl DaemonCalls {
             },
         }
     }
+}
+
+fn print_browser(out: &mut dyn Write, status: &BrowserStatus) -> io::Result<()> {
+    if status.running {
+        let shown = status
+            .title
+            .as_deref()
+            .filter(|title| !title.is_empty())
+            .or(status.url.as_deref());
+        let provider = status.provider.as_deref().unwrap_or_default();
+        match shown {
+            Some(shown) => writeln!(out, "The MSBE browser shows {shown} for {provider}.")?,
+            None => writeln!(out, "The MSBE browser is open for {provider}.")?,
+        }
+    } else {
+        writeln!(out, "The MSBE browser is closed.")?;
+    }
+    match (status.item, &status.page) {
+        (Some(item), Some(page)) => writeln!(
+            out,
+            "  Sent to the page for download #{item} ({} of {}): {page}",
+            status.position.unwrap_or_default(),
+            status.waiting
+        )?,
+        _ if status.waiting > 0 => writeln!(
+            out,
+            "  {} file(s) wait on a page; `msbe browser open` goes to the next.",
+            status.waiting
+        )?,
+        _ => writeln!(out, "  No download waits on a page.")?,
+    }
+    if status.auto_advance {
+        writeln!(
+            out,
+            "  It goes to the next page once a download or link arrives."
+        )?;
+    }
+    if let Some(message) = &status.message {
+        writeln!(out, "  {message}")?;
+    }
+    Ok(())
 }
 
 fn print_receipt(out: &mut dyn Write, receipt: &HandoffReceipt) -> io::Result<()> {
@@ -1097,10 +1192,21 @@ fn print_download(out: &mut dyn Write, item: &DownloadItem) -> io::Result<()> {
         item.files.len()
     )?;
     match &item.state {
-        DownloadState::AwaitingUser { page, .. } => {
+        DownloadState::AwaitingUser {
+            page,
+            scheme: Some(_),
+        } => {
             writeln!(
                 out,
-                "  Start the download at {page}; MSBE receives the link."
+                "  Start the download at {page}; MSBE receives the link. `msbe browser open {}` goes there.",
+                item.id
+            )?;
+        }
+        DownloadState::AwaitingUser { page, scheme: None } => {
+            writeln!(
+                out,
+                "  Download it at {page} with `msbe browser open {}`, which receives the file.",
+                item.id
             )?;
         }
         DownloadState::Failed { message } => writeln!(out, "  {message}")?,
@@ -1150,6 +1256,7 @@ fn execute(cli: &Cli, console: &mut Console<'_>) -> Result<u8, CliError> {
         ),
         Command::Handoff { .. } => Err(CliError::DaemonOnly("handoff")),
         Command::Download(_) => Err(CliError::DaemonOnly("download")),
+        Command::Browser(_) => Err(CliError::DaemonOnly("browser")),
         Command::Handler(command) => handler_command(&providers, command, console),
         Command::Search {
             instance,

@@ -11,7 +11,9 @@ Rationale:
 - **One automation story.** WebKitGTK, WebView2 and WKWebView have three different
   and unequal scripting/interception APIs. The assisted download queue needs
   navigation control, download interception and DOM readiness signals on all three
-  platforms; CEF's DevTools Protocol gives one implementation instead of three.
+  platforms; CEF's client handlers give one implementation instead of three:
+  `OnProtocolExecution` captures a link scheme, `OnBeforeDownload` sends every download to
+  quarantine, and the display handler reports the page.
 - **Consistent behaviour.** A login flow that works on Windows works on Linux.
 - **Sandboxing we don't have to write.** Chromium's own multi-process sandbox.
 - **Avalonia's WebView story is the weak link** in this stack; this routes around it.
@@ -34,9 +36,11 @@ never be one `window.msbe.*` call away from the filesystem. The browser talks to
 daemon over a **narrow, one-way, typed capture channel** carrying exactly:
 
 ```
-CapturedProtocolUrl { scheme: "nxm", url }
-CapturedDownload    { suggested_name, bytes (to a quarantine dir), origin_url }
-NavigationState     { url, title, queue_position }
+browser → daemon   CapturedProtocolUrl { url }
+                   CapturedDownload    { suggested_name, quarantine_file, origin_url, size }
+                   NavigationState     { url, title }
+daemon → browser   Navigate { url }    # HTTPS on an origin the browser was started for
+                   Close
 ```
 
 The daemon validates every field, never trusts `suggested_name` as a path, and writes
@@ -48,7 +52,24 @@ Additional hardening:
 - `file://` access disabled; no plugins; no arbitrary JS injection except registry-signed
   automation scripts scoped to a declared origin;
 - downloads only ever land in quarantine, never at a user-specified path;
+- only HTTPS pages load, popups open in the one window, and the operating system never opens a link
+  from the browser;
 - the process runs at the same privilege as the user and never elevated.
+
+**Status: implemented, but the CEF host has not yet been built or run.** `msbe-browser-channel`
+defines the channel. The daemon starts `msbe-browser` from beside itself, with the channel on its
+standard input and output: each frame is a four-byte length and at most 64 KiB of JSON, and the host
+moves both pipes off the standard descriptors before Chromium starts a subprocess. The browser is
+started for one provider, as `--msbe-*` arguments: its profile and quarantine directories under
+`<home>/browser/<provider>/`, the origins of that provider's waiting pages, and its link scheme. No
+`MSBE_<PROVIDER>_TOKEN` variable reaches it. The daemon ends the session on a frame the channel does
+not carry, a download named outside the quarantine or unlike its file, or a link in a scheme the
+browser was not started for. A captured download fills the waiting file whose page the browser was
+sent to: it is named by the rule provider downloads follow, and its SHA-256 and SHA-512 are recorded.
+
+`crates/msbe-browser` is built on its own, outside the Cargo workspace, because CEF's build downloads
+Chromium and needs cmake and ninja. `cargo check --features dox` type-checks it against CEF's
+bindings without either.
 
 ## 7.3 Automation scope
 

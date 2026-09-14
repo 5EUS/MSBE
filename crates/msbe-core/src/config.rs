@@ -200,6 +200,18 @@ pub fn provider_token(provider: &str) -> Option<String> {
     env(&provider_token_variable(provider)).and_then(|value| value.into_string().ok())
 }
 
+/// The names of the [`provider_token_variable`]s set in the environment, so a process MSBE starts
+/// can be given an environment without them.
+pub fn provider_token_variables() -> Vec<OsString> {
+    std::env::vars_os()
+        .map(|(name, _)| name)
+        .filter(|name| {
+            name.to_str()
+                .is_some_and(|name| name.starts_with("MSBE_") && name.ends_with("_TOKEN"))
+        })
+        .collect()
+}
+
 /// The freedesktop.org base directories and desktop names that decide which application opens a
 /// link, as the environment sets them.
 #[cfg(all(unix, not(target_os = "macos")))]

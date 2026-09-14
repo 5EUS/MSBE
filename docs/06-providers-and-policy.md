@@ -496,8 +496,8 @@ Firefox loses nothing.
 so every file is typed as needing the user and names its page (§6.3). Its `[handoff]` section lets
 the reviewed runtime read a link and redeem it with the user's key (§6.4). `msbe handoff <uri>`
 submits a link to the daemon's download queue (§6.7), and `msbe handler register <scheme>` makes
-the OS hand links to it on Linux and Windows ([07 §7.4](07-browser-and-secrets.md)). Capturing
-links in the integrated browser remains.
+the OS hand links to it on Linux and Windows ([07 §7.4](07-browser-and-secrets.md)). The MSBE
+browser captures links too (§6.7).
 
 ## 6.7 Assisted download queue (the large-modpack case)
 
@@ -518,14 +518,17 @@ access control exactly where the site put it. Rate-limited, resumable, and cance
 Optionally an "auto-advance" toggle moves to the next page after a successful capture.
 There is no toggle that clicks the download button.
 
-**Status: the queue is implemented; browser navigation is not.** The daemon owns the queue
+**Status: implemented; the CEF browser host is written but not yet built.** The daemon owns the queue
 ([03 §3.4](03-architecture.md)). A source queued with `msbe download add`, or from Desktop's Browse
 page, resolves to a group of files, including dependencies when asked. A file its provider hands
 over through the browser waits for the user with the page to start it on, and the link that page
 hands over fills the file the queue waits on. A link nothing waits on becomes a download of its own,
 which waits for the user to choose its profile and is never dropped. The group is added to the
-profile once every file has arrived. Navigating the integrated browser and auto-advance arrive with
-`msbe-browser`.
+profile once every file has arrived. `msbe browser open`, or Desktop's Downloads page, sends the MSBE
+browser to the next waiting page, which captures the link or the file that page hands over. With
+auto-advance on, it goes to the next waiting page after each capture. A file whose page hands over the
+file itself rather than a link also waits for the user, and the browser's download capture completes
+it ([07 §7.2](07-browser-and-secrets.md)).
 
 ## 6.8 Operational asks
 

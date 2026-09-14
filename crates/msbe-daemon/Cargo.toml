@@ -16,6 +16,7 @@ publish.workspace      = true
 workspace = true
 
 [dependencies]
+msbe-browser-channel = { version = "0.0.0", path = "../msbe-browser-channel" }
 msbe-cli          = { version = "0.0.0", path = "../msbe-cli" }
 msbe-core         = { version = "0.0.0", path = "../msbe-core" }
 msbe-fsops        = { version = "0.0.0", path = "../msbe-fsops" }
@@ -29,6 +30,7 @@ msbe-rpc-schema   = { version = "0.0.0", path = "../msbe-rpc-schema" }
 msbe-secrets      = { version = "0.0.0", path = "../msbe-secrets" }
 serde.workspace      = true
 serde_json.workspace = true
+sha2.workspace       = true
 thiserror.workspace  = true
 toml.workspace       = true
 

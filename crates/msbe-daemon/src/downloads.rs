@@ -14,7 +14,8 @@
 
 use std::{
     collections::{BTreeMap, VecDeque},
-    fmt, fs, io,
+    fmt, fs,
+    io::{self, Read as _},
     path::{Path, PathBuf},
     sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError},
 };
@@ -23,10 +24,14 @@ use msbe_core::{
     config::Home,
     instance::{Artifact, Instance, Name, Profile, Provenance},
 };
-use msbe_fsops::atomic::write_file;
+use msbe_fsops::{
+    RelPath,
+    atomic::{rename_replace, write_file},
+};
 use msbe_pack::{IssueCode, PackError};
 use msbe_provider_api::{
     AdapterError, ArtifactDescriptor, DOWNLOAD_LIMIT, HttpClient, ManifestError, Target, acquire,
+    hex,
     model::{Download, HandoffTicket, Request, Selection},
     resolve::{InstallPlan, ProjectRequest, Resolver},
 };
@@ -338,7 +343,7 @@ impl fmt::Debug for Lanes {
 }
 
 impl Lanes {
-    fn home(&self) -> Result<Home, String> {
+    pub(crate) fn home(&self) -> Result<Home, String> {
         self.home
             .as_ref()
             .map_or_else(Home::discover, |home| Ok(Home::at(home)))
@@ -565,6 +570,118 @@ impl Lanes {
             release: ticket.release,
             matched,
         })
+    }
+
+    /// Every file waiting for the user to start its download on a page, in queue order. Paused and
+    /// finished items are left out.
+    pub(crate) fn waiting(&self) -> Result<Vec<Waiting>, String> {
+        let home = self.home()?;
+        self.downloads.read(&home, |queue| {
+            queue
+                .items
+                .iter()
+                .filter(|entry| {
+                    !entry.item.state.is_finished() && entry.item.state != DownloadState::Paused
+                })
+                .flat_map(|entry| {
+                    entry
+                        .item
+                        .files
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, file)| match &file.state {
+                            DownloadFileState::AwaitingUser { page, scheme } => Some(Waiting {
+                                item: entry.item.id,
+                                file: index,
+                                provider: file.provider.clone(),
+                                page: page.clone(),
+                                scheme: scheme.clone(),
+                            }),
+                            _ => None,
+                        })
+                })
+                .collect()
+        })
+    }
+
+    /// Fills `waiting` with the download the MSBE browser captured on its page. The file is moved
+    /// into the item's quarantine under `name` when that is a safe file name, the same rule
+    /// provider downloads follow, and its SHA-256 and SHA-512 are recorded as provenance, since the
+    /// page published none MSBE could check.
+    pub(crate) fn capture(
+        &self,
+        waiting: &Waiting,
+        captured: &Path,
+        name: Option<String>,
+    ) -> Result<(), String> {
+        let home = self.home()?;
+        let name = name
+            .and_then(|name| RelPath::new(&name).ok())
+            .filter(|name| !name.as_str().contains('/'))
+            .map_or_else(|| "download".to_owned(), |name| name.as_str().to_owned());
+        let size = fs::symlink_metadata(captured)
+            .map_err(|error| format!("cannot read the captured download: {error}"))?
+            .len();
+        if size > DOWNLOAD_LIMIT {
+            return Err("the captured download is larger than 2 GiB".to_owned());
+        }
+        let (sha256, sha512) = digests(captured)?;
+        let slot = quarantine(&home, waiting.item).join(format!("capture-{}", waiting.file));
+        reset(&slot)?;
+        let path = slot.join(&name);
+        rename_replace(captured, &path).map_err(|error| {
+            format!("cannot move the captured download into the queue: {error}")
+        })?;
+        let recorded = self.downloads.change(&home, |queue| {
+            let entry = queue.touch(waiting.item)?;
+            let open = !entry.item.state.is_finished() && entry.item.state != DownloadState::Paused;
+            let (Some(listed), Some(staged)) = (
+                entry.item.files.get_mut(waiting.file),
+                entry.staged.get_mut(waiting.file),
+            ) else {
+                return Err(format!("download {} no longer has that file", waiting.item));
+            };
+            if !open
+                || listed.provider != waiting.provider
+                || !matches!(listed.state, DownloadFileState::AwaitingUser { .. })
+            {
+                return Err(format!(
+                    "download {} no longer waits on that page",
+                    waiting.item
+                ));
+            }
+            listed.name.clone_from(&name);
+            listed.size = Some(size);
+            listed.state = DownloadFileState::Downloaded;
+            staged.provenance = Some(Provenance {
+                provider: listed.provider.clone(),
+                project: listed.project.clone(),
+                version: listed.release.clone(),
+                version_number: staged
+                    .number
+                    .clone()
+                    .unwrap_or_else(|| listed.release.clone()),
+                hashes: BTreeMap::from([
+                    ("sha256".to_owned(), sha256.clone()),
+                    ("sha512".to_owned(), sha512.clone()),
+                ]),
+            });
+            staged.path = Some(path.clone());
+            settle(&mut entry.item);
+            Ok(is_ready(&entry.item))
+        });
+        match recorded {
+            Ok(ready) => {
+                if ready {
+                    self.submit_add(waiting.item);
+                }
+                Ok(())
+            }
+            Err(message) => {
+                discard(&slot);
+                Err(message)
+            }
+        }
     }
 
     /// Resolves and downloads the first queued item, returning whether there was one.
@@ -836,6 +953,40 @@ impl Lanes {
     }
 }
 
+/// A file waiting for the user to start its download on a page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Waiting {
+    /// The item.
+    pub(crate) item: u64,
+    /// The file's index in the item.
+    pub(crate) file: usize,
+    /// The file's provider.
+    pub(crate) provider: String,
+    /// The page the user starts the download on.
+    pub(crate) page: String,
+    /// The scheme of the link the page hands over, when it hands one over.
+    pub(crate) scheme: Option<String>,
+}
+
+/// The SHA-256 and SHA-512 of the file at `path`, in lowercase hexadecimal.
+fn digests(path: &Path) -> Result<(String, String), String> {
+    use sha2::{Digest as _, Sha256, Sha512};
+
+    let failed = |error: io::Error| format!("cannot read the captured download: {error}");
+    let mut file = fs::File::open(path).map_err(failed)?;
+    let (mut sha256, mut sha512) = (Sha256::new(), Sha512::new());
+    let mut buffer = vec![0_u8; 1 << 16];
+    loop {
+        let read = file.read(&mut buffer).map_err(failed)?;
+        let Some(chunk) = buffer.get(..read).filter(|chunk| !chunk.is_empty()) else {
+            break;
+        };
+        sha256.update(chunk);
+        sha512.update(chunk);
+    }
+    Ok((hex(&sha256.finalize()), hex(&sha512.finalize())))
+}
+
 /// What resolution chose: the files to download, mods the profile already has, and warnings.
 #[derive(Debug)]
 struct Planned {
@@ -936,7 +1087,7 @@ enum Fetched {
     },
     Awaiting {
         page: String,
-        scheme: String,
+        scheme: Option<String>,
     },
 }
 
@@ -1010,13 +1161,14 @@ impl Fetch<'_> {
                 AdapterError::ActionRequired { download, .. } => match download.as_ref() {
                     Download::BrowserAssisted { page, scheme } => Fetched::Awaiting {
                         page: page.clone(),
-                        scheme: scheme.clone(),
+                        scheme: Some(scheme.clone()),
                     },
-                    Download::UserAction { .. } | Download::Direct { .. } => {
-                        return Err(format!(
-                            "{error}; download it yourself and add the saved file with msbe add"
-                        ));
-                    }
+                    // The page hands over the file itself, which the MSBE browser captures.
+                    Download::UserAction { page, .. } => Fetched::Awaiting {
+                        page: page.clone(),
+                        scheme: None,
+                    },
+                    Download::Direct { .. } => return Err(error.to_string()),
                 },
                 _ => return Err(error.to_string()),
             },
@@ -1044,7 +1196,7 @@ impl Fetch<'_> {
                 }
                 Fetched::Awaiting { page, scheme } => {
                     staged.page = Some(page);
-                    staged.scheme = Some(scheme);
+                    staged.scheme = scheme;
                     file.state = waiting_state(staged);
                 }
             }
@@ -1232,12 +1384,12 @@ fn recover(entry: &mut Entry) -> bool {
 /// What a file waits for when its download is not running: the user, if it came from a page, or
 /// else the network lane.
 fn waiting_state(staged: &Staged) -> DownloadFileState {
-    match (&staged.page, &staged.scheme) {
-        (Some(page), Some(scheme)) => DownloadFileState::AwaitingUser {
+    match &staged.page {
+        Some(page) => DownloadFileState::AwaitingUser {
             page: page.clone(),
-            scheme: scheme.clone(),
+            scheme: staged.scheme.clone(),
         },
-        _ => DownloadFileState::Pending,
+        None => DownloadFileState::Pending,
     }
 }
 
@@ -1316,7 +1468,7 @@ mod tests {
     fn awaiting() -> DownloadFileState {
         DownloadFileState::AwaitingUser {
             page: PAGE.to_owned(),
-            scheme: "handoff".to_owned(),
+            scheme: Some("handoff".to_owned()),
         }
     }
 
@@ -1385,7 +1537,7 @@ mod tests {
             entry(&queue, id).item.state,
             DownloadState::AwaitingUser {
                 page: PAGE.to_owned(),
-                scheme: "handoff".to_owned()
+                scheme: Some("handoff".to_owned())
             }
         );
 

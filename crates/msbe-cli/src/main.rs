@@ -138,7 +138,7 @@ fn check_home(daemon: &mut Connection, command: &[String]) -> Result<(), String>
     match (requested, served) {
         (Some(requested), Some(served)) if Path::new(requested) != Path::new(served) => {
             Err(format!(
-                "the running daemon serves {served}, not {requested}; download and handoff commands use the daemon's data directory"
+                "the running daemon serves {served}, not {requested}; download, handoff and browser commands use the daemon's data directory"
             ))
         }
         _ => Ok(()),
