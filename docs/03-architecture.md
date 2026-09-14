@@ -74,6 +74,7 @@ crates/
   msbe-pack/          provider-neutral pack orchestration: options, blob policy, previews, snapshots
   msbe-http/          the one crate that links TLS: ureq + rustls/ring, OS trust store
   msbe-secrets/       provider credentials (environment, keyring, encrypted file), acknowledgements, redaction
+  msbe-os-integration/ per-user link handler registration (freedesktop.org lists, Windows classes)
   msbe-daemon/        JSON-RPC server, job queue, session auth
   msbe-cli/           clap; --format json; stable exit codes
   msbe-rpc-schema/    the RPC contract; generates C# client + TS types + JSON Schema
@@ -190,6 +191,9 @@ download.move     { id, position }                  -> queue
 download.confirm  { id, instance, profile }         -> item       # a link that arrived on its own
 download.clear                                      -> queue
 handoff.submit    { uri }                           -> { id, provider, game, project, release, matched }
+handler.status    { scheme? }                       -> [{ scheme, provider?, owner, current, previous? }]
+handler.register  { scheme, replace? }              -> status     # -32040 while another application opens it
+handler.unregister { scheme }                       -> status
 ```
 
 An item is a source, the profile it is added to, and the group of files the source resolved to,
@@ -209,6 +213,9 @@ dropped and waits for `download.confirm` to choose its profile. The queue is per
 `downloads/queue.json`. A daemon that stops part-way resolves interrupted items again when it
 starts, keeping the files they already downloaded, and a file whose link was lost waits for the user
 again.
+
+The `handler.*` methods register MSBE to open a provider's link scheme for the current user
+([07 §7.4](07-browser-and-secrets.md)). They answer at once, since they touch no instance state.
 
 The `Question` event and `job.answer` arrive with the first installer-question producer. The
 `Question` event is how an interactive install wizard works identically in the GUI

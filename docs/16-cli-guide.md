@@ -274,6 +274,9 @@ preview, rather than copied into the game's mod directory.
 | `download confirm ID INSTANCE [-p PROFILE]`                                                                                                      | **Implemented** | Choose the profile for a download a link started.                           |
 | `download clear`                                                                                                                                 | **Implemented** | Remove completed, failed and cancelled downloads.                           |
 | `handoff URI`                                                                                                                                    | **Implemented** | Submit a provider link to the download queue.                               |
+| `handler status [SCHEME]`                                                                                                                        | **Implemented** | Show which application opens provider links.                                |
+| `handler register SCHEME [--replace]`                                                                                                            | **Implemented** | Open a scheme's links with MSBE; never silently.                            |
+| `handler unregister SCHEME`                                                                                                                      | **Implemented** | Give a scheme back to the application MSBE replaced.                        |
 
 Pack commands are codec-driven: `pack formats` and `pack options` list what the reviewed registry
 provides, and the CLI names no format itself. Every pack command previews first. `--dry-run`
@@ -337,6 +340,20 @@ directory, and refuse a different `--home`.
 "$MSBE" download confirm 7 mc --profile default
 ```
 
+Handler commands decide whether MSBE opens the links provider pages hand files over in
+([07 §7.4](07-browser-and-secrets.md)). `handler status` lists each scheme an enabled provider hands
+links over in, and which application opens it. `handler register` makes `msbe handoff` open a
+scheme's links for the current user. While another application opens them it refuses and names that
+application: `--replace` takes the scheme over, and `handler unregister` gives it back, whichever
+data directory is in use. On macOS the application bundle declares its schemes instead, and a link
+without a handler can be pasted into Desktop's Downloads page.
+
+```sh
+"$MSBE" handler status
+"$MSBE" handler register example --replace
+"$MSBE" handler unregister example
+```
+
 ## 7. Planned command surface
 
 These commands are part of the documented product direction, but they are not available
@@ -350,7 +367,7 @@ in the current binary. Their names and arguments can change before implementatio
 | Plans and registry        | `plan`, `registry`                                                                    | M7                        |
 | Diagnostics and store     | `doctor`, `store`, `bundle`                                                           | M2 and later              |
 | Daemon control            | `daemon start`, `stop`, `status`; Windows named-pipe transport                        | M1 follow-up              |
-| Credentials and links     | `auth`, `handler` for Nexus `nxm://` links, browser assistance                        | M5                        |
+| Credentials and links     | `auth`, browser assistance                                                            | M5                        |
 | Steam Workshop            | Opt-in user-installed SteamCMD acquisition or local import; optional item-ID metadata | Future, subject to policy |
 | Game launch               | `launch`                                                                              | Future                    |
 

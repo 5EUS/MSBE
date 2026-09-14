@@ -495,7 +495,9 @@ Firefox loses nothing.
 **Status: in progress.** A program selects `browser_assisted` acquisition with `scheme = "nxm"`,
 so every file is typed as needing the user and names its page (§6.3). Its `[handoff]` section lets
 the reviewed runtime read a link and redeem it with the user's key (§6.4). `msbe handoff <uri>`
-submits a link to the daemon's download queue (§6.7). Registering the protocol handler remains.
+submits a link to the daemon's download queue (§6.7), and `msbe handler register <scheme>` makes
+the OS hand links to it on Linux and Windows ([07 §7.4](07-browser-and-secrets.md)). Capturing
+links in the integrated browser remains.
 
 ## 6.7 Assisted download queue (the large-modpack case)
 

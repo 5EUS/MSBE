@@ -430,6 +430,15 @@ impl Providers {
             .ok_or(RegistryError::UnknownHandoffScheme(scheme))
     }
 
+    /// The scheme of each enabled provider's handoff links, with the id of the provider that claims
+    /// it: the map [`Self::handoff`] routes links by, before any policy check.
+    pub fn handoff_schemes(&self) -> BTreeMap<String, String> {
+        self.catalog
+            .handoff_schemes()
+            .map(|(scheme, provider)| (scheme.to_owned(), provider.id.clone()))
+            .collect()
+    }
+
     /// The overlay entries every registered adapter ships.
     pub const fn overlay(&self) -> &Overlay {
         &self.overlay

@@ -21,6 +21,7 @@ internal sealed partial class MainViewModel
 
     private readonly Dictionary<long, DownloadQueueItem> downloads = [];
     private readonly Dictionary<long, string> downloadIcons = [];
+    private readonly List<string> pendingLinks = [];
     private List<long> downloadOrder = [];
     private long downloadRevision;
     private Task? downloadPoller;
@@ -42,6 +43,10 @@ internal sealed partial class MainViewModel
     /// <summary>Gets or sets a value indicating whether the daemon owns a download queue.</summary>
     [ObservableProperty]
     public partial bool IsDownloadQueueSupported { get; set; }
+
+    /// <summary>Gets or sets a link the user pasted from a provider page, for when no link handler is registered.</summary>
+    [ObservableProperty]
+    public partial string HandoffLink { get; set; } = string.Empty;
 
     /// <summary>Gets a value indicating whether the daemon is working on a download.</summary>
     public bool IsDownloading => this.ActiveDownload is not null;
@@ -79,6 +84,21 @@ internal sealed partial class MainViewModel
     public string DownloadIdleHint => this.IsDownloadQueuePaused && this.HasQueuedDownloads
         ? "Resume the queue to start the next download. Links from your browser are still received."
         : "Mods you install from Browse line up here, and MSBE keeps downloading them while this window is closed.";
+
+    /// <summary>Hands a link the operating system opened MSBE with to the daemon's download queue, holding it until the daemon connects.</summary>
+    /// <param name="link">The link a provider page handed over.</param>
+    /// <returns>A task that completes once the daemon has the link, or once it is held.</returns>
+    public Task ReceiveLinkAsync(Uri link)
+    {
+        ArgumentNullException.ThrowIfNull(link);
+        if (!this.IsDownloadQueueSupported)
+        {
+            this.pendingLinks.Add(link.OriginalString);
+            return Task.CompletedTask;
+        }
+
+        return this.SubmitLinkAsync(link.OriginalString);
+    }
 
     private static void Replace(ObservableCollection<DownloadQueueItem> target, List<DownloadQueueItem> items)
     {
@@ -130,6 +150,53 @@ internal sealed partial class MainViewModel
         {
             this.StatusMessage = $"Could not read the download queue: {exception.Message}";
         }
+    }
+
+    [RelayCommand]
+    private async Task SubmitHandoffLinkAsync()
+    {
+        string link = this.HandoffLink.Trim();
+        if (link.Length == 0 || !this.IsDownloadQueueSupported)
+        {
+            return;
+        }
+
+        if (await this.SubmitLinkAsync(link).ConfigureAwait(true))
+        {
+            this.HandoffLink = string.Empty;
+        }
+    }
+
+    /// <summary>Hands the links that arrived before the daemon connected to its download queue.</summary>
+    private async Task SubmitPendingLinksAsync()
+    {
+        List<string> links = [.. this.pendingLinks];
+        this.pendingLinks.Clear();
+        foreach (string link in links)
+        {
+            await this.SubmitLinkAsync(link).ConfigureAwait(true);
+        }
+    }
+
+    /// <summary>Hands a link to the daemon and reports what it received, never the link, whose query carries a key.</summary>
+    private async Task<bool> SubmitLinkAsync(string link)
+    {
+        try
+        {
+            HandoffReceiptInfo receipt = await this.client.SubmitHandoffAsync(link, CancellationToken.None).ConfigureAwait(true);
+            string received = $"{receipt.Provider}:{receipt.Project} release {receipt.Release}";
+            this.StatusMessage = receipt.IsMatched
+                ? $"Received {received}; its download continues."
+                : $"Received {received}. Add it to a profile from Downloads.";
+        }
+        catch (Exception exception) when (exception is IOException or SocketException or JsonException or InvalidOperationException or KeyNotFoundException)
+        {
+            this.StatusMessage = $"Could not add the link: {exception.Message}";
+            return false;
+        }
+
+        await this.RefreshDownloadsAsync().ConfigureAwait(true);
+        return true;
     }
 
     [RelayCommand]

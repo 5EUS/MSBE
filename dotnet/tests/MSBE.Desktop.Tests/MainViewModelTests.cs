@@ -385,6 +385,62 @@ public sealed class MainViewModelTests
         Assert.Equal("1 queued", vm.DownloadSummary);
     }
 
+    /// <summary>A pasted provider link goes to the daemon's queue, and the status names what arrived without repeating the link.</summary>
+    /// <returns>A task representing the test.</returns>
+    [Fact]
+    public async Task DownloadsHandPastedLinksToTheDaemonWithoutRepeatingThem()
+    {
+        TestClient client = DownloadQueueClient(() => EmptyQueueJson);
+        client.Answer = (method, parameters) => method switch
+        {
+            "handoff.submit" when parameters.GetProperty("uri").GetString()!.StartsWith("unknown:", StringComparison.Ordinal) =>
+                throw new MsbeRpcException("no provider handles unknown:// links"),
+            "handoff.submit" => """{"id":7,"provider":"assisted","game":"example","project":"gear","release":"r9","matched":false}""",
+            _ => EmptyQueueJson,
+        };
+        MainViewModel vm = new(client) { IsDownloadQueueSupported = true, HandoffLink = "  handoff://game/files/gear/r9?key=secret  " };
+
+        await vm.SubmitHandoffLinkCommand.ExecuteAsync(parameter: null);
+
+        Assert.Equal("handoff://game/files/gear/r9?key=secret", client.LastParameters("handoff.submit").GetProperty("uri").GetString());
+        Assert.Empty(vm.HandoffLink);
+        Assert.Equal("Received assisted:gear release r9. Add it to a profile from Downloads.", vm.StatusMessage);
+        Assert.Contains(client.Invocations, call => string.Equals(call.Method, "download.list", StringComparison.Ordinal));
+
+        vm.HandoffLink = "unknown://item?key=secret";
+        await vm.SubmitHandoffLinkCommand.ExecuteAsync(parameter: null);
+
+        Assert.Equal("unknown://item?key=secret", vm.HandoffLink);
+        Assert.Equal("Could not add the link: no provider handles unknown:// links", vm.StatusMessage);
+    }
+
+    /// <summary>A link the operating system opens MSBE with before the daemon connects is handed over once it does.</summary>
+    /// <returns>A task representing the test.</returns>
+    [Fact]
+    public async Task LinksArrivingBeforeTheDaemonConnectsAreHandedOverOnceItDoes()
+    {
+        var client = new TestClient(_ => new CommandResult(0, "[]", string.Empty))
+        {
+            RpcVersion = 5,
+            Answer = (method, _) => method switch
+            {
+                "handoff.submit" => """{"id":3,"provider":"assisted","game":"example","project":"sprocket","release":"r1","matched":true}""",
+                "download.list" => EmptyQueueJson,
+                _ => null,
+            },
+        };
+        MainViewModel vm = new(client);
+        const string Link = "handoff://game/files/sprocket/r1?key=secret&expires=9";
+
+        await vm.ReceiveLinkAsync(new Uri(Link));
+        Assert.DoesNotContain(client.Invocations, call => string.Equals(call.Method, "handoff.submit", StringComparison.Ordinal));
+
+        await vm.ConnectAsync();
+
+        Assert.Equal(Link, client.LastParameters("handoff.submit").GetProperty("uri").GetString());
+        Assert.Equal("Received assisted:sprocket release r1; its download continues.", vm.StatusMessage);
+    }
+
     /// <summary>Profile creation can clone the current profile and selects the result.</summary>
     /// <returns>A task representing the test.</returns>
     [Fact]
@@ -807,7 +863,10 @@ public sealed class MainViewModelTests
         /// <summary>Gets or sets the result JSON for an RPC method and its parameters, before <c>invoke</c> is asked.</summary>
         public Func<string, JsonElement, string?>? Answer { get; set; }
 
-        public Task<DaemonInfo> GetInfoAsync(CancellationToken cancellationToken) => Task.FromResult(new DaemonInfo("test", 3, DataDirectory));
+        /// <summary>Gets the RPC contract version the daemon reports.</summary>
+        public int RpcVersion { get; init; } = 3;
+
+        public Task<DaemonInfo> GetInfoAsync(CancellationToken cancellationToken) => Task.FromResult(new DaemonInfo("test", this.RpcVersion, DataDirectory));
 
         public Task<IReadOnlyList<GameInfo>> GetGamesAsync(CancellationToken cancellationToken) => Task.FromResult<IReadOnlyList<GameInfo>>(
             [new GameInfo("minecraft", "Minecraft", "1", ["fabric", "neoforge"])]);

@@ -26,6 +26,7 @@ msbe-core            = { version = "0.0.0", path = "../msbe-core" }
 msbe-archive         = { version = "0.0.0", path = "../msbe-archive" }
 msbe-fsops           = { version = "0.0.0", path = "../msbe-fsops" }
 msbe-http            = { version = "0.0.0", path = "../msbe-http" }
+msbe-os-integration  = { version = "0.0.0", path = "../msbe-os-integration" }
 msbe-plan-schema     = { version = "0.0.0", path = "../msbe-plan-schema" }
 msbe-pack            = { version = "0.0.0", path = "../msbe-pack" }
 msbe-provider-api    = { version = "0.0.0", path = "../msbe-provider-api" }

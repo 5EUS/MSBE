@@ -45,7 +45,7 @@ use msbe_rpc_schema::{
     DOWNLOAD_CANCEL_METHOD, DOWNLOAD_CLEAR_METHOD, DOWNLOAD_CONFIRM_METHOD,
     DOWNLOAD_ENQUEUE_METHOD, DOWNLOAD_LIST_METHOD, DOWNLOAD_MOVE_METHOD, DOWNLOAD_PAUSE_METHOD,
     DOWNLOAD_RESUME_METHOD, DOWNLOAD_RETRY_METHOD, DownloadFileState, DownloadItem, DownloadList,
-    DownloadState, HANDOFF_SUBMIT_METHOD, HandoffReceipt,
+    DownloadState, HANDOFF_SUBMIT_METHOD, HandlerOwner, HandlerStatus, HandoffReceipt,
 };
 use serde::Serialize;
 
@@ -53,6 +53,9 @@ use serde::Serialize;
 mod end_to_end_tests;
 #[cfg(test)]
 mod fake_modrinth;
+mod handlers;
+
+pub use handlers::{HandlerError, handler_status, register_handler, unregister_handler};
 
 /// Opens a network client on first use, so commands that never touch the network never load
 /// the platform's certificates.
@@ -156,6 +159,11 @@ enum Command {
     /// daemon owns the queue and keeps working through it while no client is open.
     #[command(subcommand)]
     Download(DownloadCommand),
+    /// Choose whether MSBE opens the links provider pages hand files over in, for the current user.
+    /// MSBE never takes a scheme from another application without --replace, and unregistering
+    /// gives the scheme back.
+    #[command(subcommand)]
+    Handler(HandlerCommand),
     /// Search every provider that supports it for mods compatible with a profile target.
     Search {
         /// The instance.
@@ -293,6 +301,32 @@ enum DownloadCommand {
     },
     /// Remove completed, failed and cancelled downloads.
     Clear,
+}
+
+#[derive(Debug, Subcommand)]
+enum HandlerCommand {
+    /// Show which application opens a scheme's links, or those of every scheme an enabled provider
+    /// hands links over in.
+    Status {
+        /// The link scheme, such as the one a provider's program names. Defaults to every scheme an
+        /// enabled provider hands links over in.
+        scheme: Option<String>,
+    },
+    /// Open a scheme's links with MSBE. Refused while another application opens them, unless
+    /// --replace is given.
+    Register {
+        /// The link scheme. An enabled provider must hand links over in it.
+        scheme: String,
+        /// Take the scheme over from the application that opens its links. Unregistering gives it
+        /// back.
+        #[arg(long)]
+        replace: bool,
+    },
+    /// Stop opening a scheme's links with MSBE, and give them back to the application it replaced.
+    Unregister {
+        /// The link scheme.
+        scheme: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -706,6 +740,8 @@ enum CliError {
     #[error(transparent)]
     Authoring(#[from] AuthoringError),
     #[error(transparent)]
+    Handler(#[from] HandlerError),
+    #[error(transparent)]
     Pack(#[from] PackError),
     #[error(transparent)]
     Fs(#[from] msbe_fsops::Error),
@@ -1114,6 +1150,7 @@ fn execute(cli: &Cli, console: &mut Console<'_>) -> Result<u8, CliError> {
         ),
         Command::Handoff { .. } => Err(CliError::DaemonOnly("handoff")),
         Command::Download(_) => Err(CliError::DaemonOnly("download")),
+        Command::Handler(command) => handler_command(&providers, command, console),
         Command::Search {
             instance,
             query,
@@ -1856,6 +1893,81 @@ fn verify_extension_envelope(
 }
 
 /// Lists the extensions installed in `home`, and whether each runs.
+/// Reports and changes which application opens provider links, where the platform registers them.
+fn handler_command(
+    providers: &Providers,
+    command: &HandlerCommand,
+    console: &mut Console<'_>,
+) -> Result<u8, CliError> {
+    let handlers = msbe_os_integration::Handlers::discover();
+    let program = msbe_os_integration::handler_program().map_err(HandlerError::from)?;
+    match command {
+        HandlerCommand::Status { scheme } => {
+            let statuses = handler_status(providers, &handlers, scheme.as_deref(), &program)?;
+            console.emit(&statuses, |out, statuses| {
+                if statuses.is_empty() {
+                    return writeln!(out, "No enabled provider hands files over as links.");
+                }
+                statuses
+                    .iter()
+                    .try_for_each(|status| print_handler(out, status))
+            })?;
+        }
+        HandlerCommand::Register { scheme, replace } => {
+            let status = register_handler(providers, &handlers, scheme, *replace, &program)?;
+            console.emit(&status, |out, status| {
+                if status.owner == HandlerOwner::Msbe {
+                    writeln!(out, "MSBE now opens {} links.", status.scheme)?;
+                    if let Some(previous) = &status.previous {
+                        writeln!(
+                            out,
+                            "  `msbe handler unregister {}` gives them back to {previous}.",
+                            status.scheme
+                        )?;
+                    }
+                    Ok(())
+                } else {
+                    print_handler(out, status)
+                }
+            })?;
+        }
+        HandlerCommand::Unregister { scheme } => {
+            let status = unregister_handler(providers, &handlers, scheme, &program)?;
+            console.emit(&status, print_handler)?;
+        }
+    }
+    Ok(exit::OK)
+}
+
+fn print_handler(out: &mut dyn Write, status: &HandlerStatus) -> io::Result<()> {
+    let scheme = &status.scheme;
+    match &status.owner {
+        HandlerOwner::Msbe if status.current => writeln!(out, "{scheme} links open with MSBE.")?,
+        HandlerOwner::Msbe => writeln!(
+            out,
+            "{scheme} links open with an MSBE installation that has moved. `msbe handler register {scheme}` updates it."
+        )?,
+        HandlerOwner::Other { name } => writeln!(
+            out,
+            "{scheme} links open with {name}. `msbe handler register {scheme} --replace` opens them with MSBE instead, and unregistering gives them back."
+        )?,
+        HandlerOwner::Nobody => writeln!(
+            out,
+            "Nothing opens {scheme} links. `msbe handler register {scheme}` opens them with MSBE."
+        )?,
+    }
+    if let (HandlerOwner::Msbe, Some(previous)) = (&status.owner, &status.previous) {
+        writeln!(out, "  Unregistering gives them back to {previous}.")?;
+    }
+    if status.provider.is_none() {
+        writeln!(
+            out,
+            "  No enabled provider hands files over as {scheme} links."
+        )?;
+    }
+    Ok(())
+}
+
 fn list_extensions(home: &Home, console: &mut Console<'_>) -> Result<(), CliError> {
     let providers = Providers::installed(home)?;
     let listed = providers.installed_extensions();
@@ -2955,6 +3067,14 @@ fn report(error: &CliError, err: &mut dyn Write) -> io::Result<()> {
             for issue in error.issues() {
                 writeln!(err, "  {:?}: {}", issue.code, issue.message)?;
             }
+        }
+        CliError::Handler(HandlerError::Os(msbe_os_integration::Error::Owned {
+            scheme, ..
+        })) => {
+            writeln!(
+                err,
+                "  Pass --replace to open them with MSBE instead; `msbe handler unregister {scheme}` gives them back."
+            )?;
         }
         _ => {}
     }

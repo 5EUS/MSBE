@@ -74,6 +74,27 @@ than silently taking over.
 | Windows | `HKCU\Software\Classes\nxm` (per-user; never `HKLM`, never requires admin) |
 | macOS | `CFBundleURLTypes` in `Info.plist` + Launch Services registration |
 
+**Status: implemented on Linux and Windows.** `msbe handler status|register|unregister <scheme>`
+and the daemon's `handler.*` methods take the scheme from an enabled provider program
+([06 §6.4](06-providers-and-policy.md)), so none is built in. Registration never takes a scheme over
+silently: while another application opens its links, `register` refuses and names it, and
+`--replace` (`replace` over RPC) is the user's answer. What MSBE replaces is recorded inside its own
+registration, so `unregister` gives the scheme back from any data directory.
+
+- **Linux.** `msbe-handler.desktop` in `$XDG_DATA_HOME/applications` runs `msbe handoff %u`. The
+  default is set in the user's `mimeapps.list`, or in the desktop-specific list that already sets
+  one, and ownership follows the MIME Applications Associations lookup: defaults, added
+  associations, then entries declaring the type. MSBE edits these files itself instead of running
+  `xdg-mime`, and writes back every line it does not change.
+- **Windows.** `HKCU\Software\Classes\<scheme>` runs `msbe.exe handoff "%1"`. A per-user key MSBE
+  replaces is kept beneath `MSBE\Previous` and put back on unregister; a machine-wide handler is
+  only reported. The handler reaches the daemon once the named-pipe transport lands.
+- **macOS.** The application bundle declares `CFBundleURLTypes`, and Desktop hands the URLs macOS
+  delivers as activations to `handoff.submit`. `msbe handler` explains that nothing is registered
+  at run time.
+
+Without a handler, a link can be pasted into Desktop's Downloads page.
+
 Flatpak and Snap builds need explicit portal/interface declarations for this to work;
 treated as a packaging test case, not an afterthought.
 

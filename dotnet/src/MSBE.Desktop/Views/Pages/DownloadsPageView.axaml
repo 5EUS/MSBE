@@ -4,7 +4,7 @@
              xmlns:vm="using:MSBE.Desktop.ViewModels"
              x:Class="MSBE.Desktop.Views.Pages.DownloadsPageView"
              x:DataType="vm:MainViewModel">
-    <Grid Margin="8" RowDefinitions="Auto,*" RowSpacing="18">
+    <Grid Margin="8" RowDefinitions="Auto,Auto,*" RowSpacing="18">
         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
             <StackPanel Spacing="3">
                 <TextBlock Classes="sectionHeading" Text="Downloads" />
@@ -22,7 +22,23 @@
             </Button>
         </Grid>
 
-        <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+        <Grid Grid.Row="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
+            <TextBox Text="{Binding HandoffLink}"
+                     PlaceholderText="Paste a link a provider page handed over"
+                     AutomationProperties.Name="Provider link">
+                <TextBox.KeyBindings>
+                    <KeyBinding Gesture="Enter" Command="{Binding SubmitHandoffLinkCommand}" />
+                </TextBox.KeyBindings>
+            </TextBox>
+            <Button Grid.Column="1" Classes="secondary-button" Command="{Binding SubmitHandoffLinkCommand}">
+                <StackPanel Orientation="Horizontal" Spacing="7">
+                    <LucideIcon Kind="ClipboardPaste" Size="15" StrokeWidth="2" />
+                    <TextBlock Text="Add link" />
+                </StackPanel>
+            </Button>
+        </Grid>
+
+        <ScrollViewer Grid.Row="2" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
             <StackPanel Margin="0,0,4,8" Spacing="26">
                 <Border Classes="download-hero">
                     <Panel>

@@ -1,0 +1,31 @@
+[package]
+name        = "msbe-os-integration"
+description = "Registers MSBE as the current user's handler of a link scheme, and gives the scheme back."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+homepage.workspace     = true
+readme.workspace       = true
+keywords.workspace     = true
+categories.workspace   = true
+publish.workspace      = true
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror.workspace = true
+
+# The freedesktop.org directories, read where MSBE reads its environment, and atomic file writes.
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+msbe-core  = { version = "0.0.0", path = "../msbe-core" }
+msbe-fsops = { version = "0.0.0", path = "../msbe-fsops" }
+
+# The per-user class keys. The same windows-rs family msbe-secrets' keyring store already links.
+[target.'cfg(windows)'.dependencies]
+windows-registry = "0.6.1"
+
+[dev-dependencies]
+tempfile.workspace = true

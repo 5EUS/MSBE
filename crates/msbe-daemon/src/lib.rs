@@ -12,16 +12,20 @@ use std::{
 };
 
 use msbe_core::config::Home;
+use msbe_os_integration::Handlers;
 use msbe_provider_api::{HttpClient, HttpError};
+use msbe_providers::Providers;
 use msbe_rpc_schema::{
     COMMAND_METHOD, CONTRACT_VERSION, DOWNLOAD_CANCEL_METHOD, DOWNLOAD_CLEAR_METHOD,
     DOWNLOAD_CONFIRM_METHOD, DOWNLOAD_ENQUEUE_METHOD, DOWNLOAD_LIST_METHOD, DOWNLOAD_MOVE_METHOD,
     DOWNLOAD_PAUSE_METHOD, DOWNLOAD_RESUME_METHOD, DOWNLOAD_RETRY_METHOD, DaemonInfo,
     DownloadItemId, DownloadListRequest, DownloadPause, EXTENSION_LIST_METHOD, GAME_LIST_METHOD,
-    HANDOFF_SUBMIT_METHOD, INFO_METHOD, JOB_CANCEL_METHOD, JOB_EVENTS_METHOD, JOB_METHODS,
-    JOB_START_METHOD, PACK_CAPTURE_PREVIEW_METHOD, PACK_CODEC_LIST_METHOD,
-    PACK_CODEC_OPTIONS_METHOD, PACK_EXPORT_PREVIEW_METHOD, PACK_IMPORT_PREVIEW_METHOD,
-    PACK_UPDATE_PREVIEW_METHOD, PLAN_LOAD_METHOD, PLAN_UNLOAD_METHOD, Request, Response,
+    HANDLER_REGISTER_METHOD, HANDLER_STATUS_METHOD, HANDLER_UNREGISTER_METHOD,
+    HANDOFF_SUBMIT_METHOD, HandlerRegister, HandlerScheme, HandlerStatusRequest, INFO_METHOD,
+    JOB_CANCEL_METHOD, JOB_EVENTS_METHOD, JOB_METHODS, JOB_START_METHOD,
+    PACK_CAPTURE_PREVIEW_METHOD, PACK_CODEC_LIST_METHOD, PACK_CODEC_OPTIONS_METHOD,
+    PACK_EXPORT_PREVIEW_METHOD, PACK_IMPORT_PREVIEW_METHOD, PACK_UPDATE_PREVIEW_METHOD,
+    PLAN_LOAD_METHOD, PLAN_UNLOAD_METHOD, Request, Response,
 };
 use msbe_secrets::SystemClock;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -49,6 +53,8 @@ pub struct Daemon {
     jobs: Arc<Jobs>,
     downloads: Arc<Downloads>,
     connect: Connector,
+    handlers: Handlers,
+    handler_program: Option<PathBuf>,
 }
 
 impl fmt::Debug for Daemon {
@@ -71,6 +77,8 @@ impl Daemon {
             plans: pack::Plans::default(),
             jobs: Arc::new(Jobs::default()),
             downloads: Arc::new(Downloads::default()),
+            handlers: Handlers::discover(),
+            handler_program: None,
             connect: Arc::new(|| {
                 msbe_http::UreqClient::connect()
                     .map(|client| -> Box<dyn HttpClient> { Box::new(client) })
@@ -82,6 +90,15 @@ impl Daemon {
     #[must_use]
     pub fn with_home(mut self, home: PathBuf) -> Self {
         self.home = Some(home);
+        self
+    }
+
+    /// Registers link handlers in `handlers`, opening links with `program`, instead of the current
+    /// user's registrations and the `msbe` beside the daemon.
+    #[must_use]
+    pub fn with_handlers(mut self, handlers: Handlers, program: PathBuf) -> Self {
+        self.handlers = handlers;
+        self.handler_program = Some(program);
         self
     }
 
@@ -121,6 +138,7 @@ impl Daemon {
                 handoff::submit(&request.params, &self.lanes(), &SystemClock),
             ),
             method if method.starts_with("download.") => self.download(id, method, &request.params),
+            method if method.starts_with("handler.") => self.handler(id, method, &request.params),
             GAME_LIST_METHOD => game_list(id, &request.params, &self.registry),
             PLAN_LOAD_METHOD => plan_load(id, request.params.clone(), &mut self.registry),
             PLAN_UNLOAD_METHOD => plan_unload(id, request.params.clone(), &mut self.registry),
@@ -246,6 +264,53 @@ impl Daemon {
         pack::respond(id, result)
     }
 
+    /// The link handler methods. They change the user's desktop, not instance state, so they never
+    /// wait for a job.
+    fn handler(&self, id: Value, method: &str, params: &Value) -> Response {
+        let program = match &self.handler_program {
+            Some(program) => program.clone(),
+            None => match msbe_os_integration::handler_program() {
+                Ok(program) => program,
+                Err(error) => return Response::error(id, -32603, error.to_string()),
+            },
+        };
+        let providers = match self
+            .home()
+            .map_err(|error| error.to_string())
+            .and_then(|home| Providers::installed(&home).map_err(|error| error.to_string()))
+        {
+            Ok(providers) => providers,
+            Err(message) => return Response::error(id, -32603, message),
+        };
+        let handlers = &self.handlers;
+        let result = match method {
+            HANDLER_STATUS_METHOD => optional::<HandlerStatusRequest>(params).map(|request| {
+                msbe_cli::handler_status(&providers, handlers, request.scheme.as_deref(), &program)
+                    .map(|statuses| json!(statuses))
+            }),
+            HANDLER_REGISTER_METHOD => typed::<HandlerRegister>(params).map(|request| {
+                msbe_cli::register_handler(
+                    &providers,
+                    handlers,
+                    &request.scheme,
+                    request.replace,
+                    &program,
+                )
+                .map(|status| json!(status))
+            }),
+            HANDLER_UNREGISTER_METHOD => typed::<HandlerScheme>(params).map(|request| {
+                msbe_cli::unregister_handler(&providers, handlers, &request.scheme, &program)
+                    .map(|status| json!(status))
+            }),
+            _ => return Response::error(id, -32601, "method not found"),
+        };
+        match result {
+            Ok(Ok(value)) => Response::success(id, value),
+            Ok(Err(error)) => handler_failure(id, &error),
+            Err(message) => Response::error(id, -32602, message),
+        }
+    }
+
     /// The download queue's methods. They never wait for a job: the queue is not instance state.
     fn download(&self, id: Value, method: &str, params: &Value) -> Response {
         let lanes = self.lanes();
@@ -305,6 +370,26 @@ fn answer<T: Serialize>(id: Value, result: Result<T, String>) -> Response {
         Ok(Ok(result)) => Response::success(id, result),
         Ok(Err(error)) => Response::error(id, -32603, error.to_string()),
         Err(error) => Response::error(id, -32602, error),
+    }
+}
+
+/// Maps a link handler failure to a response. Another application owning the scheme carries its
+/// name, so a client can ask the user before registering again with `replace`.
+fn handler_failure(id: Value, error: &msbe_cli::HandlerError) -> Response {
+    use msbe_cli::HandlerError;
+    use msbe_os_integration::Error;
+
+    match error {
+        HandlerError::Os(Error::Owned { scheme, owner }) => Response::error_with_data(
+            id,
+            msbe_rpc_schema::codes::HANDLER_OWNED,
+            error.to_string(),
+            Some(json!({ "scheme": scheme.as_str(), "owner": owner })),
+        ),
+        HandlerError::UnknownScheme(_) | HandlerError::Os(Error::InvalidScheme(_)) => {
+            Response::error(id, -32602, error.to_string())
+        }
+        HandlerError::Os(_) => Response::error(id, -32603, error.to_string()),
     }
 }
 
@@ -1159,6 +1244,83 @@ urls = "/url"
         );
         assert!(matches!(refused, Response::Error { error, .. }
             if error.code == -32602 && !error.message.contains("not-for-output")));
+    }
+
+    #[test]
+    #[cfg(all(unix, not(target_os = "macos")))]
+    fn handler_methods_ask_before_replacing_an_owner_and_give_the_scheme_back() {
+        let (_plans, registry) = registry();
+        let root = TempDir::new().unwrap();
+        let home = root.path().join("home");
+        install_assisted(&home);
+        let program = root.path().join("bin/msbe");
+        fs::create_dir_all(program.parent().unwrap()).unwrap();
+        fs::write(&program, b"").unwrap();
+        let data = root.path().join("data");
+        fs::create_dir_all(data.join("applications")).unwrap();
+        fs::write(
+            data.join("applications/other.desktop"),
+            "[Desktop Entry]\nName=Other\nExec=other %u\nMimeType=x-scheme-handler/handoff;\n",
+        )
+        .unwrap();
+        let directories = msbe_core::config::Freedesktop {
+            config_home: root.path().join("config"),
+            config_dirs: Vec::new(),
+            data_home: data,
+            data_dirs: Vec::new(),
+            desktops: Vec::new(),
+        };
+        let mut daemon = Daemon::new(registry).with_home(home).with_handlers(
+            msbe_os_integration::Handlers::freedesktop(directories),
+            program,
+        );
+        let other = json!({ "kind": "other", "name": "Other (other.desktop)" });
+
+        let listed = success(call(
+            &mut daemon,
+            msbe_rpc_schema::HANDLER_STATUS_METHOD,
+            Value::Null,
+        ));
+        assert_eq!(
+            listed,
+            json!([{ "scheme": "handoff", "provider": "assisted", "owner": other, "current": false }])
+        );
+        let refused = call(
+            &mut daemon,
+            msbe_rpc_schema::HANDLER_REGISTER_METHOD,
+            json!({ "scheme": "handoff" }),
+        );
+        assert!(
+            matches!(&refused, Response::Error { error, .. }
+                if error.code == codes::HANDLER_OWNED
+                    && error.data == Some(json!({ "scheme": "handoff", "owner": "Other (other.desktop)" }))),
+            "{refused:?}"
+        );
+        let unclaimed = call(
+            &mut daemon,
+            msbe_rpc_schema::HANDLER_REGISTER_METHOD,
+            json!({ "scheme": "elsewhere", "replace": true }),
+        );
+        assert!(matches!(unclaimed, Response::Error { error, .. } if error.code == -32602));
+
+        let registered = success(call(
+            &mut daemon,
+            msbe_rpc_schema::HANDLER_REGISTER_METHOD,
+            json!({ "scheme": "handoff", "replace": true }),
+        ));
+        assert_eq!(
+            registered,
+            json!({
+                "scheme": "handoff", "provider": "assisted", "owner": { "kind": "msbe" },
+                "current": true, "previous": "Other (other.desktop)"
+            })
+        );
+        let released = success(call(
+            &mut daemon,
+            msbe_rpc_schema::HANDLER_UNREGISTER_METHOD,
+            json!({ "scheme": "handoff" }),
+        ));
+        assert_eq!(at(&released, "/owner"), &other);
     }
 
     #[test]

@@ -150,6 +150,32 @@ public static class DownloadRpc
         return List(result);
     }
 
+    /// <summary>Hands a provider link to the download queue, which redeems and downloads it at once because its key expires.</summary>
+    /// <param name="client">The daemon client.</param>
+    /// <param name="link">The link a provider page handed over.</param>
+    /// <param name="cancellationToken">Cancels the pending request.</param>
+    /// <returns>What the queue accepted, without the link.</returns>
+    public static async Task<HandoffReceiptInfo> SubmitHandoffAsync(this IMsbeClient client, string link, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(client);
+        JsonElement result = await client.InvokeAsync(
+            "handoff.submit",
+            writer =>
+            {
+                writer.WriteStartObject();
+                writer.WriteString("uri", link);
+                writer.WriteEndObject();
+            },
+            cancellationToken).ConfigureAwait(false);
+        return new HandoffReceiptInfo(
+            result.GetProperty("id").GetInt64(),
+            Text(result, "provider"),
+            Text(result, "game"),
+            Text(result, "project"),
+            Text(result, "release"),
+            result.GetProperty("matched").GetBoolean());
+    }
+
     private static async Task<DownloadListInfo> ListCallAsync(IMsbeClient client, string method, long? id, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(client);

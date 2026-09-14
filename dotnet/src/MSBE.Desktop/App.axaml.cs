@@ -22,6 +22,19 @@ internal partial class App : Application
         {
             var viewModel = new MainViewModel(new UnixSocketMsbeClient(), new TopLevelFolderLauncher(() => desktop.MainWindow));
             desktop.MainWindow = new MainWindow { DataContext = viewModel };
+
+            // macOS delivers the links the application bundle declares as activations, not arguments.
+            if (this.TryGetFeature<IActivatableLifetime>() is { } activatable)
+            {
+                activatable.Activated += async (_, activated) =>
+                {
+                    if (activated is ProtocolActivatedEventArgs { Kind: ActivationKind.OpenUri } opened)
+                    {
+                        await viewModel.ReceiveLinkAsync(opened.Uri).ConfigureAwait(true);
+                    }
+                };
+            }
+
             _ = viewModel.ConnectAsync();
         }
 

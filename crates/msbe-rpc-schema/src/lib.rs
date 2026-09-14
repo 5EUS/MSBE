@@ -31,6 +31,19 @@ pub const COMMAND_METHOD: &str = "command.run";
 /// redeemed and downloaded at once, because its key expires; the profile change waits its turn.
 pub const HANDOFF_SUBMIT_METHOD: &str = "handoff.submit";
 
+/// Reports which application opens links: [`HandlerStatusRequest`] returns a [`HandlerStatus`]
+/// for the scheme named, or one for every scheme an enabled provider hands links over in.
+pub const HANDLER_STATUS_METHOD: &str = "handler.status";
+
+/// Makes MSBE open a scheme's links for the current user: [`HandlerRegister`] returns its
+/// [`HandlerStatus`]. While another application opens them it is refused with
+/// [`codes::HANDLER_OWNED`], unless `replace` is set; unregistering gives them back.
+pub const HANDLER_REGISTER_METHOD: &str = "handler.register";
+
+/// Stops MSBE opening a scheme's links and gives them back to the application it replaced:
+/// [`HandlerScheme`] returns its [`HandlerStatus`].
+pub const HANDLER_UNREGISTER_METHOD: &str = "handler.unregister";
+
 /// Queues a source to download and add to a profile: [`DownloadEnqueue`] returns the
 /// [`DownloadItem`], or the unfinished item already queued for the same source and profile.
 pub const DOWNLOAD_ENQUEUE_METHOD: &str = "download.enqueue";
@@ -137,6 +150,9 @@ pub mod codes {
     /// A pack operation failed. `data.code` carries the stable pack failure code and
     /// `data.issues` every issue.
     pub const PACK: i32 = -32030;
+    /// Another application opens the scheme's links. `data.scheme` and `data.owner` name them; ask
+    /// the user, and register again with `replace` if they agree.
+    pub const HANDLER_OWNED: i32 = -32040;
 }
 
 /// Returns the local daemon endpoint for the current user.
@@ -415,6 +431,67 @@ pub struct HandoffReceipt {
     pub matched: bool,
 }
 
+/// Which application opens a scheme's links.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum HandlerOwner {
+    /// None does.
+    Nobody,
+    /// MSBE does.
+    Msbe,
+    /// Another application does.
+    Other {
+        /// The application, as the platform names it.
+        name: String,
+    },
+}
+
+/// A scheme's link handler registration, as [`HANDLER_STATUS_METHOD`] reports it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HandlerStatus {
+    /// The scheme, lowercase and without `://`.
+    pub scheme: String,
+    /// The enabled provider whose links use the scheme, if one does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    /// Which application opens its links.
+    pub owner: HandlerOwner,
+    /// Whether MSBE's registration opens links with this installation's `msbe`. False when MSBE is
+    /// not registered, or its registration names a program that has since moved.
+    pub current: bool,
+    /// The application MSBE replaced, which unregistering gives the scheme back to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous: Option<String>,
+}
+
+/// Parameters of [`HANDLER_STATUS_METHOD`]; `null` reports every scheme an enabled provider claims.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HandlerStatusRequest {
+    /// The scheme.
+    #[serde(default)]
+    pub scheme: Option<String>,
+}
+
+/// Parameters of [`HANDLER_REGISTER_METHOD`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HandlerRegister {
+    /// The scheme. An enabled provider must hand links over in it.
+    pub scheme: String,
+    /// Whether to take the scheme over from the application that opens its links.
+    #[serde(default)]
+    pub replace: bool,
+}
+
+/// Parameters of [`HANDLER_UNREGISTER_METHOD`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HandlerScheme {
+    /// The scheme.
+    pub scheme: String,
+}
+
 /// Where a job is in its life.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -611,6 +688,30 @@ mod tests {
             r#"{"version":"0.0.0","rpc_version":5,"data_directory":"/msbe"}"#
         );
         assert_eq!(serde_json::from_str::<DaemonInfo>(&encoded)?, info);
+        Ok(())
+    }
+
+    #[test]
+    fn handler_statuses_tag_their_owner_and_omit_what_is_not_known() -> Result<(), serde_json::Error>
+    {
+        let status = super::HandlerStatus {
+            scheme: "handoff".to_owned(),
+            provider: None,
+            owner: super::HandlerOwner::Other {
+                name: "Other".to_owned(),
+            },
+            current: false,
+            previous: None,
+        };
+        let encoded = serde_json::to_value(&status)?;
+        assert_eq!(
+            encoded,
+            json!({ "scheme": "handoff", "owner": { "kind": "other", "name": "Other" }, "current": false })
+        );
+        assert_eq!(
+            serde_json::from_value::<super::HandlerStatus>(encoded)?,
+            status
+        );
         Ok(())
     }
 

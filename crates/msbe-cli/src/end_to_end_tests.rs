@@ -1978,3 +1978,25 @@ fn native_import_on_another_installation_fails_before_acquisition() {
     let imported = world.json(&["pack", "import", "mc", here.as_str(), "--profile", "fresh"]);
     assert_eq!(at(&imported, "/added"), &json!(["sodium"]));
 }
+
+#[test]
+fn handler_commands_register_only_schemes_an_enabled_provider_hands_links_over_in() {
+    let world = World::new();
+    let listed = world.msbe(&["handler", "status"]);
+    assert_eq!(listed.code, exit::OK, "{}", listed.err);
+    assert_eq!(
+        listed.out,
+        "No enabled provider hands files over as links.\n"
+    );
+    assert_eq!(world.json(&["handler", "status"]), json!([]));
+
+    let unclaimed = world.msbe(&["handler", "register", "elsewhere"]);
+    assert_eq!(unclaimed.code, exit::FAILURE);
+    assert_eq!(
+        unclaimed.err,
+        "error: no enabled provider hands files over as elsewhere:// links\n"
+    );
+    let web = world.msbe(&["handler", "register", "https"]);
+    assert_eq!(web.code, exit::FAILURE);
+    assert!(web.err.contains("is not a link scheme"), "{}", web.err);
+}

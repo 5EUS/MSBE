@@ -50,6 +50,7 @@ msbe registry  update | sources | trust
 msbe auth      login <provider> | logout | status
 msbe download  add | list | pause | resume | cancel | retry | move | confirm | clear
 msbe handoff   <uri>            # a provider link from the browser, into the download queue
+msbe handler   status [<scheme>] | register <scheme> [--replace] | unregister <scheme>
 
 msbe doctor                     # environment diagnosis
 msbe bisect                     # find the mod that broke it

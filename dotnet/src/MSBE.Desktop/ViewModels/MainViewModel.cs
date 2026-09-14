@@ -82,6 +82,10 @@ internal sealed partial class MainViewModel : ViewModelBase
             this.StatusMessage = this.IsPackConfigurationSupported
                 ? $"Connected to daemon {daemon.Version} (RPC {daemon.RpcVersion})."
                 : $"Daemon RPC {daemon.RpcVersion} is outdated; restart MSBE to enable Pack configuration.";
+            if (this.IsDownloadQueueSupported)
+            {
+                await this.SubmitPendingLinksAsync().ConfigureAwait(true);
+            }
         }
         catch (Exception exception) when (exception is IOException or SocketException or InvalidOperationException)
         {

@@ -200,6 +200,67 @@ pub fn provider_token(provider: &str) -> Option<String> {
     env(&provider_token_variable(provider)).and_then(|value| value.into_string().ok())
 }
 
+/// The freedesktop.org base directories and desktop names that decide which application opens a
+/// link, as the environment sets them.
+#[cfg(all(unix, not(target_os = "macos")))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Freedesktop {
+    /// `$XDG_CONFIG_HOME`, which holds the user's `mimeapps.list`.
+    pub config_home: PathBuf,
+    /// `$XDG_CONFIG_DIRS`, most important first.
+    pub config_dirs: Vec<PathBuf>,
+    /// `$XDG_DATA_HOME`, whose `applications` directory holds the user's desktop entries.
+    pub data_home: PathBuf,
+    /// `$XDG_DATA_DIRS`, most important first.
+    pub data_dirs: Vec<PathBuf>,
+    /// `$XDG_CURRENT_DESKTOP`, lowercased, most important first.
+    pub desktops: Vec<String>,
+}
+
+/// Finds the freedesktop.org base directories, with the XDG Base Directory Specification's defaults
+/// for those unset. Relative paths are ignored, as the specification requires.
+///
+/// Returns `None` when neither `$HOME` nor the variables it would default are set.
+#[cfg(all(unix, not(target_os = "macos")))]
+pub fn freedesktop() -> Option<Freedesktop> {
+    let home = env("HOME").map(PathBuf::from);
+    let directory = |key: &str, default: &str| {
+        env(key)
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+            .or_else(|| home.as_ref().map(|home| home.join(default)))
+    };
+    let directories = |key: &str, default: &str| {
+        let listed: Vec<PathBuf> = env(key)
+            .map(|value| std::env::split_paths(&value).collect::<Vec<_>>())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|path| path.is_absolute())
+            .collect();
+        if listed.is_empty() {
+            std::env::split_paths(default).collect()
+        } else {
+            listed
+        }
+    };
+    Some(Freedesktop {
+        config_home: directory("XDG_CONFIG_HOME", ".config")?,
+        config_dirs: directories("XDG_CONFIG_DIRS", "/etc/xdg"),
+        data_home: directory("XDG_DATA_HOME", ".local/share")?,
+        data_dirs: directories("XDG_DATA_DIRS", "/usr/local/share:/usr/share"),
+        desktops: env("XDG_CURRENT_DESKTOP")
+            .and_then(|value| value.into_string().ok())
+            .map(|value| {
+                value
+                    .split(':')
+                    .filter(|desktop| !desktop.is_empty())
+                    .map(str::to_ascii_lowercase)
+                    .collect()
+            })
+            .unwrap_or_default(),
+    })
+}
+
 /// Reads one environment variable, treating an empty value as unset.
 fn env(key: &str) -> Option<OsString> {
     #[expect(

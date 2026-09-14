@@ -67,6 +67,13 @@ impl Catalog {
             .find(|provider| provider.handoff_scheme() == Some(scheme))
     }
 
+    /// Every provider whose pages hand files over as links, with the scheme of its links.
+    pub fn handoff_schemes(&self) -> impl Iterator<Item = (&str, &Provider)> {
+        self.providers
+            .values()
+            .filter_map(|provider| provider.handoff_scheme().map(|scheme| (scheme, provider)))
+    }
+
     /// Finds the provider which owns a user-entered source.
     ///
     /// # Errors
