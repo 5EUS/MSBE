@@ -31,6 +31,7 @@ pub mod overlay;
 pub mod program;
 pub mod resolve;
 mod target;
+pub mod tool;
 
 /// The host API implemented by this MSBE build for reviewed native extensions.
 pub const NATIVE_HOST_API_VERSION: u32 = 1;
@@ -40,7 +41,7 @@ pub use acquisition::{
 };
 pub use adapter::{
     Accounts, Adapter, AdapterError, Build, Handoff, ProgramRegistration, Registration, Releases,
-    Search, Update, UpdateCheck, Updates,
+    Search, Update, UpdateCheck, Updates, acquire_download,
 };
 pub use codec::{
     BlobSource, BuildPackCodec, ContainerKind, DistributionDecision, EmbeddedBlob, EntryContent,
@@ -76,3 +77,7 @@ pub use program::{
     UpdateFields, UpdateProtocol,
 };
 pub use target::{Availability, Target};
+pub use tool::{
+    NoTools, ToolArgument, ToolError, ToolHost, ToolInvocation, ToolProgram, ToolProgramError,
+    acquired_directory, is_tool_value,
+};

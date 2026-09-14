@@ -30,8 +30,8 @@ use msbe_fsops::{
 };
 use msbe_pack::{IssueCode, PackError};
 use msbe_provider_api::{
-    AdapterError, ArtifactDescriptor, DOWNLOAD_LIMIT, HttpClient, ManifestError, Target, acquire,
-    hex,
+    AdapterError, ArtifactDescriptor, DOWNLOAD_LIMIT, HttpClient, ManifestError, Target, ToolHost,
+    acquire, hex,
     model::{Download, HandoffTicket, Request, Selection},
     resolve::{InstallPlan, ProjectRequest, Resolver},
 };
@@ -47,6 +47,7 @@ use serde_json::Value;
 use crate::{
     Connector,
     jobs::{Environment, Jobs, Work},
+    tools::ToolRunner,
 };
 
 /// The job method that adds a downloaded item to its profile.
@@ -796,11 +797,23 @@ impl Lanes {
         let http = (self.connect)().map_err(|error| error.to_string())?;
         let (existing, target) = self.read_profile(home, &claim.target)?;
         let planned = plan(&providers, http.as_ref(), claim, &existing, target)?;
+        // A tool fetching one of the item's files stops when the user cancels the item.
+        let cancelled = || {
+            self.downloads
+                .read(home, |queue| {
+                    queue.items.iter().any(|entry| {
+                        entry.item.id == claim.id && entry.item.state == DownloadState::Cancelled
+                    })
+                })
+                .unwrap_or(false)
+        };
+        let tools = ToolRunner::new(home, &cancelled);
         let fetch = Fetch {
             lanes: self,
             home,
             providers: &providers,
             http: http.as_ref(),
+            tools: &tools,
             claim,
         };
         let Some(pending) = fetch.stage(planned)? else {
@@ -1075,6 +1088,7 @@ struct Fetch<'a> {
     home: &'a Home,
     providers: &'a Providers,
     http: &'a dyn HttpClient,
+    tools: &'a dyn ToolHost,
     claim: &'a Claim,
 }
 
@@ -1151,7 +1165,7 @@ impl Fetch<'_> {
         let slot =
             quarantine(self.home, self.claim.id).join(format!("{}-{index}", self.claim.attempts));
         reset(&slot)?;
-        let fetched = match adapter.acquire(self.http, &selection.file, &slot) {
+        let fetched = match adapter.acquire(self.http, self.tools, &selection.file, &slot) {
             Ok(acquired) => Fetched::Downloaded {
                 provenance: adapter.provenance(&selection.release, &acquired),
                 size: acquired.size,
@@ -1168,7 +1182,9 @@ impl Fetch<'_> {
                         page: page.clone(),
                         scheme: None,
                     },
-                    Download::Direct { .. } => return Err(error.to_string()),
+                    Download::Direct { .. } | Download::Tool { .. } => {
+                        return Err(error.to_string());
+                    }
                 },
                 _ => return Err(error.to_string()),
             },

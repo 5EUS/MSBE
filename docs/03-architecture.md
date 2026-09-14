@@ -198,6 +198,9 @@ handler.unregister { scheme }                       -> status
 browser.status                                      -> { running, provider?, item?, page?, position?, waiting, url?, title?, auto_advance, message? }
 browser.open      { id?, auto_advance? }            -> status     # no id: the next waiting page
 browser.close                                       -> status
+tool.list                                           -> [{ provider, name, terms, program?, sha256?, state }]
+tool.register     { provider, program, accept_terms } -> status   # records the SHA-256; accepts the terms
+tool.forget       { provider }                      -> status
 ```
 
 An item is a source, the profile it is added to, and the group of files the source resolved to,
@@ -222,7 +225,9 @@ The `handler.*` methods register MSBE to open a provider's link scheme for the c
 ([07 §7.4](07-browser-and-secrets.md)). They answer at once, since they touch no instance state.
 The `browser.*` methods start and drive the MSBE browser, a separate process that reports only over
 its capture channel ([07 §7.2](07-browser-and-secrets.md)). A download it captures fills the file
-whose page it was sent to, and a link goes where `handoff.submit` sends it.
+whose page it was sent to, and a link goes where `handoff.submit` sends it. The `tool.*` methods
+register the program a tool provider runs; the network lane runs it for a queued item, only while it
+still has the SHA-256 it was registered with ([06 §6.5](06-providers-and-policy.md)).
 
 The `Question` event and `job.answer` arrive with the first installer-question producer. The
 `Question` event is how an interactive install wizard works identically in the GUI

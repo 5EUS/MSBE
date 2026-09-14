@@ -5,6 +5,7 @@ use std::{collections::BTreeMap, error::Error as StdError, fmt, path::Path};
 use msbe_core::{instance::Provenance, solver::PackageId};
 use thiserror::Error;
 
+use crate::tool::{ToolError, ToolHost};
 use crate::{
     AcquiredArtifact, AcquisitionError, ApiHeaders, ArtifactDescriptor, DOWNLOAD_LIMIT,
     EndpointError, HttpClient, HttpError, ManifestError, PackCodecRegistration, Provider, Target,
@@ -107,36 +108,23 @@ pub trait Adapter: fmt::Debug {
         ApiHeaders::default()
     }
 
-    /// Downloads `file` into `dir`, verifying every size and digest the provider published.
+    /// Downloads `file` into `dir`, verifying every size and digest the provider published. A file a
+    /// registered tool fetches is fetched through `tools`.
     ///
     /// # Errors
     ///
     /// Returns [`AdapterError::ActionRequired`] for a file MSBE may not download itself, and
-    /// otherwise [`AdapterError`] for an insecure URL or unsafe file name, a transfer failure, or a
-    /// mismatch. A file that fails verification is left in `dir`, which the caller discards.
+    /// otherwise [`AdapterError`] for an insecure URL or unsafe file name, a transfer failure, a
+    /// mismatch, or a tool that did not fetch it. A file that fails verification is left in `dir`,
+    /// which the caller discards.
     fn acquire(
         &self,
         http: &dyn HttpClient,
+        _tools: &dyn ToolHost,
         file: &ReleaseFile,
         dir: &Path,
     ) -> Result<AcquiredArtifact, AdapterError> {
-        let Download::Direct { url } = &file.download else {
-            return Err(AdapterError::ActionRequired {
-                file: file.name.clone(),
-                download: Box::new(file.download.clone()),
-            });
-        };
-        let descriptor = ArtifactDescriptor {
-            url: url.clone(),
-            file_name: file.name.clone(),
-            limit: file.size.or(file.limit).unwrap_or(DOWNLOAD_LIMIT),
-            size: file.size,
-            md5: file.md5.clone(),
-            sha1: file.sha1.clone(),
-            sha256: file.sha256.clone(),
-            sha512: file.sha512.clone(),
-        };
-        Ok(acquire(http, &descriptor, dir)?)
+        acquire_download(http, file, dir)
     }
 
     /// The provenance to record for `release` once one of its files was acquired as `acquired`.
@@ -152,6 +140,37 @@ pub trait Adapter: fmt::Debug {
             ]),
         }
     }
+}
+
+/// Downloads `file` into `dir` when MSBE may download it directly, as [`Adapter::acquire`] does
+/// unless an adapter overrides it.
+///
+/// # Errors
+///
+/// Returns [`AdapterError::ActionRequired`] for any other kind of download, and otherwise
+/// [`AdapterError`] for an insecure URL or unsafe file name, a transfer failure, or a mismatch.
+pub fn acquire_download(
+    http: &dyn HttpClient,
+    file: &ReleaseFile,
+    dir: &Path,
+) -> Result<AcquiredArtifact, AdapterError> {
+    let Download::Direct { url } = &file.download else {
+        return Err(AdapterError::ActionRequired {
+            file: file.name.clone(),
+            download: Box::new(file.download.clone()),
+        });
+    };
+    let descriptor = ArtifactDescriptor {
+        url: url.clone(),
+        file_name: file.name.clone(),
+        limit: file.size.or(file.limit).unwrap_or(DOWNLOAD_LIMIT),
+        size: file.size,
+        md5: file.md5.clone(),
+        sha1: file.sha1.clone(),
+        sha256: file.sha256.clone(),
+        sha512: file.sha512.clone(),
+    };
+    Ok(acquire(http, &descriptor, dir)?)
 }
 
 /// Searching a provider for projects.
@@ -310,6 +329,9 @@ pub enum AdapterError {
         /// How the user can obtain it.
         download: Box<Download>,
     },
+    /// A registered tool did not fetch a file.
+    #[error(transparent)]
+    Tool(#[from] ToolError),
     /// A release has no files to install.
     #[error("release {release} of {project} has no files")]
     NoFiles {

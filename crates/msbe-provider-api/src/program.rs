@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::tool::{ToolProgram, ToolProgramError, is_tool_value};
 use crate::{
     ApiHeaders, EnvelopeError, ExtensionEnvelope, ExtensionProvide, HeaderError, Provider,
     VerifyingKey,
@@ -129,6 +130,9 @@ pub struct ProviderProgram {
     /// JSON pointers which map catalog response data to the neutral model.
     #[serde(default)]
     pub mappings: Mappings,
+    /// How a `tool-v1` program runs its registered tool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<ToolProgram>,
 }
 
 impl ProviderProgram {
@@ -138,7 +142,15 @@ impl ProviderProgram {
     ///
     /// Returns [`ProgramError`] naming the first rule the program breaks.
     pub fn validate(&self) -> Result<(), ProgramError> {
+        let external_tool = self.provider.acquisition == Acquisition::ExternalTool {};
         match self.runtime {
+            RuntimeKind::DirectUrlV1 | RuntimeKind::CatalogV1 if self.tool.is_some() => {
+                Err(ToolProgramError::ToolOnOtherRuntime.into())
+            }
+            RuntimeKind::DirectUrlV1 | RuntimeKind::CatalogV1 if external_tool => {
+                Err(ToolProgramError::ExternalToolOnOtherRuntime.into())
+            }
+            RuntimeKind::ToolV1 => self.validate_tool(),
             RuntimeKind::DirectUrlV1 => {
                 let unconfigured = self.capabilities.is_empty()
                     && self.games.is_empty()
@@ -178,6 +190,46 @@ impl ProviderProgram {
                 self.validate_acquisition()
             }
         }
+    }
+
+    /// Checks a `tool-v1` program: it serves games through `[tool]` alone, acquires through
+    /// `external_tool`, leaves sign-in to the tool, and requires acknowledging its terms. Every game
+    /// identifier must be safe to pass to the tool.
+    fn validate_tool(&self) -> Result<(), ProgramError> {
+        let tool = self.tool.as_ref().ok_or(ToolProgramError::MissingTool)?;
+        let unconfigured = self.capabilities.is_empty()
+            && self.translate.is_empty()
+            && self.routes.is_empty()
+            && self.pages.is_empty()
+            && self.auth.is_none()
+            && self.rate_limit.is_none()
+            && self.handoff.is_none()
+            && self.mappings.is_empty()
+            && self.search == SearchRequest::default()
+            && self.releases == ReleasesRequest::default()
+            && self.updates.is_none()
+            && self.provider.metadata.is_none();
+        if !unconfigured {
+            return Err(ToolProgramError::UnexpectedSection.into());
+        }
+        self.validate_games()?;
+        if let Some((game, _)) = self
+            .games
+            .iter()
+            .find(|(_, ids)| ids.identifiers().any(|id| !is_tool_value(id)))
+        {
+            return Err(ProgramError::InvalidGame(game.clone()));
+        }
+        if self.provider.acquisition != (Acquisition::ExternalTool {}) {
+            return Err(ToolProgramError::NotExternalTool.into());
+        }
+        if self.provider.policy.requires_auth {
+            return Err(ToolProgramError::RequiresAuth.into());
+        }
+        if !self.provider.policy.ack_required {
+            return Err(ToolProgramError::NoAcknowledgement.into());
+        }
+        Ok(tool.validate()?)
     }
 
     /// The catalog's identifier for `game` in `edition`, when the program serves it.
@@ -543,6 +595,8 @@ pub enum RuntimeKind {
     DirectUrlV1,
     /// Maps bounded JSON catalog responses through explicit pointers.
     CatalogV1,
+    /// Runs a tool the user installed and registered, through a closed argument template.
+    ToolV1,
 }
 
 /// Operations a declarative catalog may expose.
@@ -1966,6 +2020,9 @@ pub enum ProgramError {
         "{0} does not accept games, translations, routes, pages, requests, mappings, or capabilities"
     )]
     UnexpectedConfiguration(&'static str),
+    /// A `tool-v1` program, or `[tool]` or `external_tool` elsewhere, breaks a rule.
+    #[error(transparent)]
+    Tool(#[from] ToolProgramError),
     /// A section is declared without the capability that uses it.
     #[error("provider program declares [{0}] without the capability that uses it")]
     UnusedSection(&'static str),

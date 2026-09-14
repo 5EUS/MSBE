@@ -100,6 +100,20 @@ pub enum ArchiveError {
         entry: String,
     },
 
+    /// A directory entry is neither a file, a directory nor a link, such as a device or a pipe.
+    #[error("entry {entry:?} is not a regular file")]
+    SpecialFile {
+        /// The entry name.
+        entry: String,
+    },
+
+    /// A directory entry's name is not UTF-8, so it cannot be a portable path.
+    #[error("{} has a name that is not UTF-8", .path.display())]
+    NotUtf8 {
+        /// The entry.
+        path: PathBuf,
+    },
+
     /// An entry is encrypted.
     #[error("entry {entry:?} is encrypted")]
     Encrypted {
@@ -280,7 +294,17 @@ pub fn ingest(
     path: &Path,
     limits: &Limits,
 ) -> Result<Vec<IngestedFile>, ArchiveError> {
-    if is_zip(path) {
+    let metadata = std::fs::symlink_metadata(path).map_err(|source| ArchiveError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    if metadata.is_dir() {
+        ingest_directory(store, path, limits)
+    } else if metadata.file_type().is_symlink() {
+        Err(ArchiveError::Symlink {
+            entry: path.display().to_string(),
+        })
+    } else if is_zip(path) {
         extract_zip(store, path, limits)
     } else {
         ingest_file(store, path, None, limits)
@@ -300,6 +324,97 @@ pub fn ingest_as_file(
     limits: &Limits,
 ) -> Result<Vec<IngestedFile>, ArchiveError> {
     ingest_file(store, path, Some(source), limits)
+}
+
+/// Adds every file beneath `root`, named by its path relative to `root`, as an extracted archive
+/// is. The same rules apply as to an archive's entries: no symbolic links or special files, no
+/// unsafe or colliding names, and the same count and size limits.
+fn ingest_directory(
+    store: &Store,
+    root: &Path,
+    limits: &Limits,
+) -> Result<Vec<IngestedFile>, ArchiveError> {
+    let io_error = |path: &Path| {
+        let path = path.to_path_buf();
+        move |source| ArchiveError::Io { path, source }
+    };
+    let mut pending = vec![(root.to_path_buf(), String::new())];
+    let mut files = Vec::new();
+    // Case-folded path to the path as first seen, for collision detection.
+    let mut seen: BTreeMap<String, String> = BTreeMap::new();
+    let mut total = 0_u64;
+    let mut entries_seen = 0_usize;
+    while let Some((directory, prefix)) = pending.pop() {
+        let mut entries = std::fs::read_dir(&directory)
+            .map_err(io_error(&directory))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(io_error(&directory))?;
+        entries.sort_by_key(std::fs::DirEntry::file_name);
+        for entry in entries {
+            entries_seen += 1;
+            if entries_seen > limits.max_entries {
+                return Err(ArchiveError::TooManyEntries {
+                    limit: limits.max_entries,
+                });
+            }
+            let path = entry.path();
+            let name = entry
+                .file_name()
+                .into_string()
+                .map_err(|_| ArchiveError::NotUtf8 { path: path.clone() })?;
+            let raw = format!("{prefix}{name}");
+            let kind = entry.file_type().map_err(io_error(&path))?;
+            if kind.is_symlink() {
+                return Err(ArchiveError::Symlink { entry: raw });
+            }
+            if kind.is_dir() {
+                RelPath::new(&raw).map_err(|source| ArchiveError::UnsafePath {
+                    entry: raw.clone(),
+                    source,
+                })?;
+                pending.push((path, format!("{raw}/")));
+                continue;
+            }
+            if !kind.is_file() {
+                return Err(ArchiveError::SpecialFile { entry: raw });
+            }
+            let source = RelPath::new(&raw).map_err(|source| ArchiveError::UnsafePath {
+                entry: raw.clone(),
+                source,
+            })?;
+            let folded = source.as_str().to_lowercase();
+            if let Some(first) = seen.get(&folded) {
+                return Err(ArchiveError::CaseCollision {
+                    first: first.clone(),
+                    second: raw,
+                });
+            }
+            seen.insert(folded, source.as_str().to_owned());
+            let cap = limits
+                .max_file_bytes
+                .min(limits.max_total_bytes.saturating_sub(total));
+            let file = File::open(&path).map_err(io_error(&path))?;
+            let mut reader = Limited::new(BufReader::new(file), cap);
+            let blob = match store.put_reader(&mut reader) {
+                Ok(blob) => blob,
+                Err(_) if reader.tripped => {
+                    return Err(ArchiveError::TooLarge {
+                        entry: raw,
+                        limit: cap,
+                    });
+                }
+                Err(error) => return Err(ArchiveError::Store(error)),
+            };
+            total = total.saturating_add(reader.consumed);
+            files.push(IngestedFile {
+                source,
+                blob,
+                size: reader.consumed,
+            });
+        }
+    }
+    files.sort_by(|left, right| left.source.as_str().cmp(right.source.as_str()));
+    Ok(files)
 }
 
 fn is_zip(path: &Path) -> bool {
@@ -612,6 +727,60 @@ mod tests {
             writer.write_all(bytes).unwrap();
         }
         writer.finish().unwrap();
+    }
+
+    #[test]
+    fn a_directory_is_ingested_like_an_archive_with_its_relative_paths() {
+        let fx = fixture();
+        let root = fx.inputs.join("fetched");
+        fs::create_dir_all(root.join("textures/stone")).unwrap();
+        fs::write(root.join("mod.pak"), b"pak").unwrap();
+        fs::write(root.join("textures/stone/wall.dds"), b"wall").unwrap();
+
+        let files = ingest(&fx.store, &root, &Limits::default()).unwrap();
+        let listed: Vec<(&str, u64)> = files
+            .iter()
+            .map(|file| (file.source.as_str(), file.size))
+            .collect();
+        assert_eq!(listed, [("mod.pak", 3), ("textures/stone/wall.dds", 4)]);
+        let mut stored = Vec::new();
+        fx.store
+            .open_blob(&files.get(1).unwrap().blob)
+            .unwrap()
+            .read_to_end(&mut stored)
+            .unwrap();
+        assert_eq!(stored, b"wall");
+
+        let small = Limits {
+            max_file_bytes: 3,
+            ..Limits::default()
+        };
+        assert!(matches!(
+            ingest(&fx.store, &root, &small),
+            Err(ArchiveError::TooLarge { entry, .. }) if entry == "textures/stone/wall.dds"
+        ));
+        let few = Limits {
+            max_entries: 2,
+            ..Limits::default()
+        };
+        assert!(matches!(
+            ingest(&fx.store, &root, &few),
+            Err(ArchiveError::TooManyEntries { limit: 2 })
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_holding_a_link_is_refused() {
+        let fx = fixture();
+        let root = fx.inputs.join("fetched");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("mod.pak"), b"pak").unwrap();
+        std::os::unix::fs::symlink("/etc/passwd", root.join("passwd")).unwrap();
+        assert!(matches!(
+            ingest(&fx.store, &root, &Limits::default()),
+            Err(ArchiveError::Symlink { entry }) if entry == "passwd"
+        ));
     }
 
     #[test]

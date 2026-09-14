@@ -376,7 +376,9 @@ fn downloads_are_verified_before_they_are_trusted() {
         .unwrap();
     let file = release.primary_file().unwrap().clone();
     let good = tempfile::tempdir().unwrap();
-    let acquired = modrinth.acquire(&http, &file, good.path()).unwrap();
+    let acquired = modrinth
+        .acquire(&http, &msbe_provider_api::NoTools, &file, good.path())
+        .unwrap();
     assert_eq!(
         std::fs::read(&acquired.path).unwrap(),
         contents("sodium-0.8.12.jar")
@@ -397,7 +399,7 @@ fn downloads_are_verified_before_they_are_trusted() {
     http.files.insert(url.clone(), tampered);
     let bad = tempfile::tempdir().unwrap();
     assert!(matches!(
-        modrinth.acquire(&http, &file, bad.path()),
+        modrinth.acquire(&http, &msbe_provider_api::NoTools, &file, bad.path()),
         Err(AdapterError::Acquisition(
             AcquisitionError::HashMismatch { .. }
         ))
@@ -408,14 +410,14 @@ fn downloads_are_verified_before_they_are_trusted() {
         url: url.replacen("https://", "http://", 1),
     };
     assert!(matches!(
-        modrinth.acquire(&http, &insecure, bad.path()),
+        modrinth.acquire(&http, &msbe_provider_api::NoTools, &insecure, bad.path()),
         Err(AdapterError::Acquisition(AcquisitionError::InsecureUrl(_)))
     ));
 
     let mut escaping = file;
     escaping.name = "../escape.jar".to_owned();
     assert!(matches!(
-        modrinth.acquire(&http, &escaping, bad.path()),
+        modrinth.acquire(&http, &msbe_provider_api::NoTools, &escaping, bad.path()),
         Err(AdapterError::Acquisition(AcquisitionError::UnsafeFileName(
             _
         )))

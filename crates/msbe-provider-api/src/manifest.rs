@@ -60,6 +60,11 @@ impl Catalog {
         Ok(Self { providers })
     }
 
+    /// Every provider, ordered by id.
+    pub fn providers(&self) -> impl Iterator<Item = &Provider> {
+        self.providers.values()
+    }
+
     /// The provider whose handoff links use `scheme`, if any does.
     pub fn handoff_provider(&self, scheme: &str) -> Option<&Provider> {
         self.providers
@@ -167,7 +172,9 @@ impl Provider {
     pub fn handoff_scheme(&self) -> Option<&str> {
         match &self.acquisition {
             Acquisition::BrowserAssisted { scheme } => Some(scheme),
-            Acquisition::DirectHttps {} | Acquisition::UserAction {} => None,
+            Acquisition::DirectHttps {}
+            | Acquisition::UserAction {}
+            | Acquisition::ExternalTool {} => None,
         }
     }
 
@@ -295,6 +302,10 @@ pub enum Acquisition {
         /// The URI scheme of the handed-over link, lowercase and without `://`.
         scheme: String,
     },
+    /// A tool the user installed and registered fetches the content through its own supported
+    /// flow, including any sign-in, and MSBE imports what it leaves (§6.5). Only the `tool-v1`
+    /// runtime serves it.
+    ExternalTool {},
 }
 
 /// Whether `scheme` can name a provider handoff link: a lowercase URI scheme that is not a web,

@@ -1549,6 +1549,7 @@ dependencies = [
  "msbe-providers",
  "msbe-rpc-schema",
  "msbe-secrets",
+ "rustix",
  "serde",
  "serde_json",
  "sha2 0.11.0",

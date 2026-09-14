@@ -1,6 +1,7 @@
 //! Reviewed interpreters for the closed declarative provider-program vocabulary.
 //!
-//! `direct-url-v1` turns one pinned HTTPS URL into a file. `catalog-v1` serves search, projects,
+//! `direct-url-v1` turns one pinned HTTPS URL into a file. `tool-v1` resolves an item to one release
+//! whose file the tool the user registered fetches, through the host its caller supplies. `catalog-v1` serves search, projects,
 //! releases, the project a release belongs to, and update checks from a JSON catalog, through only
 //! the games, translations, routes, pages, parameters and JSON pointers a program declares
 //! (`docs/06-providers-and-policy.md` §6.4). Everything else is fixed here and reviewed with MSBE:
@@ -10,13 +11,15 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     error::Error,
-    fmt,
+    fmt, fs,
+    path::Path,
 };
 
 use msbe_provider_api::{
     Accounts, AcquiredArtifact, Adapter, AdapterError, ApiHeaders, Availability, Capability,
     Handoff, HttpClient, JsonEndpoint, PackageId, Provenance, ProviderProgram, Releases,
-    RuntimeKind, Search, Target, Update, UpdateCheck, Updates,
+    RuntimeKind, Search, Target, ToolError, ToolHost, Update, UpdateCheck, Updates,
+    acquire_download, acquired_directory, is_tool_value,
     manifest::Acquisition,
     model::{
         Account, ActionReason, Channel, Dependency, DependencyKind, Download, HandoffTicket,
@@ -37,6 +40,8 @@ const JSON_LIMIT: u64 = 16 << 20;
 const REFERENCE_LIMIT: usize = 128;
 /// The longest handoff link read.
 const LINK_LIMIT: usize = 2048;
+/// The id and number of the one release a `tool-v1` item has: whatever the tool fetches now.
+const TOOL_RELEASE: &str = "tool";
 
 /// Builds an adapter from a structurally validated provider program.
 pub(super) fn build(program: ProviderProgram) -> Box<dyn Adapter> {
@@ -50,6 +55,30 @@ struct ProgramAdapter {
 }
 
 impl ProgramAdapter {
+    /// The tool's identifier for `target`'s game, for a `tool-v1` program.
+    fn tool_game(&self, target: &Target) -> Result<&str, AdapterError> {
+        self.program
+            .game_id(&target.game, target.edition.as_deref())
+            .ok_or_else(|| {
+                specific(RuntimeError::UnsupportedGame {
+                    provider: self.program.provider.name.clone(),
+                    game: target.game.clone(),
+                    edition: target.edition.clone(),
+                })
+            })
+    }
+
+    fn tool_package(&self, item: &str) -> Result<PackageId, AdapterError> {
+        if is_tool_value(item) {
+            Ok(PackageId {
+                provider: self.program.provider.id.clone(),
+                project: item.to_owned(),
+            })
+        } else {
+            Err(invalid_reference(&self.program, item))
+        }
+    }
+
     fn has(&self, capability: Capability) -> bool {
         self.program.capabilities.contains(&capability)
     }
@@ -92,6 +121,13 @@ impl Adapter for ProgramAdapter {
 
     fn request(&self, reference: &str) -> Result<Request, AdapterError> {
         match self.program.runtime {
+            RuntimeKind::ToolV1 => {
+                self.tool_package(reference)?;
+                Ok(Request::Project {
+                    reference: reference.to_owned(),
+                    version: None,
+                })
+            }
             RuntimeKind::DirectUrlV1 => direct_selection(&self.program.provider.id, reference)
                 .map(|selection| Request::File(Box::new(selection)))
                 .map_err(specific),
@@ -119,7 +155,9 @@ impl Adapter for ProgramAdapter {
     }
 
     fn as_releases(&self) -> Option<&dyn Releases> {
-        (self.has(Capability::Project) && self.has(Capability::Releases)).then_some(self)
+        (self.program.runtime == RuntimeKind::ToolV1
+            || (self.has(Capability::Project) && self.has(Capability::Releases)))
+        .then_some(self)
     }
 
     fn as_updates(&self) -> Option<&dyn Updates> {
@@ -146,6 +184,53 @@ impl Adapter for ProgramAdapter {
                 .map(|rate| rate.remaining.clone())
                 .unwrap_or_default(),
         }
+    }
+
+    /// A file a registered tool fetches is fetched through `tools`, into a fresh directory beneath
+    /// `dir`; any other file is downloaded as every adapter downloads it. The tool succeeded only if
+    /// it left something where `[tool] output` says the item lands.
+    fn acquire(
+        &self,
+        http: &dyn HttpClient,
+        tools: &dyn ToolHost,
+        file: &ReleaseFile,
+        dir: &Path,
+    ) -> Result<AcquiredArtifact, AdapterError> {
+        let Download::Tool { game, item } = &file.download else {
+            return acquire_download(http, file, dir);
+        };
+        let tool = self
+            .program
+            .tool
+            .as_ref()
+            .filter(|_| self.program.runtime == RuntimeKind::ToolV1)
+            .ok_or_else(|| specific(RuntimeError::NoTool))?;
+        if !is_tool_value(game) || self.program.game_with_id(game).is_none() {
+            return Err(invalid_reference(&self.program, game));
+        }
+        self.tool_package(item)?;
+        let invocation = tool.invocation(&self.program.provider.id, game, item);
+        let output = tools.run(&invocation, dir)?;
+        let fetched = invocation
+            .output
+            .iter()
+            .fold(output, |path, segment| path.join(segment));
+        let provider = || self.program.provider.id.clone();
+        let empty = fs::read_dir(&fetched).map_or(true, |mut entries| entries.next().is_none());
+        if empty {
+            return Err(ToolError::Empty {
+                tool: provider(),
+                path: fetched.display().to_string(),
+            }
+            .into());
+        }
+        acquired_directory(&fetched).map_err(|error| {
+            ToolError::Host {
+                tool: provider(),
+                message: format!("cannot read what it fetched: {error}"),
+            }
+            .into()
+        })
     }
 
     /// Records the strong digests, plus the one the update protocol looks files up by, so a file
@@ -226,6 +311,16 @@ impl Releases for ProgramAdapter {
         reference: &str,
         target: &Target,
     ) -> Result<Project, AdapterError> {
+        if self.program.runtime == RuntimeKind::ToolV1 {
+            self.tool_game(target)?;
+            return Ok(Project {
+                id: self.tool_package(reference)?,
+                slug: Some(reference.to_owned()),
+                title: reference.to_owned(),
+                client: Availability::Optional,
+                server: Availability::Optional,
+            });
+        }
         let catalog = self.catalog(http, target)?;
         let segments = catalog.segments(reference)?;
         let route = catalog.route(
@@ -249,6 +344,31 @@ impl Releases for ProgramAdapter {
         project: &str,
         target: &Target,
     ) -> Result<Vec<Release>, AdapterError> {
+        if self.program.runtime == RuntimeKind::ToolV1 {
+            let game = self.tool_game(target)?.to_owned();
+            return Ok(vec![Release {
+                id: TOOL_RELEASE.to_owned(),
+                project: self.tool_package(project)?,
+                number: TOOL_RELEASE.to_owned(),
+                channel: Channel::Release,
+                published: String::new(),
+                files: vec![ReleaseFile {
+                    download: Download::Tool {
+                        game,
+                        item: project.to_owned(),
+                    },
+                    name: project.to_owned(),
+                    size: None,
+                    limit: None,
+                    md5: None,
+                    sha1: None,
+                    sha256: None,
+                    sha512: None,
+                    primary: true,
+                }],
+                dependencies: Vec::new(),
+            }]);
+        }
         Ok(self
             .catalog(http, target)?
             .listing(project)?
@@ -947,6 +1067,7 @@ impl<'a> Catalog<'a> {
             })
         };
         match &self.program.provider.acquisition {
+            Acquisition::ExternalTool {} => Err(specific(RuntimeError::NoTool)),
             Acquisition::UserAction {} => user_action(ActionReason::WebsiteOnly),
             Acquisition::BrowserAssisted { scheme } => Ok(Download::BrowserAssisted {
                 page: self.page(project, release)?,
@@ -1609,6 +1730,7 @@ pub(super) enum RuntimeError {
     ExpiredLink,
     ForeignTicket,
     NoRedeemedUrl,
+    NoTool,
 }
 
 impl fmt::Display for RuntimeError {
@@ -1665,6 +1787,7 @@ impl fmt::Display for RuntimeError {
             }
             Self::ForeignTicket => "the handoff link belongs to another provider",
             Self::NoRedeemedUrl => "the provider redeemed the handoff link without a download URL",
+            Self::NoTool => "provider program has no [tool] to fetch this file with",
             Self::MissingMetadata => "provider program is missing required metadata",
             Self::MissingRoute => "provider program has no route for this operation",
             Self::MissingMapping => "provider program has no mapping for a required record field",

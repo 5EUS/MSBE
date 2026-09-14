@@ -2029,3 +2029,21 @@ fn browser_commands_are_typed_daemon_calls() {
         [("browser.close", Value::Null)]
     );
 }
+
+#[test]
+fn tool_commands_name_only_enabled_tool_providers() {
+    let world = World::new();
+    let listed = world.msbe(&["tool", "list"]);
+    assert_eq!(listed.code, exit::OK, "{}", listed.err);
+    assert_eq!(
+        listed.out,
+        "No enabled provider fetches content with an external tool.\n"
+    );
+    assert_eq!(world.json(&["tool", "list"]), json!([]));
+    let unknown = world.msbe(&["tool", "register", "nothing", "/bin/sh", "--accept-terms"]);
+    assert_eq!(unknown.code, exit::FAILURE);
+    assert_eq!(
+        unknown.err,
+        "error: no enabled provider named \"nothing\" runs an external tool\n"
+    );
+}

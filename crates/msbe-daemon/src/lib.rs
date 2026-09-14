@@ -26,6 +26,7 @@ use msbe_rpc_schema::{
     JOB_METHODS, JOB_START_METHOD, PACK_CAPTURE_PREVIEW_METHOD, PACK_CODEC_LIST_METHOD,
     PACK_CODEC_OPTIONS_METHOD, PACK_EXPORT_PREVIEW_METHOD, PACK_IMPORT_PREVIEW_METHOD,
     PACK_UPDATE_PREVIEW_METHOD, PLAN_LOAD_METHOD, PLAN_UNLOAD_METHOD, Request, Response,
+    TOOL_FORGET_METHOD, TOOL_LIST_METHOD, TOOL_REGISTER_METHOD, ToolProvider, ToolRegister,
 };
 use msbe_secrets::SystemClock;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -37,6 +38,7 @@ mod handoff;
 mod jobs;
 mod pack;
 mod registry;
+mod tools;
 
 pub use browser::{Browser, Launcher, Process, installed_launcher};
 pub use downloads::{Downloads, Lanes};
@@ -151,6 +153,7 @@ impl Daemon {
             method if method.starts_with("download.") => self.download(id, method, &request.params),
             method if method.starts_with("handler.") => self.handler(id, method, &request.params),
             method if method.starts_with("browser.") => self.browser(id, method, &request.params),
+            method if method.starts_with("tool.") => self.tool(id, method, &request.params),
             GAME_LIST_METHOD => game_list(id, &request.params, &self.registry),
             PLAN_LOAD_METHOD => plan_load(id, request.params.clone(), &mut self.registry),
             PLAN_UNLOAD_METHOD => plan_unload(id, request.params.clone(), &mut self.registry),
@@ -274,6 +277,54 @@ impl Daemon {
             json!({ "job_id": job })
         });
         pack::respond(id, result)
+    }
+
+    /// The tool registration methods. They change files in the data directory, not instance state, so
+    /// they never wait for a job.
+    fn tool(&self, id: Value, method: &str, params: &Value) -> Response {
+        let loaded = self
+            .home()
+            .map_err(|error| error.to_string())
+            .and_then(|home| {
+                Providers::installed(&home)
+                    .map(|providers| (home, providers))
+                    .map_err(|error| error.to_string())
+            });
+        let (home, providers) = match loaded {
+            Ok(loaded) => loaded,
+            Err(message) => return Response::error(id, -32603, message),
+        };
+        let result = match method {
+            TOOL_LIST_METHOD => optional::<Empty>(params).map(|Empty {}| {
+                msbe_cli::tool_statuses(&providers, &home).map(|statuses| json!(statuses))
+            }),
+            TOOL_REGISTER_METHOD => typed::<ToolRegister>(params).map(|request| {
+                msbe_cli::register_tool(
+                    &providers,
+                    &home,
+                    &request.provider,
+                    Path::new(&request.program),
+                    request.accept_terms,
+                    &SystemClock,
+                )
+                .map(|status| json!(status))
+            }),
+            TOOL_FORGET_METHOD => typed::<ToolProvider>(params).map(|request| {
+                msbe_cli::forget_tool(&providers, &home, &request.provider)
+                    .map(|status| json!(status))
+            }),
+            _ => return Response::error(id, -32601, "method not found"),
+        };
+        match result {
+            Ok(Ok(value)) => Response::success(id, value),
+            Ok(Err(
+                error @ (msbe_cli::ToolsError::UnknownTool(_)
+                | msbe_cli::ToolsError::TermsNotAccepted { .. }
+                | msbe_cli::ToolsError::Program { .. }),
+            )) => Response::error(id, -32602, error.to_string()),
+            Ok(Err(error)) => Response::error(id, -32603, error.to_string()),
+            Err(message) => Response::error(id, -32602, message),
+        }
     }
 
     /// The browser methods. They never wait for a job: the browser holds no instance state.
@@ -1587,6 +1638,140 @@ urls = "/url"
             );
         }
         assert_eq!(state(daemon, *ids.first().unwrap()), "awaiting_user");
+    }
+
+    /// A tool program for plan `example`, whose game the tool calls `123456`.
+    const TOOL_PROGRAM: &str = r#"
+runtime = "tool-v1"
+capabilities = []
+
+[games]
+example = "123456"
+
+[provider]
+schema = 1
+id = "example-tool"
+name = "Example tool"
+[provider.source]
+type = "prefixed"
+prefix = "example-tool:"
+[provider.acquisition]
+type = "external_tool"
+[provider.policy]
+requires_auth = false
+respects_distribution_flag = false
+tos_url = "https://www.example.test/terms"
+ack_required = true
+
+[tool]
+arguments = ["fetch", "--game", "{game}", "--item", "{item}", "--into", "{output}"]
+output = ["content", "{game}", "{item}"]
+timeout = 60
+"#;
+
+    /// Installs `document` as a signed program its signer is granted.
+    fn install_program(home: &Path, document: &str) {
+        let key = SigningKey::from_bytes(&[9; 32]);
+        let payload: ProviderProgram = toml::from_str(document).unwrap();
+        let id = payload.provider.id.clone();
+        let mut envelope = ExtensionEnvelope {
+            schema: 1,
+            package_digest: ProviderProgramEnvelope::digest_for(&payload).unwrap(),
+            id: id.clone(),
+            version: "0.1.0".to_owned(),
+            provides: vec![ExtensionProvide::ProviderProgramV1],
+            host_api: HostApiRange {
+                minimum: 1,
+                maximum: 1,
+            },
+            capabilities: Vec::new(),
+            signer: "publisher".to_owned(),
+            signature: "00".repeat(64),
+            payload,
+        };
+        envelope.sign(&key).unwrap();
+        let programs = home.join("extensions/providers");
+        fs::create_dir_all(&programs).unwrap();
+        fs::write(
+            programs.join(format!("{id}.toml")),
+            toml::to_string(&ProviderProgramEnvelope(envelope)).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            home.join("extensions/trust.toml"),
+            format!(
+                "[[signer]]\nid = \"publisher\"\nkey = \"{}\"\nprograms = [\"{id}\"]\n",
+                hex(key.verifying_key().as_bytes())
+            ),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_registered_tool_fetches_an_item_the_queue_adds_and_a_changed_one_is_refused() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let mut fixture = Fixture::new();
+        install_program(&fixture.home(), TOOL_PROGRAM);
+        let program = fixture.root.path().join("bin/example-tool");
+        fs::create_dir_all(program.parent().unwrap()).unwrap();
+        fs::write(
+            &program,
+            "#!/bin/sh\nmkdir -p \"$7/content/$3/$5\" && printf 'fetched %s' \"$5\" > \"$7/content/$3/$5/item.txt\"\n",
+        )
+        .unwrap();
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+        let daemon = &mut fixture.daemon;
+
+        let unregistered = success(call(daemon, msbe_rpc_schema::TOOL_LIST_METHOD, Value::Null));
+        assert_eq!(at(&unregistered, "/0/state"), "unregistered");
+        let refused = call(
+            daemon,
+            msbe_rpc_schema::TOOL_REGISTER_METHOD,
+            json!({ "provider": "example-tool", "program": program }),
+        );
+        assert!(refusal(&refused).contains("https://www.example.test/terms"));
+        let registered = success(call(
+            daemon,
+            msbe_rpc_schema::TOOL_REGISTER_METHOD,
+            json!({ "provider": "example-tool", "program": program, "accept_terms": true }),
+        ));
+        assert_eq!(at(&registered, "/state"), "registered");
+        assert_eq!(
+            at(&registered, "/sha256"),
+            &json!(msbe_cli::program_sha256(&program).unwrap())
+        );
+
+        let id = enqueue(daemon, "example-tool:987");
+        assert!(daemon.lanes().run_next());
+        let fetched = item(daemon, id);
+        assert_eq!(at(&fetched, "/state/kind"), "downloaded", "{fetched}");
+        assert!(daemon.jobs().run_next());
+        assert_eq!(state(daemon, id), "completed");
+        assert_eq!(at(&item(daemon, id), "/added"), &json!(["987"]));
+
+        fs::write(&program, "#!/bin/sh\necho replaced\n").unwrap();
+        let changed = success(call(daemon, msbe_rpc_schema::TOOL_LIST_METHOD, Value::Null));
+        assert_eq!(at(&changed, "/0/state"), "changed");
+        let again = enqueue(daemon, "example-tool:654");
+        assert!(daemon.lanes().run_next());
+        let failed = item(daemon, again);
+        assert_eq!(at(&failed, "/state/kind"), "failed", "{failed}");
+        assert!(
+            at(&failed, "/state/message")
+                .as_str()
+                .unwrap()
+                .contains("changed after it was registered"),
+            "{failed}"
+        );
+
+        let forgotten = success(call(
+            daemon,
+            msbe_rpc_schema::TOOL_FORGET_METHOD,
+            json!({ "provider": "example-tool" }),
+        ));
+        assert_eq!(at(&forgotten, "/state"), "unregistered");
     }
 
     #[test]

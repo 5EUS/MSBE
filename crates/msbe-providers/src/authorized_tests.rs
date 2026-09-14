@@ -278,7 +278,7 @@ fn search_and_acquire(providers: &Providers) -> Result<Vec<String>, RegistryErro
     let dir = tempfile::tempdir().unwrap();
     providers
         .adapter("keyed")?
-        .acquire(&http, &file, dir.path())?;
+        .acquire(&http, &msbe_provider_api::NoTools, &file, dir.path())?;
     Ok(http.entries())
 }
 

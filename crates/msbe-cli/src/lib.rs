@@ -28,8 +28,8 @@ use msbe_pack::{
 };
 use msbe_plan_schema::Side;
 use msbe_provider_api::{
-    AdapterError, HttpClient, HttpError, ManifestError, PackOptions, PackWarning, PackageId,
-    Target, Update, UpdateCheck,
+    AdapterError, HttpClient, HttpError, ManifestError, NoTools, PackOptions, PackWarning,
+    PackageId, Target, Update, UpdateCheck,
     model::{Request, Selection},
     resolve::{
         InstallPlan, InstalledRelease, ProjectRequest, Requirement, ResolveError, Resolver,
@@ -46,7 +46,8 @@ use msbe_rpc_schema::{
     DOWNLOAD_CANCEL_METHOD, DOWNLOAD_CLEAR_METHOD, DOWNLOAD_CONFIRM_METHOD,
     DOWNLOAD_ENQUEUE_METHOD, DOWNLOAD_LIST_METHOD, DOWNLOAD_MOVE_METHOD, DOWNLOAD_PAUSE_METHOD,
     DOWNLOAD_RESUME_METHOD, DOWNLOAD_RETRY_METHOD, DownloadFileState, DownloadItem, DownloadList,
-    DownloadState, HANDOFF_SUBMIT_METHOD, HandlerOwner, HandlerStatus, HandoffReceipt,
+    DownloadState, HANDOFF_SUBMIT_METHOD, HandlerOwner, HandlerStatus, HandoffReceipt, ToolState,
+    ToolStatus,
 };
 use serde::Serialize;
 
@@ -55,8 +56,13 @@ mod end_to_end_tests;
 #[cfg(test)]
 mod fake_modrinth;
 mod handlers;
+mod tools;
 
 pub use handlers::{HandlerError, handler_status, register_handler, unregister_handler};
+pub use tools::{
+    ToolRegistration, ToolsError, forget_tool, program_sha256, register_tool, tool_registration,
+    tool_registrations, tool_statuses, tools_file,
+};
 
 /// Opens a network client on first use, so commands that never touch the network never load
 /// the platform's certificates.
@@ -169,6 +175,10 @@ enum Command {
     /// those pages hand over; it never clicks for you.
     #[command(subcommand)]
     Browser(BrowserCommand),
+    /// Register the programs you installed for providers that fetch content with an external tool.
+    /// MSBE runs a registered program only while it still has the SHA-256 it was registered with.
+    #[command(subcommand)]
+    Tool(ToolCommand),
     /// Search every provider that supports it for mods compatible with a profile target.
     Search {
         /// The instance.
@@ -306,6 +316,28 @@ enum DownloadCommand {
     },
     /// Remove completed, failed and cancelled downloads.
     Clear,
+}
+
+#[derive(Debug, Subcommand)]
+enum ToolCommand {
+    /// List the providers that fetch content with an external tool, and the program registered for
+    /// each.
+    List,
+    /// Register the program you installed for a tool provider, accepting the provider's terms.
+    Register {
+        /// The tool provider.
+        provider: String,
+        /// The program. MSBE records its SHA-256, and runs it only while it still matches.
+        program: PathBuf,
+        /// Accept the provider's terms, which `tool list` shows.
+        #[arg(long)]
+        accept_terms: bool,
+    },
+    /// Forget the program registered for a tool provider.
+    Forget {
+        /// The tool provider.
+        provider: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -769,6 +801,8 @@ enum CliError {
     #[error(transparent)]
     Handler(#[from] HandlerError),
     #[error(transparent)]
+    Tools(#[from] ToolsError),
+    #[error(transparent)]
     Pack(#[from] PackError),
     #[error(transparent)]
     Fs(#[from] msbe_fsops::Error),
@@ -948,7 +982,9 @@ where
             drop(report(&error, console.err));
             match &error {
                 CliError::Instance(InstanceError::Conflicts(_)) => exit::CONFLICT,
-                CliError::Adapter(AdapterError::ActionRequired { .. }) => exit::POLICY,
+                CliError::Adapter(AdapterError::ActionRequired { .. } | AdapterError::Tool(_)) => {
+                    exit::POLICY
+                }
                 CliError::Pack(error) => pack_exit(error.code()),
                 _ => exit::FAILURE,
             }
@@ -1257,6 +1293,7 @@ fn execute(cli: &Cli, console: &mut Console<'_>) -> Result<u8, CliError> {
         Command::Handoff { .. } => Err(CliError::DaemonOnly("handoff")),
         Command::Download(_) => Err(CliError::DaemonOnly("download")),
         Command::Browser(_) => Err(CliError::DaemonOnly("browser")),
+        Command::Tool(command) => tool_command(&providers, &home, command, console),
         Command::Handler(command) => handler_command(&providers, command, console),
         Command::Search {
             instance,
@@ -2000,6 +2037,88 @@ fn verify_extension_envelope(
 }
 
 /// Lists the extensions installed in `home`, and whether each runs.
+/// Lists, registers and forgets the programs registered for tool providers.
+fn tool_command(
+    providers: &Providers,
+    home: &Home,
+    command: &ToolCommand,
+    console: &mut Console<'_>,
+) -> Result<u8, CliError> {
+    match command {
+        ToolCommand::List => {
+            let statuses = tool_statuses(providers, home)?;
+            console.emit(&statuses, |out, statuses| {
+                if statuses.is_empty() {
+                    return writeln!(
+                        out,
+                        "No enabled provider fetches content with an external tool."
+                    );
+                }
+                statuses
+                    .iter()
+                    .try_for_each(|status| print_tool(out, status))
+            })?;
+        }
+        ToolCommand::Register {
+            provider,
+            program,
+            accept_terms,
+        } => {
+            let program = absolute(program)?;
+            let status = register_tool(
+                providers,
+                home,
+                provider,
+                &program,
+                *accept_terms,
+                &msbe_secrets::SystemClock,
+            )?;
+            console.emit(&status, |out, status| {
+                writeln!(
+                    out,
+                    "Registered a program for {}. MSBE runs it only while it still has the SHA-256 below.",
+                    status.name
+                )?;
+                print_tool(out, status)
+            })?;
+        }
+        ToolCommand::Forget { provider } => {
+            let status = forget_tool(providers, home, provider)?;
+            console.emit(&status, print_tool)?;
+        }
+    }
+    Ok(exit::OK)
+}
+
+fn print_tool(out: &mut dyn Write, status: &ToolStatus) -> io::Result<()> {
+    let label = format!("{} ({})", status.name, status.provider);
+    match (status.state, &status.program) {
+        (ToolState::Registered, Some(program)) => writeln!(out, "{label}: runs {program}")?,
+        (ToolState::Changed, Some(program)) => writeln!(
+            out,
+            "{label}: {program} changed after it was registered, and does not run until you register it again"
+        )?,
+        (ToolState::Missing, Some(program)) => {
+            writeln!(
+                out,
+                "{label}: nothing is at {program}; register the program again"
+            )?;
+        }
+        _ => writeln!(
+            out,
+            "{label}: no program registered. `msbe tool register {} PROGRAM --accept-terms` registers the one you installed.",
+            status.provider
+        )?,
+    }
+    if let Some(sha256) = &status.sha256 {
+        writeln!(out, "  SHA-256 {sha256}")?;
+    }
+    if !status.terms.is_empty() {
+        writeln!(out, "  Terms: {}", status.terms)?;
+    }
+    Ok(())
+}
+
 /// Reports and changes which application opens provider links, where the platform registers them.
 fn handler_command(
     providers: &Providers,
@@ -2760,7 +2879,7 @@ impl Fetch<'_> {
             return Ok(());
         }
         let adapter = self.providers.adapter(&project.provider)?;
-        let acquired = adapter.acquire(self.http, &selection.file, self.scratch)?;
+        let acquired = adapter.acquire(self.http, &NoTools, &selection.file, self.scratch)?;
         self.artifacts.push(Artifact {
             provider: Some(adapter.provenance(&selection.release, &acquired)),
             module: selection
@@ -2814,7 +2933,8 @@ fn update(
             let mut artifacts = Vec::with_capacity(updates.len());
             for (module, provenance, update) in &updates {
                 let adapter = providers.adapter(&provenance.provider)?;
-                let acquired = adapter.acquire(client.as_ref(), &update.file, scratch.path())?;
+                let acquired =
+                    adapter.acquire(client.as_ref(), &NoTools, &update.file, scratch.path())?;
                 artifacts.push(Artifact {
                     provider: Some(adapter.provenance(&update.release, &acquired)),
                     module: Some((*module).clone()),

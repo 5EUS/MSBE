@@ -164,6 +164,13 @@ pub enum Download {
         /// The URI scheme of the link the page hands over.
         scheme: String,
     },
+    /// A tool the user installed and registered fetches it, and MSBE imports what the tool leaves.
+    Tool {
+        /// The tool's identifier for the game.
+        game: String,
+        /// The tool's identifier for the item.
+        item: String,
+    },
 }
 
 impl Download {
@@ -171,7 +178,7 @@ impl Download {
     pub fn url(&self) -> Option<&str> {
         match self {
             Self::Direct { url } => Some(url),
-            Self::UserAction { .. } | Self::BrowserAssisted { .. } => None,
+            Self::UserAction { .. } | Self::BrowserAssisted { .. } | Self::Tool { .. } => None,
         }
     }
 }
@@ -188,6 +195,11 @@ impl fmt::Display for Download {
                 formatter,
                 "the provider hands downloads to mod managers as {scheme}:// links, which this \
                  build cannot receive yet; download it from {page}, then add the saved file"
+            ),
+            Self::Tool { item, .. } => write!(
+                formatter,
+                "a tool you install and register fetches {item}; queue it with msbe download add, \
+                 or add content you obtained yourself"
             ),
         }
     }

@@ -212,6 +212,31 @@ pub fn provider_token_variables() -> Vec<OsString> {
         .collect()
 }
 
+/// The environment an external tool is run with: the search path, the home directory and the
+/// locale, and nothing else of MSBE's own environment, so no credential reaches the tool. Windows
+/// also needs `SystemRoot` and `USERPROFILE` to start a process at all.
+pub fn tool_environment() -> Vec<(OsString, OsString)> {
+    let mut kept = vec![
+        "PATH",
+        "HOME",
+        "LANG",
+        "LANGUAGE",
+        "LC_ALL",
+        "LC_CTYPE",
+        "LC_MESSAGES",
+        "LC_NUMERIC",
+        "LC_TIME",
+        "LC_COLLATE",
+        "LC_MONETARY",
+    ];
+    if cfg!(windows) {
+        kept.extend(["SystemRoot", "USERPROFILE"]);
+    }
+    kept.into_iter()
+        .filter_map(|name| env(name).map(|value| (OsString::from(name), value)))
+        .collect()
+}
+
 /// The freedesktop.org base directories and desktop names that decide which application opens a
 /// link, as the environment sets them.
 #[cfg(all(unix, not(target_os = "macos")))]

@@ -457,7 +457,9 @@ fn weak_published_digests_are_verified_and_kept_for_hash_lookups() {
         .unwrap();
     let file = release.primary_file().unwrap().clone();
     let good = tempfile::tempdir().unwrap();
-    let acquired = adapter.acquire(&http, &file, good.path()).unwrap();
+    let acquired = adapter
+        .acquire(&http, &msbe_provider_api::NoTools, &file, good.path())
+        .unwrap();
     assert!(
         !adapter
             .provenance(&release, &acquired)
@@ -480,7 +482,7 @@ fn weak_published_digests_are_verified_and_kept_for_hash_lookups() {
     );
     let bad = tempfile::tempdir().unwrap();
     assert!(matches!(
-        adapter.acquire(&http, &file, bad.path()),
+        adapter.acquire(&http, &msbe_provider_api::NoTools, &file, bad.path()),
         Err(AdapterError::Acquisition(AcquisitionError::HashMismatch {
             algorithm: "SHA-1",
             ..
@@ -537,7 +539,12 @@ fn files_msbe_may_not_download_send_the_user_to_their_page() {
 
     let dir = tempfile::tempdir().unwrap();
     let refused = adapter
-        .acquire(&http, &download("501"), dir.path())
+        .acquire(
+            &http,
+            &msbe_provider_api::NoTools,
+            &download("501"),
+            dir.path(),
+        )
         .unwrap_err();
     assert!(matches!(refused, AdapterError::ActionRequired { .. }));
     assert!(

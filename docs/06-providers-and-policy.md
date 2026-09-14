@@ -103,11 +103,14 @@ release file carries the `Download` it allows:
 | `direct_https`     | downloads over HTTPS and verifies every published size and digest. A file its author flags as not distributable, or published with no download URL, is still a user download.            |
 | `user_action`      | never downloads. Each file names the page to fetch it from; the user adds the saved file.                                                                                               |
 | `browser_assisted` | as `user_action`, and names the URI `scheme` the page's mod-manager button hands over, such as `nxm`. Capturing and redeeming that link (§6.6) is not implemented yet.                  |
+| `external_tool`    | runs the program the user registered for the provider, which fetches the item through its own flow; MSBE imports what it leaves. Only the `tool-v1` runtime serves it (§6.5).           |
 
 `Adapter::acquire` refuses a file that is not a direct download with `AdapterError::ActionRequired`,
 which names the page, before any transfer: the CLI exits with the policy code, and a pack import
-reports `user_action_required`. `local_import` and `steamcmd` remain future primitives that
-require a runtime implementation and policy review before a manifest can select them.
+reports `user_action_required`. A file a registered tool fetches is fetched only through the
+download queue; the CLI's `add` and `update` and pack import refuse it with a message. `local_import`
+remains a future primitive that requires a runtime implementation and policy review before a
+manifest can select it.
 
 The schema above is the M1 subset. The target model is a **provider program**: a versioned TOML
 document interpreted by a reviewed, fail-closed runtime. The program is the default way to add a
@@ -463,6 +466,32 @@ Possible future conveniences are limited to local, user-initiated operations: im
 checking whether its recorded content digest changed, and opening the item's public page in the
 user's browser. Background downloads, subscription synchronization, and update polling remain
 out of scope unless Valve publishes and permits a suitable integration path.
+
+**Status: the tool seam is implemented; no tool program ships.** A tool integration is a provider
+program on the reviewed `tool-v1` runtime, with `external_tool` acquisition. Its `[tool]` section
+lists the tool's arguments as literal tokens or a whole-token `{output}`, `{game}` or `{item}`,
+where the item lands beneath `{output}`, and a timeout. A game and an item must start with a letter
+or digit and contain only letters, digits, `-`, `_`, `.` and `+`, so neither can be read as an
+option or leave a directory. Validation refuses `tool-v1` without `[tool]`, `[tool]` or
+`external_tool` on another runtime, any other section or capability, `requires_auth = true` and
+`ack_required = false`. An item resolves to one release, named `tool`, for the target's game; the
+program has no updates and nothing polls.
+
+`msbe tool register PROVIDER PROGRAM --accept-terms` is the explicit enabling: it records the
+program's path and SHA-256 and acknowledges the provider's terms. `msbe tool list` reports each tool
+provider's program as registered, changed or missing. The daemon's download queue runs the program
+only while it still has its recorded SHA-256; a changed program is refused until it is registered
+again. It runs with its arguments as an array and no shell, an environment holding only `PATH`,
+`HOME` and the locale (with `SystemRoot` and `USERPROFILE` on Windows), fresh working and output
+directories, and no standard input. What it prints is kept to its last 64 KiB and never parsed; a
+failure repeats the last 2 KiB, redacted. When the tool exits, passes its timeout, or its download is
+cancelled, its process group is stopped on Unix; on Windows only the process itself is.
+
+A non-zero exit, or nothing where the item should land, fails the download with a message telling
+the user to complete the tool's own sign-in or to add content they obtained themselves. What the tool
+leaves is imported as a directory, under the same rules as an extracted archive: no links or special
+files, safe and non-colliding names, and the same size and count limits. Its provenance digests are
+those of a manifest listing each file's SHA-256 and path.
 
 ## 6.6 The `nxm://` path (why free Nexus users are fine)
 

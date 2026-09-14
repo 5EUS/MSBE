@@ -8,6 +8,7 @@ use std::{
 
 use msbe_core::{config::Home, instance::ExtensionPin};
 use msbe_fsops::Digest;
+use msbe_provider_api::manifest::Acquisition;
 use msbe_provider_api::{
     Adapter, AdapterError, Catalog, ExtensionEnvelope, Handoff, HeaderError, HttpClient,
     ManifestError, Overlay, OverlayError, PackCodec, PackCodecDescriptor, PackCodecError,
@@ -437,6 +438,20 @@ impl Providers {
             .handoff_schemes()
             .map(|(scheme, provider)| (scheme.to_owned(), provider.id.clone()))
             .collect()
+    }
+
+    /// Every enabled provider that fetches content with a tool the user registers, ordered by id.
+    pub fn tool_providers(&self) -> Vec<&Provider> {
+        self.catalog
+            .providers()
+            .filter(|provider| provider.acquisition == Acquisition::ExternalTool {})
+            .collect()
+    }
+
+    /// The digest of the program serving `provider`, when a program serves it: what an
+    /// acknowledgement of its terms is recorded against.
+    pub fn program_digest(&self, provider: &str) -> Option<&str> {
+        self.programs.get(provider).map(String::as_str)
     }
 
     /// The overlay entries every registered adapter ships.

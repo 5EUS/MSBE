@@ -43,6 +43,17 @@ pub const BROWSER_OPEN_METHOD: &str = "browser.open";
 /// Closes the MSBE browser: returns the [`BrowserStatus`].
 pub const BROWSER_CLOSE_METHOD: &str = "browser.close";
 
+/// Lists every enabled provider that runs an external tool, and the program registered for each:
+/// returns a [`ToolStatus`] for each.
+pub const TOOL_LIST_METHOD: &str = "tool.list";
+
+/// Registers the program the user installed for a tool provider, pinning its SHA-256, and records
+/// that the provider's terms were accepted: [`ToolRegister`] returns its [`ToolStatus`].
+pub const TOOL_REGISTER_METHOD: &str = "tool.register";
+
+/// Forgets the program registered for a tool provider: [`ToolProvider`] returns its [`ToolStatus`].
+pub const TOOL_FORGET_METHOD: &str = "tool.forget";
+
 /// Reports which application opens links: [`HandlerStatusRequest`] returns a [`HandlerStatus`]
 /// for the scheme named, or one for every scheme an enabled provider hands links over in.
 pub const HANDLER_STATUS_METHOD: &str = "handler.status";
@@ -489,6 +500,61 @@ pub struct BrowserOpen {
     /// Whether to go to the next page once a download or link arrives. Unchanged when absent.
     #[serde(default)]
     pub auto_advance: Option<bool>,
+}
+
+/// Whether a tool provider's registered program can run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolState {
+    /// No program is registered.
+    Unregistered,
+    /// The registered program is there and still has the SHA-256 it was registered with.
+    Registered,
+    /// The registered program's SHA-256 changed since it was registered, so it does not run until
+    /// it is registered again.
+    Changed,
+    /// Nothing is at the registered program's path.
+    Missing,
+}
+
+/// A tool provider, as [`TOOL_LIST_METHOD`] reports it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolStatus {
+    /// The provider.
+    pub provider: String,
+    /// The provider's display name.
+    pub name: String,
+    /// The terms registering the program accepts.
+    pub terms: String,
+    /// The registered program.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub program: Option<String>,
+    /// The SHA-256 the program was registered with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+    /// Whether the program can run.
+    pub state: ToolState,
+}
+
+/// Parameters of [`TOOL_REGISTER_METHOD`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolRegister {
+    /// The tool provider.
+    pub provider: String,
+    /// The absolute path of the program the user installed.
+    pub program: String,
+    /// Whether the user accepts the provider's terms, which registering requires.
+    #[serde(default)]
+    pub accept_terms: bool,
+}
+
+/// Parameters of [`TOOL_FORGET_METHOD`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolProvider {
+    /// The tool provider.
+    pub provider: String,
 }
 
 /// Which application opens a scheme's links.

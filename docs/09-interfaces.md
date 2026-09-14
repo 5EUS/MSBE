@@ -52,6 +52,7 @@ msbe download  add | list | pause | resume | cancel | retry | move | confirm | c
 msbe handoff   <uri>            # a provider link from the browser, into the download queue
 msbe handler   status [<scheme>] | register <scheme> [--replace] | unregister <scheme>
 msbe browser   status | open [<id>] [--auto-advance|--no-auto-advance] | close
+msbe tool      list | register <provider> <program> --accept-terms | forget <provider>
 
 msbe doctor                     # environment diagnosis
 msbe bisect                     # find the mod that broke it

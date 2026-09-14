@@ -280,6 +280,9 @@ preview, rather than copied into the game's mod directory.
 | `browser status`                                                                                                                                 | **Implemented** | Show the MSBE browser and how many downloads wait on a page.                |
 | `browser open [ID] [--auto-advance\|--no-auto-advance]`                                                                                          | **Implemented** | Send the MSBE browser to a waiting page; it captures what the page hands over.|
 | `browser close`                                                                                                                                  | **Implemented** | Close the MSBE browser.                                                     |
+| `tool list`                                                                                                                                      | **Implemented** | List tool providers and the program registered for each.                    |
+| `tool register PROVIDER PROGRAM --accept-terms`                                                                                                  | **Implemented** | Register an installed tool program by SHA-256 and accept the terms.         |
+| `tool forget PROVIDER`                                                                                                                           | **Implemented** | Forget the program registered for a tool provider.                          |
 
 Pack commands are codec-driven: `pack formats` and `pack options` list what the reviewed registry
 provides, and the CLI names no format itself. Every pack command previews first. `--dry-run`
@@ -371,6 +374,20 @@ whose page hands over the file itself waits for the browser, or for you to add t
 "$MSBE" browser close
 ```
 
+Tool commands register the programs you installed for providers that fetch content with an external
+tool ([06 §6.5](06-providers-and-policy.md#65-steam-workshop-steamcmd-or-user-supplied-content)).
+`tool register` records the program's SHA-256 and accepts the provider's terms, which `tool list`
+shows; it refuses without `--accept-terms`. The download queue runs the program only while it still
+has that SHA-256, so a program that changed must be registered again. Queue items with `download
+add`; `add` and `update` refuse a file only a tool can fetch. Pass an absolute path, since the daemon
+resolves it.
+
+```sh
+"$MSBE" tool list
+"$MSBE" tool register example-tool "$HOME/tools/example-tool" --accept-terms
+"$MSBE" download add mygame example-tool:123456
+```
+
 ## 7. Planned command surface
 
 These commands are part of the documented product direction, but they are not available
@@ -385,7 +402,7 @@ in the current binary. Their names and arguments can change before implementatio
 | Diagnostics and store     | `doctor`, `store`, `bundle`                                                           | M2 and later              |
 | Daemon control            | `daemon start`, `stop`, `status`; Windows named-pipe transport                        | M1 follow-up              |
 | Credentials and links     | `auth`                                                                                | M5                        |
-| Steam Workshop            | Opt-in user-installed SteamCMD acquisition or local import; optional item-ID metadata | Future, subject to policy |
+| Steam Workshop            | Local directory import; optional item-ID metadata; a tool program for a user-installed SteamCMD| Future, subject to policy |
 | Game launch               | `launch`                                                                              | Future                    |
 
 M2 also adds loader bootstrap, structured config merge, pack import, lockfiles, and reproducible
@@ -398,8 +415,10 @@ acquisition stack, the desktop UI, a signed registry, and Bethesda/KSP support. 
 
 ### 7.1 Planned Steam Workshop acquisition and imports
 
-Steam Workshop acquisition is **not implemented**. The planned opt-in adapter may invoke a
-SteamCMD binary supplied by the user to acquire content their account is entitled to receive.
+Steam Workshop acquisition is **not implemented**, but the seam it will use is: a provider program
+on the `tool-v1` runtime runs a program the user registered with `msbe tool register`. No SteamCMD
+program ships. That program may invoke a SteamCMD binary supplied by the user to acquire content
+their account is entitled to receive.
 MSBE will not bundle or modify SteamCMD, retain Steam credentials, implement Steam-client or
 depot protocols, access manifests, or bypass entitlement, subscription, rate-limit, or
 content-owner controls.

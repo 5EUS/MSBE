@@ -18,7 +18,7 @@ use std::{
 use msbe_provider_api::{
     Accounts, AcquiredArtifact, Adapter, AdapterError, ApiHeaders, Handoff, Header, HttpClient,
     HttpError, HttpRequest, HttpResponse, ManifestError, Origin, PackageId, Provenance, Provider,
-    Rate, Releases, Search, Target, UpdateCheck, Updates,
+    Rate, Releases, Search, Target, ToolHost, UpdateCheck, Updates,
     model::{Account, HandoffTicket, Project, Release, ReleaseFile, Request, SearchResult},
     without_query,
 };
@@ -221,10 +221,11 @@ impl Adapter for Authorized {
     fn acquire(
         &self,
         http: &dyn HttpClient,
+        tools: &dyn ToolHost,
         file: &ReleaseFile,
         dir: &Path,
     ) -> Result<AcquiredArtifact, AdapterError> {
-        self.adapter.acquire(&self.http(http), file, dir)
+        self.adapter.acquire(&self.http(http), tools, file, dir)
     }
 
     fn provenance(&self, release: &Release, acquired: &AcquiredArtifact) -> Provenance {

@@ -26,6 +26,8 @@ mod runtime;
 mod runtime_tests;
 #[cfg(test)]
 mod thunderstore_tests;
+#[cfg(test)]
+mod tool_tests;
 
 pub use authoring::{
     AuthoringError, SignedCodec, SignedProgram, SignerKey, VerifiedCodec, VerifiedExtension,

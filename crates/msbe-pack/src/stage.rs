@@ -18,7 +18,7 @@ use msbe_core::instance::{
 };
 use msbe_fsops::{Digest, RelPath};
 use msbe_provider_api::{
-    EnvironmentRequirement, HttpClient, PackImportContext, PackImportPlan, PackOptions,
+    EnvironmentRequirement, HttpClient, NoTools, PackImportContext, PackImportPlan, PackOptions,
     PackRequirement, PackWarning, PackageId, RequirementSource, Target,
     model::{ReleaseFile, Request, Selection},
 };
@@ -937,7 +937,7 @@ impl<'a> Fetcher<'a> {
                         ),
                     )
                 })?;
-            let acquired = adapter.acquire(http, &file, self.scratch.path())?;
+            let acquired = adapter.acquire(http, &NoTools, &file, self.scratch.path())?;
             return Ok(Acquired {
                 path: acquired.path.clone(),
                 provenance: Some(adapter.provenance(&release, &acquired)),
@@ -971,7 +971,7 @@ impl<'a> Fetcher<'a> {
         let http = self.client.as_deref().ok_or_else(|| {
             PackError::issue(IssueCode::HostFailure, "no network client is available")
         })?;
-        let acquired = adapter.acquire(http, &selection.file, self.scratch.path())?;
+        let acquired = adapter.acquire(http, &NoTools, &selection.file, self.scratch.path())?;
         Ok(Acquired {
             path: acquired.path.clone(),
             provenance: Some(adapter.provenance(&selection.release, &acquired)),
