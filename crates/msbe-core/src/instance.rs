@@ -852,6 +852,17 @@ pub struct ModExclusion {
     pub file: ExcludedFile,
 }
 
+/// One deployment still in effect, as the journal records it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct JournalEntry {
+    /// The journal transaction that deployed it.
+    pub txn: TxnId,
+    /// The profile it deployed.
+    pub profile: Name,
+    /// How many managed files it left.
+    pub files: usize,
+}
+
 /// A path that more than one mod would place, with different contents.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Conflict {
@@ -2713,6 +2724,64 @@ impl Instance {
         Ok(undone)
     }
 
+    /// The deployments still in effect, oldest first. The last is what is deployed now.
+    pub fn journal(&self) -> Vec<JournalEntry> {
+        self.state
+            .history
+            .iter()
+            .map(|deployed| JournalEntry {
+                txn: deployed.txn,
+                profile: deployed.profile.clone(),
+                files: deployed.files.len(),
+            })
+            .collect()
+    }
+
+    /// Undoes every deployment after `txn`, newest first, so the instance is as `txn` left it.
+    /// Returns the transactions undone, which is none when `txn` is already the latest.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InstanceError::UnknownTransaction`] when `txn` is not a deployment still in effect,
+    /// and otherwise the first error restoring files; transactions undone before it stay undone.
+    pub fn rollback_to(&mut self, txn: TxnId) -> Result<Vec<TxnId>, InstanceError> {
+        if !self
+            .state
+            .history
+            .iter()
+            .any(|deployed| deployed.txn == txn)
+        {
+            return Err(InstanceError::UnknownTransaction(txn));
+        }
+        let mut undone = Vec::new();
+        while self
+            .state
+            .history
+            .last()
+            .is_some_and(|deployed| deployed.txn != txn)
+        {
+            match self.rollback()? {
+                Some(rolled_back) => undone.push(rolled_back),
+                None => break,
+            }
+        }
+        Ok(undone)
+    }
+
+    /// The paths more than one of `profile`'s mods would place with different contents. None
+    /// means the profile deploys cleanly, as far as conflicts go.
+    ///
+    /// # Errors
+    ///
+    /// Returns any error planning the deployment other than the conflicts themselves.
+    pub fn conflicts(&self, profile: &Name) -> Result<Vec<Conflict>, InstanceError> {
+        match self.plan_deploy(profile) {
+            Ok(_) => Ok(Vec::new()),
+            Err(InstanceError::Conflicts(conflicts)) => Ok(conflicts),
+            Err(error) => Err(error),
+        }
+    }
+
     /// Re-hashes every deployed file against what was deployed.
     ///
     /// # Errors
@@ -3195,6 +3264,10 @@ pub enum InstanceError {
     /// A profile references a blob the store does not hold.
     #[error("the store does not hold blob {0}")]
     MissingBlob(Digest),
+
+    /// A transaction is not a deployment still in effect.
+    #[error("transaction {0} is not a deployment still in effect")]
+    UnknownTransaction(TxnId),
 
     /// An operation needs the profile to be the deployed one.
     #[error("profile {0} is not the deployed profile; deploy it first")]

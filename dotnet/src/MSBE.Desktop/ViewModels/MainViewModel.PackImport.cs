@@ -6,6 +6,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 
 using MSBE.Client;
+using MSBE.Desktop.Resources;
 
 namespace MSBE.Desktop.ViewModels;
 
@@ -50,13 +51,13 @@ internal sealed partial class MainViewModel
 
     private static string DescribeAction(string action) => action switch
     {
-        "in-store" => "Already stored",
-        "embedded" => "Embedded",
-        "acquire" => "Download",
-        "user-action" => "User action",
-        "reuse" => "Unchanged",
-        "derive" => "Derived",
-        "missing" => "Missing",
+        "in-store" => Strings.PackActionInStore,
+        "embedded" => Strings.PackActionEmbedded,
+        "acquire" => Strings.PackActionAcquire,
+        "user-action" => Strings.PackGroupUserAction,
+        "reuse" => Strings.PackActionReuse,
+        "derive" => Strings.PackGroupDerived,
+        "missing" => Strings.PackActionMissing,
         _ => action,
     };
 
@@ -83,7 +84,7 @@ internal sealed partial class MainViewModel
             await this.RunPackJobAsync(isUpdate ? PackRpc.UpdateExecute : PackRpc.ImportExecute, this.importPlan).ConfigureAwait(true);
             this.ClearImportPreview();
             await this.LoadSelectedInstanceAsync(instance).ConfigureAwait(true);
-            this.StatusMessage = isUpdate ? $"Updated the pack layer of {target}." : $"Imported the pack into {target}.";
+            this.StatusMessage = isUpdate ? Strings.FormatPackUpdated(target) : Strings.FormatPackImported(target);
         }
         catch (Exception exception) when (exception is IOException or SocketException or JsonException or InvalidOperationException)
         {
@@ -137,7 +138,7 @@ internal sealed partial class MainViewModel
             foreach (JsonElement change in preview.GetProperty("changes").EnumerateArray())
             {
                 string subject = Text(change, "subject");
-                this.ImportPreviewItems.Add(new PackPreviewItem("Reapply change", subject.Length == 0 ? Text(change, "kind") : $"{Text(change, "kind")} {subject}"));
+                this.ImportPreviewItems.Add(new PackPreviewItem(Strings.PackReapplyChange, subject.Length == 0 ? Text(change, "kind") : $"{Text(change, "kind")} {subject}"));
             }
 
             foreach (JsonElement conflict in preview.GetProperty("conflicts").EnumerateArray())

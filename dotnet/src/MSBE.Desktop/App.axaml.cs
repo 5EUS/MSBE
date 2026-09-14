@@ -20,7 +20,11 @@ internal partial class App : Application
     {
         if (this.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            var viewModel = new MainViewModel(new UnixSocketMsbeClient(), new TopLevelFolderLauncher(() => desktop.MainWindow));
+            var viewModel = new MainViewModel(
+                new UnixSocketMsbeClient(),
+                new TopLevelFolderLauncher(() => desktop.MainWindow),
+                time: null,
+                new TopLevelLinkLauncher(() => desktop.MainWindow));
             desktop.MainWindow = new MainWindow { DataContext = viewModel };
 
             // macOS delivers the links the application bundle declares as activations, not arguments.

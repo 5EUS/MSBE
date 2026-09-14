@@ -71,7 +71,8 @@ public static class BrowserRpc
         Text(result, "url"),
         Text(result, "title"),
         result.TryGetProperty("auto_advance", out JsonElement advance) && advance.ValueKind == JsonValueKind.True,
-        Text(result, "message"));
+        Text(result, "message"),
+        !result.TryGetProperty("installed", out JsonElement installed) || installed.ValueKind != JsonValueKind.False);
 
     private static string? Text(JsonElement element, string property) =>
         element.TryGetProperty(property, out JsonElement value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;

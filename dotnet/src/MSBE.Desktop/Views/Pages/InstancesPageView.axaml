@@ -1,25 +1,26 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:res="using:MSBE.Desktop.Resources"
              xmlns:vm="using:MSBE.Desktop.ViewModels"
              x:Class="MSBE.Desktop.Views.Pages.InstancesPageView"
              x:DataType="vm:MainViewModel">
   <Grid Margin="8" RowDefinitions="Auto,Auto,*" RowSpacing="16">
     <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
       <StackPanel Spacing="3">
-        <TextBlock Classes="sectionHeading" Text="Instances" />
-        <TextBlock Classes="caption" Text="Registered installations managed by the local daemon." />
+        <TextBlock Classes="sectionHeading" Text="{x:Static res:Strings.WorkspaceInstances}" />
+        <TextBlock Classes="caption" Text="{x:Static res:Strings.InstancesRegisteredInstallationsManagedByTheLocal}" />
       </StackPanel>
-      <Button Grid.Column="1" Classes="secondary-button" Content="Refresh" Command="{Binding RefreshInstancesCommand}" />
-      <Button Grid.Column="2" Classes="primary-button" Content="Add instance" Command="{Binding AddInstanceCommand}" />
+      <Button Grid.Column="1" Classes="secondary-button" Content="{x:Static res:Strings.Refresh}" Command="{Binding RefreshInstancesCommand}" />
+      <Button Grid.Column="2" Classes="primary-button" Content="{x:Static res:Strings.InstancesAddInstance}" Command="{Binding AddInstanceCommand}" />
     </Grid>
 
     <Border Grid.Row="1" Classes="error-banner" IsVisible="{Binding HasInstanceError}">
       <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
         <StackPanel Spacing="2">
-          <TextBlock FontWeight="SemiBold" Text="Instances could not be loaded" />
+          <TextBlock FontWeight="SemiBold" Text="{x:Static res:Strings.InstancesInstancesCouldNotBeLoaded}" />
           <TextBlock Classes="caption" Text="{Binding InstanceError}" TextWrapping="Wrap" />
         </StackPanel>
-        <Button Grid.Column="1" Content="Try again" Command="{Binding RefreshInstancesCommand}" />
+        <Button Grid.Column="1" Content="{x:Static res:Strings.InstancesTryAgain}" Command="{Binding RefreshInstancesCommand}" />
       </Grid>
     </Border>
 
@@ -32,9 +33,9 @@
                       MaxWidth="320"
                       Spacing="6"
                       IsVisible="{Binding !HasSelectedInstance}">
-            <TextBlock HorizontalAlignment="Center" FontWeight="SemiBold" Text="Choose an instance from the library" />
-            <TextBlock Classes="caption" TextAlignment="Center" TextWrapping="Wrap" Text="Select an installation in the left sidebar, or register a new one to begin." />
-            <Button Margin="0,8,0,0" HorizontalAlignment="Center" Classes="primary-button" Content="Add instance" Command="{Binding AddInstanceCommand}" />
+            <TextBlock HorizontalAlignment="Center" FontWeight="SemiBold" Text="{x:Static res:Strings.InstancesChooseAnInstanceFromTheLibrary}" />
+            <TextBlock Classes="caption" TextAlignment="Center" TextWrapping="Wrap" Text="{x:Static res:Strings.InstancesSelectAnInstallationInTheLeft}" />
+            <Button Margin="0,8,0,0" HorizontalAlignment="Center" Classes="primary-button" Content="{x:Static res:Strings.InstancesAddInstance}" Command="{Binding AddInstanceCommand}" />
           </StackPanel>
 
           <Grid RowDefinitions="Auto,Auto,*" RowSpacing="20" IsVisible="{Binding HasSelectedInstance}">
@@ -45,54 +46,54 @@
               </StackPanel>
               <Button Grid.Column="1"
                       Classes="secondary-button"
-                      Content="Rollback latest"
+                      Content="{x:Static res:Strings.InstancesRollbackLatest}"
                       IsEnabled="{Binding CanRollbackLatest}"
                       Command="{Binding RollbackLatestCommand}" />
               <Button Grid.Column="2"
                       Classes="danger-button"
-                      Content="Remove instance"
+                      Content="{x:Static res:Strings.InstancesRemoveInstance}"
                       Command="{Binding RemoveSelectedInstanceCommand}"
-                      ToolTip.Tip="Restore managed files and remove this instance from MSBE. The game folder is kept." />
+                      ToolTip.Tip="{x:Static res:Strings.InstancesRestoreManagedFilesAndRemoveThis}" />
             </Grid>
             <Grid Grid.Row="1" ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="24" RowSpacing="10">
-              <TextBlock Classes="detail-label" Text="GAME" />
+              <TextBlock Classes="detail-label" Text="{x:Static res:Strings.InstancesGame}" />
               <TextBlock Grid.Column="1" Text="{Binding SelectedGameName}" />
-              <TextBlock Grid.Row="1" Classes="detail-label" Text="TARGET" />
+              <TextBlock Grid.Row="1" Classes="detail-label" Text="{x:Static res:Strings.InstancesTarget}" />
               <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding SelectedInstanceTarget}" />
-              <TextBlock Grid.Row="2" Classes="detail-label" Text="DEPLOYMENT" />
+              <TextBlock Grid.Row="2" Classes="detail-label" Text="{x:Static res:Strings.InstancesDeployment}" />
               <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding SelectedInstanceDeployment}" />
             </Grid>
 
             <Grid Grid.Row="2" RowDefinitions="Auto,Auto,Auto,*" RowSpacing="10">
               <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="10">
                 <StackPanel Spacing="2">
-                  <TextBlock FontSize="15" FontWeight="SemiBold" Text="Mods" />
-                  <TextBlock Classes="caption" Text="{Binding Mods.Count, StringFormat={}{0} in this profile}" />
+                  <TextBlock FontSize="15" FontWeight="SemiBold" Text="{x:Static res:Strings.InstancesMods}" />
+                  <TextBlock Classes="caption" Text="{Binding Mods.Count, StringFormat={x:Static res:Strings.InstancesModCount}}" />
                 </StackPanel>
-                <TextBlock Grid.Column="1" Classes="detail-label" VerticalAlignment="Center" Text="PROFILE" />
+                <TextBlock Grid.Column="1" Classes="detail-label" VerticalAlignment="Center" Text="{x:Static res:Strings.InstancesProfile}" />
                 <StackPanel Grid.Column="2" MinWidth="160" Spacing="2">
-                  <ComboBox ItemsSource="{Binding Profiles}" SelectedItem="{Binding SelectedProfile}" />
+                  <ComboBox ItemsSource="{Binding Profiles}" SelectedItem="{Binding SelectedProfile}" AutomationProperties.Name="{x:Static res:Strings.AccessProfile}" />
                   <TextBlock Classes="caption" Text="{Binding SelectedProfileTargetSummary}" />
                 </StackPanel>
                 <Button Grid.Column="3"
                         Classes="secondary-button"
-                        Content="Profiles"
+                        Content="{x:Static res:Strings.InstancesProfiles}"
                         Command="{Binding OpenProfileManagerCommand}" />
                 <Button Grid.Column="4"
                         Classes="primary-button"
-                        Content="Review deployment"
+                        Content="{x:Static res:Strings.InstancesReviewDeployment}"
                         Command="{Binding PreviewDeploymentCommand}" />
               </Grid>
 
               <Grid Grid.Row="1" ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="8">
-                <TextBox Text="{Binding ModSource}" PlaceholderText="Local path, HTTPS URL, or provider:project">
+                <TextBox Text="{Binding ModSource}" PlaceholderText="{x:Static res:Strings.InstancesLocalPathHttpsUrlOrProvider}" AutomationProperties.Name="{x:Static res:Strings.InstancesLocalPathHttpsUrlOrProvider}">
                   <TextBox.KeyBindings>
                     <KeyBinding Gesture="Enter" Command="{Binding AddModSourceCommand}" />
                   </TextBox.KeyBindings>
                 </TextBox>
-                <CheckBox Grid.Column="1" VerticalAlignment="Center" Content="Dependencies" IsChecked="{Binding AddModWithDependencies}" />
-                <Button Grid.Column="2" Classes="secondary-button" Content="Remove selected" Command="{Binding RemoveSelectedModCommand}" />
-                <Button Grid.Column="3" Classes="primary-button" Content="Add source" Command="{Binding AddModSourceCommand}" />
+                <CheckBox Grid.Column="1" VerticalAlignment="Center" Content="{x:Static res:Strings.InstancesDependencies}" IsChecked="{Binding AddModWithDependencies}" />
+                <Button Grid.Column="2" Classes="secondary-button" Content="{x:Static res:Strings.InstancesRemoveSelected}" Command="{Binding RemoveSelectedModCommand}" />
+                <Button Grid.Column="3" Classes="primary-button" Content="{x:Static res:Strings.InstancesAddSource}" Command="{Binding AddModSourceCommand}" />
               </Grid>
 
               <Grid Grid.Row="2">
@@ -103,11 +104,11 @@
               </Grid>
 
               <Grid Grid.Row="3">
-                <ListBox Classes="mods-list" ItemsSource="{Binding Mods}" SelectedItem="{Binding SelectedMod}">
+                <ListBox Classes="mods-list" ItemsSource="{Binding Mods}" SelectedItem="{Binding SelectedMod}" AutomationProperties.Name="{x:Static res:Strings.AccessMods}">
                   <ListBox.ItemTemplate>
                     <DataTemplate x:DataType="vm:ModListItem">
                       <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
-                        <Border Classes="mod-icon" Width="34" Height="34" ToolTip.Tip="Installed mod">
+                        <Border Classes="mod-icon" Width="34" Height="34" ToolTip.Tip="{x:Static res:Strings.InstancesInstalledMod}">
                           <LucideIcon Kind="PackageOpen" Size="18" StrokeWidth="1.8" />
                         </Border>
                         <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
@@ -128,8 +129,8 @@
                             VerticalAlignment="Center"
                             Spacing="5"
                             IsVisible="{Binding IsModsEmpty}">
-                  <TextBlock HorizontalAlignment="Center" FontWeight="SemiBold" Text="No mods in this profile" />
-                  <TextBlock Classes="caption" Text="Added mods will appear here in deployment order." />
+                  <TextBlock HorizontalAlignment="Center" FontWeight="SemiBold" Text="{x:Static res:Strings.InstancesNoModsInThisProfile}" />
+                  <TextBlock Classes="caption" Text="{x:Static res:Strings.InstancesAddedModsWillAppearHereIn}" />
                 </StackPanel>
               </Grid>
             </Grid>

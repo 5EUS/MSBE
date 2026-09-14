@@ -91,6 +91,12 @@
         "resolved": "5.0.0",
         "contentHash": "HgXgTx6M2VqK2kwiA/Hl+XxMxn8JUxqx09u/U2wOEUOY47WYzUwer3e6sy0Y+NRY6S41CyXEP9Ew1wtRY/ubbQ=="
       },
+      "Microsoft.CodeAnalysis.ResxSourceGenerator": {
+        "type": "Direct",
+        "requested": "[5.0.0-1.25277.114, )",
+        "resolved": "5.0.0-1.25277.114",
+        "contentHash": "tgmnwUv1iqiQFVp1hVRDR9mUy9/i6BS75l9FkFD/T76aAlU1XEjVYsS0Jkz/nbQg+vVvyxgglDhiOXwAvoIvMg=="
+      },
       "Microsoft.DotNet.ILCompiler": {
         "type": "Direct",
         "requested": "[10.0.12, )",

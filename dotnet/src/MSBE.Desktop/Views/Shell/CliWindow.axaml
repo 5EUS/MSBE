@@ -1,9 +1,10 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:res="using:MSBE.Desktop.Resources"
         xmlns:vm="using:MSBE.Desktop.ViewModels"
         x:Class="MSBE.Desktop.Views.Shell.CliWindow"
         x:DataType="vm:MainViewModel"
-        Title="MSBE Command Line"
+        Title="{x:Static res:Strings.CliMsbeCommandLine}"
         Background="#121419"
         Width="720" Height="480"
         MinWidth="480" MinHeight="320">
@@ -11,10 +12,10 @@
         <KeyBinding Gesture="Enter" Command="{Binding SubmitCliCommand}" />
     </Window.KeyBindings>
     <Grid Margin="14" RowDefinitions="*,Auto" RowSpacing="10">
-        <TextBox Classes="cli-output" Text="{Binding CliTranscript}" IsReadOnly="True" TextWrapping="Wrap" AcceptsReturn="True" />
+        <TextBox Classes="cli-output" Text="{Binding CliTranscript}" IsReadOnly="True" TextWrapping="Wrap" AcceptsReturn="True" AutomationProperties.Name="{x:Static res:Strings.AccessCommandOutput}" />
         <Grid Grid.Row="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
-            <TextBox PlaceholderText="msbe status" Text="{Binding CliInput}" />
-            <Button Grid.Column="1" Content="Run" Command="{Binding SubmitCliCommand}" />
+            <TextBox PlaceholderText="msbe status" Text="{Binding CliInput}" AutomationProperties.Name="{x:Static res:Strings.AccessCommand}" />
+            <Button Grid.Column="1" Content="{x:Static res:Strings.PackRun}" Command="{Binding SubmitCliCommand}" />
         </Grid>
     </Grid>
 </Window>

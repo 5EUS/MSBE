@@ -1,17 +1,18 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:res="using:MSBE.Desktop.Resources"
         xmlns:vm="using:MSBE.Desktop.ViewModels"
         x:Class="MSBE.Desktop.Views.Shell.ProfileManagerWindow"
         x:DataType="vm:MainViewModel"
-        Title="Manage profiles"
+        Title="{x:Static res:Strings.ProfilesManageProfiles}"
         Background="#121419"
         Width="760" Height="640"
         MinWidth="640" MinHeight="520"
         CanResize="True">
     <Grid Margin="22" RowDefinitions="Auto,Auto,*,Auto" RowSpacing="18">
         <StackPanel Spacing="4">
-            <TextBlock Classes="sectionHeading" Text="Manage profiles" />
-            <TextBlock Classes="caption" Text="Create a clean profile or clone an existing setup before changing it." />
+            <TextBlock Classes="sectionHeading" Text="{x:Static res:Strings.ProfilesManageProfiles}" />
+            <TextBlock Classes="caption" Text="{x:Static res:Strings.ProfilesCreateACleanProfileOrClone}" />
         </StackPanel>
 
         <Border Grid.Row="1" Classes="error-banner" IsVisible="{Binding HasProfileMutationError}">
@@ -20,57 +21,57 @@
 
         <Grid Grid.Row="2" ColumnDefinitions="*,1.25*" ColumnSpacing="20">
             <Grid RowDefinitions="Auto,*" RowSpacing="8">
-                <TextBlock Classes="field-label" Text="PROFILES" />
-                <ListBox Grid.Row="1" Classes="profile-list" ItemsSource="{Binding Profiles}" SelectedItem="{Binding SelectedProfile}" />
+                <TextBlock Classes="field-label" Text="{x:Static res:Strings.ProfilesProfiles}" />
+                <ListBox Grid.Row="1" Classes="profile-list" ItemsSource="{Binding Profiles}" SelectedItem="{Binding SelectedProfile}" AutomationProperties.Name="{x:Static res:Strings.InstancesProfiles}" />
             </Grid>
 
             <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
                 <StackPanel Spacing="14">
                     <StackPanel Spacing="5">
-                        <TextBlock Classes="field-label" Text="NEW PROFILE NAME" />
-                        <TextBox Text="{Binding NewProfileName}" PlaceholderText="testing" />
+                        <TextBlock Classes="field-label" Text="{x:Static res:Strings.ProfilesNewProfileName}" />
+                        <TextBox Text="{Binding NewProfileName}" PlaceholderText="testing" AutomationProperties.Name="{x:Static res:Strings.AccessNewProfile}" />
                     </StackPanel>
                     <StackPanel Spacing="5">
-                        <TextBlock Classes="field-label" Text="COPY FROM" />
-                        <ComboBox ItemsSource="{Binding Profiles}" SelectedItem="{Binding NewProfileSource}" PlaceholderText="Start empty" />
-                        <TextBlock Classes="caption" Text="Clear the selection to create an empty profile." />
+                        <TextBlock Classes="field-label" Text="{x:Static res:Strings.ProfilesCopyFrom}" />
+                        <ComboBox ItemsSource="{Binding Profiles}" SelectedItem="{Binding NewProfileSource}" PlaceholderText="{x:Static res:Strings.ProfilesStartEmpty}" AutomationProperties.Name="{x:Static res:Strings.AccessCopyFrom}" />
+                        <TextBlock Classes="caption" Text="{x:Static res:Strings.ProfilesClearTheSelectionToCreateAn}" />
                     </StackPanel>
                     <Button Classes="primary-button"
                             HorizontalAlignment="Stretch"
-                            Content="Create profile"
+                            Content="{x:Static res:Strings.ProfilesCreateProfile}"
                             IsEnabled="{Binding !IsProfileMutationBusy}"
                             Command="{Binding CreateProfileCommand}" />
                     <Border Height="1" Background="#303540" Margin="0,5" />
                     <StackPanel Spacing="5">
-                        <TextBlock Classes="field-label" Text="SELECTED PROFILE" />
+                        <TextBlock Classes="field-label" Text="{x:Static res:Strings.ProfilesSelectedProfile}" />
                         <TextBlock FontWeight="SemiBold" Text="{Binding SelectedProfile}" />
-                        <TextBlock Classes="caption" IsVisible="{Binding IsSelectedProfileDeployed}" Text="This profile is deployed and cannot be deleted." TextWrapping="Wrap" />
+                        <TextBlock Classes="caption" IsVisible="{Binding IsSelectedProfileDeployed}" Text="{x:Static res:Strings.ProfilesThisProfileIsDeployedAndCannot}" TextWrapping="Wrap" />
                     </StackPanel>
                     <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="10" RowSpacing="8">
                         <StackPanel Spacing="5">
-                            <TextBlock Classes="field-label" Text="MOD LOADER" />
-                            <TextBox Text="{Binding SelectedProfileLoader}" PlaceholderText="Loader ID" />
+                            <TextBlock Classes="field-label" Text="{x:Static res:Strings.ProfilesModLoader}" />
+                            <TextBox Text="{Binding SelectedProfileLoader}" PlaceholderText="{x:Static res:Strings.ProfilesLoaderId}" AutomationProperties.Name="{x:Static res:Strings.ProfilesLoaderId}" />
                         </StackPanel>
                         <StackPanel Grid.Column="1" Spacing="5">
-                            <TextBlock Classes="field-label" Text="LOADER VERSION" />
-                            <TextBox Text="{Binding SelectedProfileLoaderVersion}" PlaceholderText="Optional" />
+                            <TextBlock Classes="field-label" Text="{x:Static res:Strings.ProfilesLoaderVersion}" />
+                            <TextBox Text="{Binding SelectedProfileLoaderVersion}" PlaceholderText="{x:Static res:Strings.ProfilesOptional}" AutomationProperties.Name="{x:Static res:Strings.AccessLoaderVersion}" />
                         </StackPanel>
                         <StackPanel Grid.Row="1" Grid.ColumnSpan="2" Spacing="5">
-                            <TextBlock Classes="field-label" Text="GAME SIDE" />
-                            <ComboBox ItemsSource="{Binding InstanceSides}" SelectedItem="{Binding SelectedProfileSide}" />
+                            <TextBlock Classes="field-label" Text="{x:Static res:Strings.ProfilesGameSide}" />
+                            <ComboBox ItemsSource="{Binding InstanceSides}" SelectedItem="{Binding SelectedProfileSide}" AutomationProperties.Name="{x:Static res:Strings.AccessGameSide}" />
                         </StackPanel>
                         <Button Grid.Row="2"
                                 Grid.ColumnSpan="2"
                                 Classes="secondary-button"
                                 HorizontalAlignment="Stretch"
-                                Content="Save compatibility target"
+                                Content="{x:Static res:Strings.ProfilesSaveCompatibilityTarget}"
                                 IsEnabled="{Binding !IsProfileMutationBusy}"
                                 Command="{Binding SaveProfileTargetCommand}" />
                     </Grid>
-                    <TextBlock Classes="caption" Text="Browse results and installs use this profile-specific compatibility target." TextWrapping="Wrap" />
+                    <TextBlock Classes="caption" Text="{x:Static res:Strings.ProfilesBrowseResultsAndInstallsUseThis}" TextWrapping="Wrap" />
                     <Button Classes="danger-button"
                             HorizontalAlignment="Stretch"
-                            Content="Delete selected profile"
+                            Content="{x:Static res:Strings.ProfilesDeleteSelectedProfile}"
                             IsEnabled="{Binding CanRemoveSelectedProfile}"
                             Command="{Binding RemoveSelectedProfileCommand}" />
                 </StackPanel>
@@ -79,7 +80,7 @@
 
         <Grid Grid.Row="3" ColumnDefinitions="*,Auto" ColumnSpacing="8">
             <ProgressBar Width="120" Height="2" IsIndeterminate="True" IsVisible="{Binding IsProfileMutationBusy}" />
-            <Button Grid.Column="1" Classes="secondary-button" Content="Done" Command="{Binding CloseProfileManagerCommand}" />
+            <Button Grid.Column="1" Classes="secondary-button" Content="{x:Static res:Strings.ProfilesDone}" Command="{Binding CloseProfileManagerCommand}" />
         </Grid>
     </Grid>
 </Window>

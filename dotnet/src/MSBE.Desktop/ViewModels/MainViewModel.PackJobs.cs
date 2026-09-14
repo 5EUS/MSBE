@@ -6,6 +6,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 
 using MSBE.Client;
+using MSBE.Desktop.Resources;
 
 namespace MSBE.Desktop.ViewModels;
 
@@ -21,6 +22,8 @@ internal sealed partial class MainViewModel
     [NotifyPropertyChangedFor(nameof(CanExecuteExport))]
     [NotifyPropertyChangedFor(nameof(CanExecuteImport))]
     [NotifyPropertyChangedFor(nameof(CanExecuteCapture))]
+    [NotifyPropertyChangedFor(nameof(CanApplyUpdates))]
+    [NotifyPropertyChangedFor(nameof(CanRestoreSnapshot))]
     public partial bool IsPackJobRunning { get; set; }
 
     /// <summary>Gets or sets the running job's completed fraction, from zero to one.</summary>
@@ -64,7 +67,7 @@ internal sealed partial class MainViewModel
         try
         {
             await this.client.CancelJobAsync(job, CancellationToken.None).ConfigureAwait(true);
-            this.PackJobMessage = "Cancelling";
+            this.PackJobMessage = Strings.JobCancelling;
         }
         catch (Exception exception) when (exception is IOException or SocketException or JsonException or InvalidOperationException)
         {
@@ -80,10 +83,19 @@ internal sealed partial class MainViewModel
     private async Task RunPackJobAsync(string method, PackPlan plan)
     {
         long job = await this.client.StartPlanJobAsync(method, plan, CancellationToken.None).ConfigureAwait(true);
+        await this.FollowJobAsync(job).ConfigureAwait(true);
+    }
+
+    /// <summary>Follows a daemon job, showing its progress, until it finishes.</summary>
+    /// <param name="job">The job.</param>
+    /// <returns>A task that completes when the job succeeds.</returns>
+    /// <exception cref="InvalidOperationException">The job failed or was cancelled.</exception>
+    private async Task FollowJobAsync(long job)
+    {
         this.activePackJob = job;
         this.IsPackJobRunning = true;
         this.PackJobProgress = 0;
-        this.PackJobMessage = "Queued";
+        this.PackJobMessage = Strings.JobQueued;
         try
         {
             long after = 0;
@@ -106,7 +118,7 @@ internal sealed partial class MainViewModel
                 {
                     if (!string.Equals(status.State, "succeeded", StringComparison.Ordinal))
                     {
-                        throw new InvalidOperationException(last is { Message.Length: > 0 } ? last.Message : $"The job ended as {status.State}.");
+                        throw new InvalidOperationException(last is { Message.Length: > 0 } ? last.Message : Strings.FormatJobEnded(status.State));
                     }
 
                     return;

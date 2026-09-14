@@ -195,12 +195,22 @@ handoff.submit    { uri }                           -> { id, provider, game, pro
 handler.status    { scheme? }                       -> [{ scheme, provider?, owner, current, previous? }]
 handler.register  { scheme, replace? }              -> status     # -32040 while another application opens it
 handler.unregister { scheme }                       -> status
-browser.status                                      -> { running, provider?, item?, page?, position?, waiting, url?, title?, auto_advance, message? }
+browser.status                                      -> { running, installed, provider?, item?, page?, position?, waiting, url?, title?, auto_advance, message? }
 browser.open      { id?, auto_advance? }            -> status     # no id: the next waiting page
 browser.close                                       -> status
 tool.list                                           -> [{ provider, name, terms, program?, sha256?, state }]
 tool.register     { provider, program, accept_terms } -> status   # records the SHA-256; accepts the terms
 tool.forget       { provider }                      -> status
+provider.list                                       -> [{ id, name, prefix?, search, acquisition, requires_auth, signed_in, ack_required, acknowledged }]
+auth.status                                         -> [{ provider, name, requires_auth, signed_in, source?, account?, last_used?, key_page?, terms, ack_required, acknowledged, quota }]
+auth.acknowledge  { provider }                      -> status
+auth.login        { provider, token }               -> status     # checked with the provider, then kept
+auth.logout       { provider }                      -> status
+journal.list      { instance }                      -> [{ txn, profile, files }]   # oldest first; the last is deployed
+journal.rollback  { instance, txn? }                -> { rolled_back, journal }    # txn: undo every later deployment
+conflicts.list    { instance, profile? }            -> [{ path, claims: [{ module, blob }] }]
+update.preview    { instance, profile?, modules? }  -> report
+update.apply      { instance, profile?, modules? }  -> report     # job only
 ```
 
 An item is a source, the profile it is added to, and the group of files the source resolved to,
@@ -228,6 +238,16 @@ its capture channel ([07 §7.2](07-browser-and-secrets.md)). A download it captu
 whose page it was sent to, and a link goes where `handoff.submit` sends it. The `tool.*` methods
 register the program a tool provider runs; the network lane runs it for a queued item, only while it
 still has the SHA-256 it was registered with ([06 §6.5](06-providers-and-policy.md)).
+
+`provider.list` and `auth.*` let a client draw every provider from its program instead of knowing
+any by name: whether it searches, how it acquires, and whether it needs a key or accepted terms.
+A key reaches the daemon only in `auth.login`, becomes a zeroizing secret as it is read, is checked
+with the program's `[auth] validate` route once the terms are acknowledged, and is kept by the
+credential store; no answer or error carries it ([07 §7.5](07-browser-and-secrets.md)). The
+`journal.*`, `conflicts.list` and `update.preview` methods read or change instance state, so they
+answer busy while a job holds it; `update.apply` fetches over the network and runs only as a job.
+All of these are additive, so the contract stays at 5, and a client treats `method not found` as a
+daemon too old for the surface.
 
 The `Question` event and `job.answer` arrive with the first installer-question producer. The
 `Question` event is how an interactive install wizard works identically in the GUI

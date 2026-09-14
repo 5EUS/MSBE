@@ -21,6 +21,9 @@ public enum WorkspacePage
     /// <summary>The queue of provider downloads.</summary>
     Downloads,
 
+    /// <summary>Deployments still in effect, conflicts, updates and snapshots.</summary>
+    History,
+
     /// <summary>The application settings workspace.</summary>
     Settings,
 }

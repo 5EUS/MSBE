@@ -1,44 +1,75 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:asyncImageLoader="clr-namespace:AsyncImageLoader;assembly=AsyncImageLoader.Avalonia"
+             xmlns:client="using:MSBE.Client"
+             xmlns:res="using:MSBE.Desktop.Resources"
              xmlns:vm="using:MSBE.Desktop.ViewModels"
              x:Class="MSBE.Desktop.Views.Pages.BrowsePageView"
              x:DataType="vm:MainViewModel">
-    <Grid Margin="8" RowDefinitions="Auto,Auto,*" RowSpacing="16">
+    <Grid Margin="8" RowDefinitions="Auto,Auto,Auto,*" RowSpacing="16">
         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
             <StackPanel Spacing="3">
-                <TextBlock Classes="sectionHeading" Text="Browse compatible mods" />
-                <TextBlock Classes="caption" Text="Provider results are filtered for the selected instance and profile." />
+                <TextBlock Classes="sectionHeading" Text="{x:Static res:Strings.BrowseBrowseCompatibleMods}" />
+                <TextBlock Classes="caption" Text="{x:Static res:Strings.BrowseProviderResultsAreFilteredForThe}" />
             </StackPanel>
             <StackPanel Grid.Column="1" HorizontalAlignment="Right" Spacing="2">
-                <TextBlock Classes="detail-label" Text="INSTALL TARGET" />
+                <TextBlock Classes="detail-label" Text="{x:Static res:Strings.BrowseInstallTarget}" />
                 <TextBlock HorizontalAlignment="Right" Text="{Binding SelectedInstance}" />
                 <TextBlock Classes="caption" HorizontalAlignment="Right" Text="{Binding SelectedProfile}" />
             </StackPanel>
         </Grid>
 
         <Grid Grid.Row="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
-            <TextBox Text="{Binding BrowseQuery}" PlaceholderText="Search configured providers">
+            <TextBox Text="{Binding BrowseQuery}" PlaceholderText="{x:Static res:Strings.BrowseSearchConfiguredProviders}" AutomationProperties.Name="{x:Static res:Strings.BrowseSearchConfiguredProviders}">
                 <TextBox.KeyBindings>
                     <KeyBinding Gesture="Enter" Command="{Binding SearchBrowseCommand}" />
                 </TextBox.KeyBindings>
             </TextBox>
-            <Button Grid.Column="1" Classes="primary-button" Command="{Binding SearchBrowseCommand}">
+            <Button Grid.Column="1" Classes="primary-button" Command="{Binding SearchBrowseCommand}" AutomationProperties.Name="{x:Static res:Strings.BrowseSearch}">
                 <StackPanel Orientation="Horizontal" Spacing="7">
                     <LucideIcon Kind="Search" Size="16" StrokeWidth="2" />
-                    <TextBlock Text="Search" />
+                    <TextBlock Text="{x:Static res:Strings.BrowseSearch}" />
                 </StackPanel>
             </Button>
         </Grid>
 
-        <Grid Grid.Row="2" RowDefinitions="Auto,*" RowSpacing="8">
+        <Grid Grid.Row="2" ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="8" IsVisible="{Binding HasLinkProviders}">
+            <TextBlock Classes="detail-label" VerticalAlignment="Center" Text="{x:Static res:Strings.BrowseAddByReferenceTitle}" />
+            <ComboBox Grid.Column="1"
+                      MinWidth="160"
+                      ItemsSource="{Binding LinkProviders}"
+                      SelectedItem="{Binding SelectedLinkProvider}"
+                      AutomationProperties.Name="{x:Static res:Strings.BrowseAddByReferenceProviderName}">
+                <ComboBox.ItemTemplate>
+                    <DataTemplate x:DataType="client:ProviderInfo">
+                        <TextBlock Text="{Binding Name}" />
+                    </DataTemplate>
+                </ComboBox.ItemTemplate>
+            </ComboBox>
+            <TextBox Grid.Column="2"
+                     Text="{Binding LinkReference}"
+                     PlaceholderText="{Binding LinkReferencePlaceholder}"
+                     AutomationProperties.Name="{x:Static res:Strings.BrowseAddByReferenceName}">
+                <TextBox.KeyBindings>
+                    <KeyBinding Gesture="Enter" Command="{Binding AddByLinkCommand}" />
+                </TextBox.KeyBindings>
+            </TextBox>
+            <Button Grid.Column="3" Classes="secondary-button" IsEnabled="{Binding CanAddByLink}" Command="{Binding AddByLinkCommand}" AutomationProperties.Name="{x:Static res:Strings.BrowseAddByReference}">
+                <StackPanel Orientation="Horizontal" Spacing="7">
+                    <LucideIcon Kind="Plus" Size="15" StrokeWidth="2" />
+                    <TextBlock Text="{x:Static res:Strings.BrowseAddByReference}" />
+                </StackPanel>
+            </Button>
+        </Grid>
+
+        <Grid Grid.Row="3" RowDefinitions="Auto,*" RowSpacing="8">
             <ProgressBar Height="2" IsIndeterminate="True" IsVisible="{Binding IsBrowseLoading}" />
             <Border Classes="error-banner" IsVisible="{Binding HasBrowseError}">
                 <TextBlock Text="{Binding BrowseError}" TextWrapping="Wrap" />
             </Border>
 
             <Grid Grid.Row="1" ColumnDefinitions="2*,*" ColumnSpacing="16" IsVisible="{Binding !HasBrowseError}">
-                <ListBox Classes="browse-list" ItemsSource="{Binding BrowseResults}" SelectedItem="{Binding SelectedBrowseResult}">
+                <ListBox Classes="browse-list" ItemsSource="{Binding BrowseResults}" SelectedItem="{Binding SelectedBrowseResult}" AutomationProperties.Name="{x:Static res:Strings.AccessBrowseResults}">
                     <ListBox.ItemTemplate>
                         <DataTemplate x:DataType="vm:BrowseResultItem">
                             <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="11">
@@ -56,14 +87,22 @@
                                         <TextBlock Grid.Column="1" Classes="caption" Text="{Binding DownloadSummary}" />
                                     </Grid>
                                     <TextBlock Grid.Row="1" Classes="caption" Text="{Binding Description}" TextWrapping="Wrap" MaxLines="2" />
-                                    <TextBlock Grid.Row="2" Classes="provider-label" Text="{Binding Provider}" />
+                                    <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8">
+                                        <TextBlock Classes="provider-label" VerticalAlignment="Center" Text="{Binding Provider}" />
+                                        <Border Classes="ecosystem-badge" IsVisible="{Binding NeedsUser}" ToolTip.Tip="{Binding Attention}">
+                                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                                <LucideIcon Kind="Hand" Size="11" StrokeWidth="2" />
+                                                <TextBlock FontSize="11" Text="{x:Static res:Strings.BrowseNeedsYou}" />
+                                            </StackPanel>
+                                        </Border>
+                                    </StackPanel>
                                 </Grid>
                                 <CheckBox Grid.Column="2"
                                           VerticalAlignment="Center"
                                           IsChecked="{Binding IsMarked}"
                                           IsEnabled="{Binding !IsInstalled}"
-                                          AutomationProperties.Name="Mark for installation"
-                                          ToolTip.Tip="Installed items are already included in this profile" />
+                                          AutomationProperties.Name="{x:Static res:Strings.BrowseMarkForInstallation}"
+                                          ToolTip.Tip="{x:Static res:Strings.BrowseInstalledItemsAreAlreadyIncludedIn}" />
                             </Grid>
                         </DataTemplate>
                     </ListBox.ItemTemplate>
@@ -74,9 +113,10 @@
                         <StackPanel Spacing="4">
                             <TextBlock FontSize="18" FontWeight="SemiBold" Text="{Binding SelectedBrowseResult.Title, FallbackValue=Select a mod}" TextWrapping="Wrap" />
                             <TextBlock Classes="caption" Text="{Binding SelectedBrowseResult.Source}" TextWrapping="Wrap" />
+                            <TextBlock Classes="caption" Text="{Binding SelectedBrowseResult.Attention}" TextWrapping="Wrap" IsVisible="{Binding SelectedBrowseResult.NeedsUser, FallbackValue=False}" />
                         </StackPanel>
                         <TextBlock Grid.Row="1" Text="{Binding SelectedBrowseResult.Description}" TextWrapping="Wrap" />
-                        <TextBlock Grid.Row="2" Classes="caption" Text="Use the checkboxes to mark mods for installation." TextWrapping="Wrap" />
+                        <TextBlock Grid.Row="2" Classes="caption" Text="{x:Static res:Strings.BrowseUseTheCheckboxesToMarkMods}" TextWrapping="Wrap" />
                     </Grid>
                 </Border>
 
@@ -84,9 +124,9 @@
                     <Grid RowDefinitions="Auto,*,Auto" RowSpacing="12">
                         <StackPanel Spacing="3">
                             <TextBlock FontSize="18" FontWeight="SemiBold" Text="{Binding MarkedBrowseResultCount}" />
-                            <TextBlock Classes="caption" Text="Marked for installation" />
+                            <TextBlock Classes="caption" Text="{x:Static res:Strings.BrowseMarkedForInstallation}" />
                         </StackPanel>
-                        <ListBox Grid.Row="1" ItemsSource="{Binding MarkedBrowseResults}">
+                        <ListBox Grid.Row="1" ItemsSource="{Binding MarkedBrowseResults}" AutomationProperties.Name="{x:Static res:Strings.BrowseMarkedForInstallation}">
                             <ListBox.ItemTemplate>
                                 <DataTemplate x:DataType="vm:BrowseResultItem">
                                     <TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis" />
@@ -94,10 +134,11 @@
                             </ListBox.ItemTemplate>
                         </ListBox>
                         <StackPanel Grid.Row="2" Spacing="10">
-                            <CheckBox Content="Include required dependencies" IsChecked="{Binding BrowseWithDependencies}" />
+                            <TextBlock Classes="caption" TextWrapping="Wrap" Text="{Binding MarkedNeedUserText}" IsVisible="{Binding HasMarkedNeedingUser}" />
+                            <CheckBox Content="{x:Static res:Strings.BrowseIncludeRequiredDependencies}" IsChecked="{Binding BrowseWithDependencies}" />
                             <Button Classes="primary-button"
                                     HorizontalAlignment="Stretch"
-                                    Content="Add to download queue"
+                                    Content="{x:Static res:Strings.BrowseAddToDownloadQueue}"
                                     IsEnabled="{Binding CanInstallMarkedBrowseResults}"
                                     Command="{Binding AddBrowseResultCommand}" />
                         </StackPanel>
@@ -105,8 +146,8 @@
                 </Border>
 
                 <StackPanel Grid.ColumnSpan="2" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="5" IsVisible="{Binding IsBrowseEmpty}">
-                    <TextBlock HorizontalAlignment="Center" FontWeight="SemiBold" Text="Search compatible provider catalogs" />
-                    <TextBlock Classes="caption" Text="Choose an instance and profile, then search by mod name or purpose." />
+                    <TextBlock HorizontalAlignment="Center" FontWeight="SemiBold" Text="{x:Static res:Strings.BrowseSearchCompatibleProviderCatalogs}" />
+                    <TextBlock Classes="caption" Text="{x:Static res:Strings.BrowseChooseAnInstanceAndProfileThen}" />
                 </StackPanel>
             </Grid>
         </Grid>

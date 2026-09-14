@@ -4,6 +4,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 
 using MSBE.Client;
+using MSBE.Desktop.Resources;
 
 namespace MSBE.Desktop.ViewModels;
 
@@ -57,13 +58,12 @@ internal sealed partial class MainViewModel
         {
             if (string.IsNullOrWhiteSpace(this.SelectedProfileLoader))
             {
-                return "Compatibility target unavailable";
+                return Strings.ProfileTargetUnavailable;
             }
 
-            string version = string.IsNullOrWhiteSpace(this.SelectedProfileLoaderVersion)
-                ? string.Empty
-                : $" {this.SelectedProfileLoaderVersion}";
-            return $"{this.SelectedProfileLoader}{version} · {this.SelectedProfileSide}";
+            return string.IsNullOrWhiteSpace(this.SelectedProfileLoaderVersion)
+                ? Strings.FormatProfileTarget(this.SelectedProfileLoader, this.SelectedProfileSide)
+                : Strings.FormatProfileTargetWithVersion(this.SelectedProfileLoader, this.SelectedProfileLoaderVersion, this.SelectedProfileSide);
         }
     }
 
@@ -113,7 +113,7 @@ internal sealed partial class MainViewModel
 
             this.ClearBrowseResultsForTargetChange();
             await this.LoadModsAsync(instance, profile).ConfigureAwait(true);
-            this.StatusMessage = $"Updated compatibility for {profile}.";
+            this.StatusMessage = Strings.FormatProfileTargetUpdated(profile);
         }
         catch (Exception exception) when (exception is IOException or SocketException or InvalidOperationException)
         {
@@ -155,7 +155,7 @@ internal sealed partial class MainViewModel
             await this.LoadProfilesAsync(instance).ConfigureAwait(true);
             this.SelectedProfile = name;
             this.NewProfileName = string.Empty;
-            this.StatusMessage = $"Created profile {name}.";
+            this.StatusMessage = Strings.FormatProfileCreated(name);
         }
         catch (Exception exception) when (exception is IOException or SocketException or InvalidOperationException)
         {
@@ -190,7 +190,7 @@ internal sealed partial class MainViewModel
             }
 
             await this.LoadProfilesAsync(instance).ConfigureAwait(true);
-            this.StatusMessage = $"Removed profile {profile}.";
+            this.StatusMessage = Strings.FormatProfileRemoved(profile);
         }
         catch (Exception exception) when (exception is IOException or SocketException or InvalidOperationException)
         {

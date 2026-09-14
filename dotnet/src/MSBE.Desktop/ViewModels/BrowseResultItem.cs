@@ -1,6 +1,9 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 
 using CommunityToolkit.Mvvm.ComponentModel;
+
+using MSBE.Desktop.Resources;
 
 namespace MSBE.Desktop.ViewModels;
 
@@ -54,6 +57,14 @@ public sealed partial class BrowseResultItem : ObservableObject
     /// <summary>Gets a value indicating whether the selected profile already contains the project.</summary>
     public bool IsInstalled { get; }
 
+    /// <summary>Gets or sets what the user must do before or while the result downloads, or empty when nothing.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(NeedsUser))]
+    public partial string Attention { get; set; } = string.Empty;
+
+    /// <summary>Gets a value indicating whether the result waits for the user once it is queued.</summary>
+    public bool NeedsUser => this.Attention.Length > 0;
+
     /// <summary>Gets or sets whether this result is marked for installation.</summary>
     [ObservableProperty]
     public partial bool IsMarked { get; set; }
@@ -64,8 +75,8 @@ public sealed partial class BrowseResultItem : ObservableObject
     /// <summary>Gets a compact popularity label.</summary>
     public string DownloadSummary => this.Downloads switch
     {
-        >= 1_000_000 => $"{this.Downloads / 1_000_000D:0.#}M downloads",
-        >= 1_000 => $"{this.Downloads / 1_000D:0.#}K downloads",
-        _ => $"{this.Downloads} downloads",
+        >= 1_000_000 => Strings.FormatBrowseDownloadsMillions((this.Downloads / 1_000_000D).ToString("0.#", CultureInfo.CurrentCulture)),
+        >= 1_000 => Strings.FormatBrowseDownloadsThousands((this.Downloads / 1_000D).ToString("0.#", CultureInfo.CurrentCulture)),
+        _ => Strings.FormatBrowseDownloads(this.Downloads),
     };
 }

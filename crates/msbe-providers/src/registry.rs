@@ -8,7 +8,6 @@ use std::{
 
 use msbe_core::{config::Home, instance::ExtensionPin};
 use msbe_fsops::Digest;
-use msbe_provider_api::manifest::Acquisition;
 use msbe_provider_api::{
     Adapter, AdapterError, Catalog, ExtensionEnvelope, Handoff, HeaderError, HttpClient,
     ManifestError, Overlay, OverlayError, PackCodec, PackCodecDescriptor, PackCodecError,
@@ -17,6 +16,7 @@ use msbe_provider_api::{
     model::{Account, Request, SearchResult},
     resolve::{Adapters, ResolveError},
 };
+use msbe_provider_api::{Auth, manifest::Acquisition};
 use msbe_secrets::{Access, Credentials, Secret, StoreError};
 use msbe_wasm_codec::WasmPackCodec;
 use thiserror::Error;
@@ -67,6 +67,8 @@ pub struct Providers {
     overlay: Overlay,
     /// Each program provider's canonical program digest, which an acknowledgement is bound to.
     programs: BTreeMap<String, String>,
+    /// How each program provider accepts a credential, when it does.
+    auth: BTreeMap<String, Auth>,
     /// Which providers have a credential, and which terms were acknowledged.
     access: Access,
     /// The pin of each signed program, naming its real signer, by provider id.
@@ -324,6 +326,7 @@ impl Providers {
             .map(|signed| (signed.program.provider.id.clone(), signed.pin.clone()))
             .collect();
         let mut programs = BTreeMap::new();
+        let mut auth = BTreeMap::new();
         for program in shipped
             .iter()
             .map(|(_, program)| program.clone())
@@ -333,6 +336,9 @@ impl Providers {
                 program.provider.id.clone(),
                 ProviderProgramEnvelope::digest_for(&program)?,
             );
+            if let Some(accepted) = &program.auth {
+                auth.insert(program.provider.id.clone(), accepted.clone());
+            }
             assembly.add_program(&catalog, program)?;
         }
         let mut providers = Self {
@@ -343,6 +349,7 @@ impl Providers {
             extensions: assembly.extensions,
             overlay: Overlay::from_toml(&assembly.overlay)?,
             programs,
+            auth,
             access: Access::none(),
             signed_pins,
             installed: Vec::new(),
@@ -437,6 +444,29 @@ impl Providers {
         self.catalog
             .handoff_schemes()
             .map(|(scheme, provider)| (scheme.to_owned(), provider.id.clone()))
+            .collect()
+    }
+
+    /// What a client shows about every enabled provider, ordered by id.
+    pub fn summaries(&self) -> Vec<ProviderSummary<'_>> {
+        self.catalog
+            .providers()
+            .map(|provider| ProviderSummary {
+                provider,
+                searchable: self
+                    .adapters
+                    .get(&provider.id)
+                    .is_some_and(|adapter| adapter.as_search().is_some()),
+                auth: self.auth.get(&provider.id),
+                authenticated: self.access.is_authenticated(&provider.id),
+                acknowledged: !provider.policy.ack_required
+                    || self.access.has_acknowledged(
+                        &provider.id,
+                        &provider.policy.tos_url,
+                        self.programs.get(&provider.id).map(String::as_str),
+                    ),
+                rate: self.rate(&provider.id),
+            })
             .collect()
     }
 
@@ -685,6 +715,24 @@ impl Providers {
         }
         Ok(())
     }
+}
+
+/// What a client shows about one enabled provider: how it acquires, whether it searches, how it
+/// accepts a credential, and whether this data directory has what it needs.
+#[derive(Debug)]
+pub struct ProviderSummary<'a> {
+    /// The provider.
+    pub provider: &'a Provider,
+    /// Whether it can be searched.
+    pub searchable: bool,
+    /// How its program accepts a credential, when it does.
+    pub auth: Option<&'a Auth>,
+    /// Whether a credential is stored for it, or set in the environment.
+    pub authenticated: bool,
+    /// Whether its current terms are acknowledged, or it requires none.
+    pub acknowledged: bool,
+    /// The quota its API last reported to this registry.
+    pub rate: Option<Rate>,
 }
 
 /// A signed program a trust root accepted, and the pin an export records for it.

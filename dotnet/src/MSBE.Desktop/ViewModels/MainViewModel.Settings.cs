@@ -6,6 +6,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 
 using MSBE.Client;
+using MSBE.Desktop.Resources;
 
 namespace MSBE.Desktop.ViewModels;
 
@@ -19,14 +20,14 @@ internal sealed partial class MainViewModel
     public partial string? DataDirectory { get; set; }
 
     /// <summary>Gets the data directory, or why it is unknown.</summary>
-    public string DataDirectoryText => this.DataDirectory ?? "Not reported by the daemon.";
+    public string DataDirectoryText => this.DataDirectory ?? Strings.SettingsDataDirectoryUnknown;
 
     /// <summary>Gets the codecs and provider programs installed in the data folder, admitted or refused.</summary>
     public ObservableCollection<InstalledExtensionItem> InstalledExtensions { get; } = [];
 
     /// <summary>Gets or sets a summary of the installed extensions, or why they could not be listed.</summary>
     [ObservableProperty]
-    public partial string ExtensionsStatus { get; set; } = "Connect to a daemon to list installed extensions.";
+    public partial string ExtensionsStatus { get; set; } = Strings.ExtensionsNotConnected;
 
     private bool CanOpenDataDirectory => this.DataDirectory is not null && this.folders is not null;
 
@@ -40,8 +41,8 @@ internal sealed partial class MainViewModel
 
         bool opened = await this.folders.OpenAsync(path).ConfigureAwait(true);
         this.StatusMessage = opened
-            ? $"Opened data folder {path}."
-            : $"Could not open {path}. MSBE creates it when the first instance is added.";
+            ? Strings.FormatSettingsDataFolderOpened(path)
+            : Strings.FormatSettingsDataFolderNotOpened(path);
     }
 
     [RelayCommand]
@@ -49,7 +50,7 @@ internal sealed partial class MainViewModel
     {
         if (!this.IsTypedPackSupported)
         {
-            this.ExtensionsStatus = "This daemon cannot list installed extensions; restart MSBE to update it.";
+            this.ExtensionsStatus = Strings.ExtensionsUnsupported;
             return;
         }
 
@@ -63,16 +64,16 @@ internal sealed partial class MainViewModel
             }
 
             this.ExtensionsStatus = extensions.Count == 0
-                ? "No extensions are installed. Signed codecs and provider programs are copied into the extensions folder inside the data folder."
-                : $"{extensions.Count(extension => extension.IsActive)} of {extensions.Count} installed extensions are active.";
+                ? Strings.ExtensionsNone
+                : Strings.FormatExtensionsSummary(extensions.Count(extension => extension.IsActive), extensions.Count);
         }
         catch (MsbeRpcException exception)
         {
-            this.ExtensionsStatus = $"This daemon cannot list installed extensions: {exception.Message}";
+            this.ExtensionsStatus = Strings.FormatExtensionsRefusedByDaemon(exception.Message);
         }
         catch (Exception exception) when (exception is IOException or SocketException or JsonException or InvalidOperationException)
         {
-            this.ExtensionsStatus = $"Could not list installed extensions: {exception.Message}";
+            this.ExtensionsStatus = Strings.FormatExtensionsFailed(exception.Message);
         }
     }
 }

@@ -6,6 +6,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 
 using MSBE.Client;
+using MSBE.Desktop.Resources;
 
 namespace MSBE.Desktop.ViewModels;
 
@@ -46,7 +47,7 @@ internal sealed partial class MainViewModel
     {
         string kind = reason.GetProperty("kind").GetString() ?? "excluded";
         return reason.TryGetProperty("pattern", out JsonElement pattern)
-            ? $"{kind.Replace('_', ' ')} - {pattern.GetString()}"
+            ? Strings.FormatDeploymentExclusionPattern(kind.Replace('_', ' '), pattern.GetString())
             : kind.Replace('_', ' ');
     }
 
@@ -112,7 +113,7 @@ internal sealed partial class MainViewModel
 
             this.IsDeploymentPreviewOpen = false;
             await this.LoadSelectedInstanceAsync(instance).ConfigureAwait(true);
-            this.StatusMessage = $"Deployed {this.SelectedProfile} to {instance}.";
+            this.StatusMessage = Strings.FormatDeploymentDone(this.SelectedProfile, instance);
         }
         catch (Exception exception) when (exception is IOException or SocketException or InvalidOperationException)
         {
@@ -132,11 +133,11 @@ internal sealed partial class MainViewModel
             string path = operation.GetProperty("path").GetString() ?? string.Empty;
             (string action, string marker) = kind switch
             {
-                "materialize" => ("Place", "+"),
-                "remove" => ("Remove", "-"),
-                "create_dir" => ("Create folder", "+"),
-                "remove_dir" => ("Remove folder", "-"),
-                _ => ("Change", "*"),
+                "materialize" => (Strings.DeploymentActionPlace, "+"),
+                "remove" => (Strings.DeploymentActionRemove, "-"),
+                "create_dir" => (Strings.DeploymentActionCreateFolder, "+"),
+                "remove_dir" => (Strings.DeploymentActionRemoveFolder, "-"),
+                _ => (Strings.DeploymentActionChange, "*"),
             };
             this.DeploymentChanges.Add(new DeploymentPreviewItem(action, path, marker));
         }

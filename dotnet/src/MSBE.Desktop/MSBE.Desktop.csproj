@@ -35,6 +35,14 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!--
+      Every user-visible string lives in Strings.resx. The generator emits Strings.Name accessors and
+      Strings.FormatName(...) methods for placeholders, so no translatable text is concatenated.
+    -->
+    <EmbeddedResource Update="Resources\Strings.resx" GenerateSource="true" ClassName="MSBE.Desktop.Resources.Strings" EmitFormatMethods="true" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="../MSBE.Client/MSBE.Client.csproj" />
   </ItemGroup>
 
@@ -46,6 +54,7 @@
     <PackageReference Include="AsyncImageLoader.Avalonia" />
     <PackageReference Include="CommunityToolkit.Mvvm" />
     <PackageReference Include="Lucide.Avalonia" />
+    <PackageReference Include="Microsoft.CodeAnalysis.ResxSourceGenerator" PrivateAssets="all" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="AvaloniaUI.DiagnosticsSupport">

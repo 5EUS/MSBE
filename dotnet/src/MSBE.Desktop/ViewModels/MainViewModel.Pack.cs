@@ -6,6 +6,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 
 using MSBE.Client;
+using MSBE.Desktop.Resources;
 
 namespace MSBE.Desktop.ViewModels;
 
@@ -83,7 +84,7 @@ internal sealed partial class MainViewModel
         string path = this.PackConfigPath.Trim();
         await this.RunPackOperationAsync(
             ["--format", "json", "pack", "config", "set", instance, path, "--content", this.PackConfigContent, "--profile", profile],
-            $"Saved {path}.").ConfigureAwait(true);
+            Strings.FormatPackConfigSaved(path)).ConfigureAwait(true);
         await this.LoadPackConfigsAsync(instance, profile).ConfigureAwait(true);
         this.SelectedPackConfig = this.PackConfigs.FirstOrDefault(config => string.Equals(config.Path, path, StringComparison.Ordinal));
     }
@@ -101,7 +102,7 @@ internal sealed partial class MainViewModel
         string path = this.SelectedPackConfig.Path;
         await this.RunPackOperationAsync(
             ["--format", "json", "pack", "config", "remove", instance, path, "--profile", profile],
-            $"Removed {path}.").ConfigureAwait(true);
+            Strings.FormatPackConfigRemoved(path)).ConfigureAwait(true);
         await this.LoadPackConfigsAsync(instance, profile).ConfigureAwait(true);
         this.NewPackConfig();
     }
@@ -130,12 +131,12 @@ internal sealed partial class MainViewModel
             using JsonDocument document = JsonDocument.Parse(result.StandardOutput);
             int files = document.RootElement.GetProperty("files").GetInt32();
             this.PackLockfilePath = document.RootElement.GetProperty("lockfile").GetString() ?? string.Empty;
-            this.StatusMessage = $"Pack is valid: {files} reproducible file(s).";
+            this.StatusMessage = Strings.FormatPackValid(files);
         }
         catch (Exception exception) when (exception is IOException or SocketException or JsonException or InvalidOperationException)
         {
             this.PackError = exception.Message;
-            this.StatusMessage = "Pack validation failed.";
+            this.StatusMessage = Strings.PackValidationFailed;
         }
         finally
         {

@@ -8,6 +8,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 
 using MSBE.Client;
+using MSBE.Desktop.Resources;
 
 namespace MSBE.Desktop.ViewModels;
 
@@ -55,7 +56,13 @@ internal sealed partial class MainViewModel
     public bool HasMarkedBrowseResults => this.MarkedBrowseResults.Count > 0;
 
     /// <summary>Gets the number of results marked for installation.</summary>
-    public string MarkedBrowseResultCount => $"{this.MarkedBrowseResults.Count} selected";
+    public string MarkedBrowseResultCount => Strings.FormatBrowseMarkedCount(this.MarkedBrowseResults.Count);
+
+    /// <summary>Gets a value indicating whether any marked result waits for the user once it is queued.</summary>
+    public bool HasMarkedNeedingUser => this.MarkedBrowseResults.Any(result => result.NeedsUser);
+
+    /// <summary>Gets how many marked results wait for the user once they are queued.</summary>
+    public string MarkedNeedUserText => Strings.FormatBrowseMarkedNeedUser(this.MarkedBrowseResults.Count(result => result.NeedsUser));
 
     /// <summary>Gets a value indicating whether the marked results can be installed.</summary>
     public bool CanInstallMarkedBrowseResults => this.HasMarkedBrowseResults;
@@ -93,24 +100,7 @@ internal sealed partial class MainViewModel
             using JsonDocument document = JsonDocument.Parse(result.StandardOutput);
             foreach (JsonElement hit in document.RootElement.EnumerateArray())
             {
-                string? iconUrl = null;
-                if (hit.TryGetProperty("icon_url", out JsonElement icon) &&
-                    icon.ValueKind == JsonValueKind.String &&
-                    Uri.TryCreate(icon.GetString(), UriKind.Absolute, out Uri? iconUri) &&
-                    string.Equals(iconUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
-                {
-                    iconUrl = iconUri.AbsoluteUri;
-                }
-
-                this.BrowseResults.Add(new BrowseResultItem(
-                    hit.GetProperty("provider").GetString() ?? string.Empty,
-                    hit.GetProperty("project").GetString() ?? string.Empty,
-                    hit.GetProperty("slug").GetString() ?? string.Empty,
-                    hit.GetProperty("title").GetString() ?? string.Empty,
-                    hit.GetProperty("description").GetString() ?? string.Empty,
-                    iconUrl,
-                    hit.GetProperty("downloads").GetUInt64(),
-                    this.IsBrowseResultInstalled(hit)));
+                this.BrowseResults.Add(this.BrowseResultFrom(hit));
             }
         }
         catch (Exception exception) when (exception is IOException or SocketException or JsonException or InvalidOperationException)
@@ -134,7 +124,7 @@ internal sealed partial class MainViewModel
 
         if (!this.IsDownloadQueueSupported)
         {
-            this.StatusMessage = "This daemon has no download queue; restart MSBE to update it.";
+            this.StatusMessage = Strings.DownloadsUnsupported;
             return;
         }
 
@@ -166,15 +156,42 @@ internal sealed partial class MainViewModel
         }
         catch (Exception exception) when (exception is IOException or SocketException or JsonException or InvalidOperationException or KeyNotFoundException)
         {
-            this.StatusMessage = $"Could not queue {profile} downloads: {exception.Message}";
+            this.StatusMessage = Strings.FormatBrowseQueueFailed(profile, exception.Message);
             await this.RefreshDownloadsAsync().ConfigureAwait(true);
             return;
         }
 
         await this.RefreshDownloadsAsync().ConfigureAwait(true);
         this.StatusMessage = queued.Count == marked.Length
-            ? $"Queued {queued.Count} mod(s) for {profile}."
-            : $"Queued {queued.Count} mod(s) for {profile}; {marked.Length - queued.Count} already in the queue.";
+            ? Strings.FormatBrowseQueued(queued.Count, profile)
+            : Strings.FormatBrowseQueuedSomeAlready(queued.Count, profile, marked.Length - queued.Count);
+    }
+
+    /// <summary>A search hit as Browse shows it: an HTTPS icon only, and what the user must do for it.</summary>
+    private BrowseResultItem BrowseResultFrom(JsonElement hit)
+    {
+        string? iconUrl = null;
+        if (hit.TryGetProperty("icon_url", out JsonElement icon) &&
+            icon.ValueKind == JsonValueKind.String &&
+            Uri.TryCreate(icon.GetString(), UriKind.Absolute, out Uri? iconUri) &&
+            string.Equals(iconUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+        {
+            iconUrl = iconUri.AbsoluteUri;
+        }
+
+        string provider = hit.GetProperty("provider").GetString() ?? string.Empty;
+        return new BrowseResultItem(
+            provider,
+            hit.GetProperty("project").GetString() ?? string.Empty,
+            hit.GetProperty("slug").GetString() ?? string.Empty,
+            hit.GetProperty("title").GetString() ?? string.Empty,
+            hit.GetProperty("description").GetString() ?? string.Empty,
+            iconUrl,
+            hit.GetProperty("downloads").GetUInt64(),
+            this.IsBrowseResultInstalled(hit))
+        {
+            Attention = this.AttentionFor(provider),
+        };
     }
 
     private void OnBrowseResultsChanged(object? sender, NotifyCollectionChangedEventArgs eventArgs)
@@ -245,6 +262,8 @@ internal sealed partial class MainViewModel
         this.OnPropertyChanged(nameof(this.HasMarkedBrowseResults));
         this.OnPropertyChanged(nameof(this.MarkedBrowseResultCount));
         this.OnPropertyChanged(nameof(this.CanInstallMarkedBrowseResults));
+        this.OnPropertyChanged(nameof(this.HasMarkedNeedingUser));
+        this.OnPropertyChanged(nameof(this.MarkedNeedUserText));
     }
 
     private bool IsBrowseResultInstalled(JsonElement hit)

@@ -1,4 +1,5 @@
 using MSBE.Client;
+using MSBE.Desktop.Resources;
 
 namespace MSBE.Desktop.ViewModels;
 
@@ -21,17 +22,17 @@ internal sealed record InstalledExtensionItem(string Title, string Kind, string 
             : $"{extension.Id} {extension.Version}".TrimEnd();
         string kind = extension.Kind switch
         {
-            "codec" => "Pack codec",
-            "program" => "Provider program",
-            "trust_root" => "Trust root",
+            "codec" => Strings.ExtensionKindCodec,
+            "program" => Strings.ExtensionKindProgram,
+            "trust_root" => Strings.ExtensionKindTrustRoot,
             _ => extension.Kind,
         };
         if (!extension.IsActive)
         {
-            return new InstalledExtensionItem(title, kind, "Refused", $"{extension.Reason ?? "Refused."} ({extension.Path})", IsActive: false);
+            return new InstalledExtensionItem(title, kind, Strings.ExtensionRefused, Strings.FormatExtensionRefusedDetail(extension.Reason ?? Strings.ExtensionRefusedReason, extension.Path), IsActive: false);
         }
 
-        string detail = extension.Signer is null ? extension.Path : $"Signed by {extension.Signer}, {extension.Path}";
-        return new InstalledExtensionItem(title, kind, "Active", detail, IsActive: true);
+        string detail = extension.Signer is null ? extension.Path : Strings.FormatExtensionSignedBy(extension.Signer, extension.Path);
+        return new InstalledExtensionItem(title, kind, Strings.ExtensionActive, detail, IsActive: true);
     }
 }

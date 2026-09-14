@@ -7,6 +7,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 
 using MSBE.Client;
+using MSBE.Desktop.Resources;
 
 namespace MSBE.Desktop.ViewModels;
 
@@ -71,7 +72,7 @@ internal sealed partial class MainViewModel
             this.HasCapturePreview = true;
             if (this.CaptureItems.Count == 0)
             {
-                this.StatusMessage = "No in-game changes to capture.";
+                this.StatusMessage = Strings.PackCaptureNothing;
             }
         }
         catch (Exception exception) when (exception is IOException or SocketException or JsonException or InvalidOperationException or KeyNotFoundException)
@@ -100,7 +101,7 @@ internal sealed partial class MainViewModel
         {
             await this.RunPackJobAsync(PackRpc.CaptureExecute, this.capturePlan).ConfigureAwait(true);
             this.ClearCapturePreview();
-            this.StatusMessage = $"Captured {count} file(s) into {profile}.";
+            this.StatusMessage = Strings.FormatPackCaptured(count, profile);
             await this.LoadPackConfigsAsync(instance, profile).ConfigureAwait(true);
         }
         catch (Exception exception) when (exception is IOException or SocketException or JsonException or InvalidOperationException)

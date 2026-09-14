@@ -7,6 +7,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 
 using MSBE.Client;
+using MSBE.Desktop.Resources;
 
 namespace MSBE.Desktop.ViewModels;
 
@@ -65,15 +66,15 @@ internal sealed partial class MainViewModel
 
     private static string DescribeGroup(string group) => group switch
     {
-        "provider-reference" => "Provider reference",
-        "user-action" => "User action",
-        "environment-input" => "Environment input",
-        "embedded-config" => "Embedded config",
-        "embedded-local" => "Embedded local content",
-        "embedded-other" => "Embedded content",
-        "derived" => "Derived",
-        "policy-blocker" => "Policy blocker",
-        "omitted" => "Omitted",
+        "provider-reference" => Strings.PackGroupProviderReference,
+        "user-action" => Strings.PackGroupUserAction,
+        "environment-input" => Strings.PackGroupEnvironmentInput,
+        "embedded-config" => Strings.PackGroupEmbeddedConfig,
+        "embedded-local" => Strings.PackGroupEmbeddedLocal,
+        "embedded-other" => Strings.PackGroupEmbeddedOther,
+        "derived" => Strings.PackGroupDerived,
+        "policy-blocker" => Strings.PackGroupPolicyBlocker,
+        "omitted" => Strings.PackGroupOmitted,
         _ => group,
     };
 
@@ -213,7 +214,7 @@ internal sealed partial class MainViewModel
         {
             await this.RunPackJobAsync(PackRpc.ExportExecute, this.exportPlan).ConfigureAwait(true);
             this.ClearExportPreview();
-            this.StatusMessage = $"Exported {this.SelectedProfile} to {output}.";
+            this.StatusMessage = Strings.FormatPackExported(this.SelectedProfile, output);
         }
         catch (Exception exception) when (exception is IOException or SocketException or JsonException or InvalidOperationException)
         {
@@ -239,7 +240,7 @@ internal sealed partial class MainViewModel
         int requirements = preview.GetProperty("requirements").GetArrayLength();
         int environment = preview.GetProperty("environment").GetArrayLength();
         long bytes = preview.GetProperty("embedded_bytes").GetInt64();
-        this.ExportSummary = string.Create(CultureInfo.InvariantCulture, $"{requirements} referenced, {environment} environment input(s), {bytes:N0} bytes embedded");
+        this.ExportSummary = Strings.FormatPackExportSummary(requirements, environment, bytes.ToString("N0", CultureInfo.InvariantCulture));
         this.HasExportBlockers = this.ExportIssues.Any(issue => issue.IsBlocker);
         this.HasExportPreview = true;
     }
@@ -248,13 +249,13 @@ internal sealed partial class MainViewModel
     {
         if (!DateOnly.TryParse(observedAt, CultureInfo.InvariantCulture, DateTimeStyles.None, out DateOnly observed))
         {
-            return $"{subject} observed {observedAt}";
+            return Strings.FormatPackObservedAt(subject, observedAt);
         }
 
         int days = DateOnly.FromDateTime(this.time.GetUtcNow().UtcDateTime).DayNumber - observed.DayNumber;
         return days <= 0
-            ? $"{subject} observed today"
-            : string.Create(CultureInfo.InvariantCulture, $"{subject} observed {days} day(s) ago");
+            ? Strings.FormatPackObservedToday(subject)
+            : Strings.FormatPackObservedDaysAgo(subject, days);
     }
 
     private void ClearExportPreview()

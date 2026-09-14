@@ -1,22 +1,23 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:res="using:MSBE.Desktop.Resources"
              xmlns:client="using:MSBE.Client"
              xmlns:vm="using:MSBE.Desktop.ViewModels"
              x:Class="MSBE.Desktop.Views.Pages.GamesPageView"
              x:DataType="vm:MainViewModel">
     <Grid Margin="8" RowDefinitions="Auto,*" RowSpacing="16">
         <StackPanel Spacing="3">
-            <TextBlock Classes="sectionHeading" Text="Supported games" />
-            <TextBlock Classes="caption" Text="Games currently available through the connected daemon." />
+            <TextBlock Classes="sectionHeading" Text="{x:Static res:Strings.GameSearchSupportedGames}" />
+            <TextBlock Classes="caption" Text="{x:Static res:Strings.GamesGamesCurrentlyAvailableThroughTheConnected}" />
         </StackPanel>
 
         <Grid Grid.Row="1">
-            <ListBox Classes="games-list" ItemsSource="{Binding Games}">
+            <ListBox Classes="games-list" ItemsSource="{Binding Games}" AutomationProperties.Name="{x:Static res:Strings.GameSearchSupportedGames}">
                 <ListBox.ItemTemplate>
                     <DataTemplate x:DataType="client:GameInfo">
                         <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="18" RowSpacing="4">
                             <TextBlock FontSize="16" FontWeight="SemiBold" Text="{Binding Name}" />
-                            <TextBlock Grid.Column="1" Classes="caption" Text="{Binding SupportVersion, StringFormat=Support {0}}" />
+                            <TextBlock Grid.Column="1" Classes="caption" Text="{Binding SupportVersion, StringFormat={x:Static res:Strings.GamesSupportVersion}}" />
                             <ItemsControl Grid.Row="1" ItemsSource="{Binding Loaders}">
                                 <ItemsControl.ItemsPanel>
                                     <ItemsPanelTemplate>
@@ -37,8 +38,8 @@
             </ListBox>
 
             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="5" IsVisible="{Binding IsGamesEmpty}">
-                <TextBlock HorizontalAlignment="Center" FontWeight="SemiBold" Text="No supported games loaded" />
-                <TextBlock Classes="caption" Text="The daemon did not find any game support definitions at startup." />
+                <TextBlock HorizontalAlignment="Center" FontWeight="SemiBold" Text="{x:Static res:Strings.GamesNoSupportedGamesLoaded}" />
+                <TextBlock Classes="caption" Text="{x:Static res:Strings.GamesTheDaemonDidNotFindAny}" />
             </StackPanel>
         </Grid>
     </Grid>

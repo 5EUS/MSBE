@@ -1,18 +1,19 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:res="using:MSBE.Desktop.Resources"
         xmlns:vm="using:MSBE.Desktop.ViewModels"
         xmlns:components="using:MSBE.Desktop.Views.Components"
         x:Class="MSBE.Desktop.Views.Shell.AddInstanceWindow"
         x:DataType="vm:MainViewModel"
-        Title="Add instance"
+        Title="{x:Static res:Strings.InstancesAddInstance}"
         Background="#121419"
         Width="680" Height="760"
         MinWidth="560" MinHeight="620"
         CanResize="True">
     <Grid Margin="22" RowDefinitions="Auto,*,Auto" RowSpacing="20">
         <StackPanel Spacing="4">
-            <TextBlock Classes="sectionHeading" Text="Add an instance" />
-            <TextBlock Classes="caption" Text="Register an existing installation for a supported game." />
+            <TextBlock Classes="sectionHeading" Text="{x:Static res:Strings.AddInstanceAddAnInstance}" />
+            <TextBlock Classes="caption" Text="{x:Static res:Strings.AddInstanceRegisterAnExistingInstallationForA}" />
         </StackPanel>
 
         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
@@ -22,43 +23,43 @@
                 </Border>
 
                 <StackPanel Spacing="6">
-                    <TextBlock Classes="field-label" Text="NAME" />
-                    <TextBox Text="{Binding NewInstanceName}" PlaceholderText="My instance" />
-                    <TextBlock Classes="caption" Text="A short unique name used by profiles and commands." />
+                    <TextBlock Classes="field-label" Text="{x:Static res:Strings.AddInstanceName}" />
+                    <TextBox Text="{Binding NewInstanceName}" PlaceholderText="{x:Static res:Strings.AddInstanceMyInstance}" AutomationProperties.Name="{x:Static res:Strings.AccessInstanceName}" />
+                    <TextBlock Classes="caption" Text="{x:Static res:Strings.AddInstanceAShortUniqueNameUsedBy}" />
                 </StackPanel>
 
                 <StackPanel Spacing="6">
-                    <TextBlock Classes="field-label" Text="GAME FOLDER" />
-                    <TextBox Text="{Binding NewInstanceRoot}" PlaceholderText="/path/to/game" />
+                    <TextBlock Classes="field-label" Text="{x:Static res:Strings.AddInstanceGameFolder}" />
+                    <TextBox Text="{Binding NewInstanceRoot}" PlaceholderText="/path/to/game" AutomationProperties.Name="{x:Static res:Strings.AccessGameFolder}" />
                 </StackPanel>
 
                 <StackPanel Spacing="6">
-                    <TextBlock Classes="field-label" Text="GAME" />
+                    <TextBlock Classes="field-label" Text="{x:Static res:Strings.InstancesGame}" />
                     <components:GameSearchView />
                 </StackPanel>
 
                 <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
                     <StackPanel Spacing="6">
-                        <TextBlock Classes="field-label" Text="ECOSYSTEM" />
-                        <ComboBox ItemsSource="{Binding NewInstanceGame.Loaders}" SelectedItem="{Binding NewInstanceLoader}" />
+                        <TextBlock Classes="field-label" Text="{x:Static res:Strings.AddInstanceEcosystem}" />
+                        <ComboBox ItemsSource="{Binding NewInstanceGame.Loaders}" SelectedItem="{Binding NewInstanceLoader}" AutomationProperties.Name="{x:Static res:Strings.AccessEcosystem}" />
                     </StackPanel>
                     <StackPanel Grid.Column="1" Spacing="6">
-                        <TextBlock Classes="field-label" Text="SIDE" />
-                        <ComboBox ItemsSource="{Binding InstanceSides}" SelectedItem="{Binding NewInstanceSide}" />
+                        <TextBlock Classes="field-label" Text="{x:Static res:Strings.AddInstanceSide}" />
+                        <ComboBox ItemsSource="{Binding InstanceSides}" SelectedItem="{Binding NewInstanceSide}" AutomationProperties.Name="{x:Static res:Strings.AccessSide}" />
                     </StackPanel>
                 </Grid>
 
                 <StackPanel Spacing="6">
-                    <TextBlock Classes="field-label" Text="GAME VERSION (OPTIONAL)" />
-                    <TextBox Text="{Binding NewInstanceGameVersion}" PlaceholderText="1.21.1" />
+                    <TextBlock Classes="field-label" Text="{x:Static res:Strings.AddInstanceGameVersionOptional}" />
+                    <TextBox Text="{Binding NewInstanceGameVersion}" PlaceholderText="1.21.1" AutomationProperties.Name="{x:Static res:Strings.AccessGameVersion}" />
                 </StackPanel>
             </StackPanel>
         </ScrollViewer>
 
         <Grid Grid.Row="2" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
             <ProgressBar Width="120" Height="2" IsIndeterminate="True" IsVisible="{Binding IsAddingInstance}" />
-            <Button Grid.Column="1" Classes="secondary-button" Content="Cancel" Command="{Binding CancelAddInstanceCommand}" />
-            <Button Grid.Column="2" Classes="primary-button" Content="Add instance" Command="{Binding SubmitAddInstanceCommand}" />
+            <Button Grid.Column="1" Classes="secondary-button" Content="{x:Static res:Strings.Cancel}" Command="{Binding CancelAddInstanceCommand}" />
+            <Button Grid.Column="2" Classes="primary-button" Content="{x:Static res:Strings.InstancesAddInstance}" Command="{Binding SubmitAddInstanceCommand}" />
         </Grid>
     </Grid>
 </Window>

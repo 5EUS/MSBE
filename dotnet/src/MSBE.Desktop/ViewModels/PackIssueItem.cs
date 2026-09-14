@@ -1,3 +1,5 @@
+using MSBE.Desktop.Resources;
+
 namespace MSBE.Desktop.ViewModels;
 
 /// <summary>A blocker or warning a pack preview reported.</summary>
@@ -7,5 +9,5 @@ namespace MSBE.Desktop.ViewModels;
 internal sealed record PackIssueItem(bool IsBlocker, string Code, string Message)
 {
     /// <summary>Gets the severity label.</summary>
-    public string Severity => this.IsBlocker ? "Blocked" : "Warning";
+    public string Severity => this.IsBlocker ? Strings.PackIssueBlocked : Strings.PackIssueWarning;
 }

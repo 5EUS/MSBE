@@ -5,6 +5,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 
 using MSBE.Client;
+using MSBE.Desktop.Resources;
 
 namespace MSBE.Desktop.ViewModels;
 
@@ -55,7 +56,7 @@ internal sealed partial class MainViewModel
 
             await this.LoadModsAsync(this.SelectedInstance, this.SelectedProfile).ConfigureAwait(true);
             this.ModSource = string.Empty;
-            this.StatusMessage = $"Added {source} to {this.SelectedProfile}. Review deployment to apply it.";
+            this.StatusMessage = Strings.FormatModAddedToProfile(source, this.SelectedProfile);
         }
         catch (Exception exception) when (exception is IOException or SocketException or InvalidOperationException)
         {
@@ -89,7 +90,7 @@ internal sealed partial class MainViewModel
             }
 
             await this.LoadModsAsync(this.SelectedInstance, this.SelectedProfile).ConfigureAwait(true);
-            this.StatusMessage = $"Removed {module} from {this.SelectedProfile}. Review deployment to apply it.";
+            this.StatusMessage = Strings.FormatModRemovedFromProfile(module, this.SelectedProfile);
         }
         catch (Exception exception) when (exception is IOException or SocketException or InvalidOperationException)
         {
@@ -124,8 +125,8 @@ internal sealed partial class MainViewModel
 
             using JsonDocument document = JsonDocument.Parse(result.StandardOutput);
             string message = document.RootElement.GetProperty("rolled_back").ValueKind == JsonValueKind.String
-                ? "Rolled back the latest deployment."
-                : "There was no deployment to roll back.";
+                ? Strings.RollbackLatestDone
+                : Strings.RollbackLatestNothing;
             await this.LoadSelectedInstanceAsync(instance).ConfigureAwait(true);
             await this.LoadProfilesAsync(instance).ConfigureAwait(true);
             this.StatusMessage = message;

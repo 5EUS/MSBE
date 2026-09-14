@@ -1,19 +1,21 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:asyncImageLoader="clr-namespace:AsyncImageLoader;assembly=AsyncImageLoader.Avalonia"
+             xmlns:res="using:MSBE.Desktop.Resources"
              xmlns:vm="using:MSBE.Desktop.ViewModels"
              x:Class="MSBE.Desktop.Views.Pages.DownloadsPageView"
              x:DataType="vm:MainViewModel">
     <Grid Margin="8" RowDefinitions="Auto,Auto,Auto,*" RowSpacing="18">
         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
             <StackPanel Spacing="3">
-                <TextBlock Classes="sectionHeading" Text="Downloads" />
+                <TextBlock Classes="sectionHeading" Text="{x:Static res:Strings.WorkspaceDownloads}" />
                 <TextBlock Classes="download-meta" Text="{Binding DownloadSummary}" />
             </StackPanel>
             <Button Grid.Column="1"
                     Classes="secondary-button"
                     VerticalAlignment="Center"
-                    Command="{Binding ToggleDownloadQueuePausedCommand}">
+                    Command="{Binding ToggleDownloadQueuePausedCommand}"
+                    AutomationProperties.Name="{Binding DownloadQueueToggleLabel}">
                 <StackPanel Orientation="Horizontal" Spacing="7">
                     <LucideIcon Kind="Pause" Size="15" StrokeWidth="2" IsVisible="{Binding !IsDownloadQueuePaused}" />
                     <LucideIcon Kind="Play" Size="15" StrokeWidth="2" IsVisible="{Binding IsDownloadQueuePaused}" />
@@ -24,16 +26,16 @@
 
         <Grid Grid.Row="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
             <TextBox Text="{Binding HandoffLink}"
-                     PlaceholderText="Paste a link a provider page handed over"
-                     AutomationProperties.Name="Provider link">
+                     PlaceholderText="{x:Static res:Strings.DownloadsPasteALinkAProviderPage}"
+                     AutomationProperties.Name="{x:Static res:Strings.DownloadsProviderLink}">
                 <TextBox.KeyBindings>
                     <KeyBinding Gesture="Enter" Command="{Binding SubmitHandoffLinkCommand}" />
                 </TextBox.KeyBindings>
             </TextBox>
-            <Button Grid.Column="1" Classes="secondary-button" Command="{Binding SubmitHandoffLinkCommand}">
+            <Button Grid.Column="1" Classes="secondary-button" Command="{Binding SubmitHandoffLinkCommand}" AutomationProperties.Name="{x:Static res:Strings.DownloadsAddLink}">
                 <StackPanel Orientation="Horizontal" Spacing="7">
                     <LucideIcon Kind="ClipboardPaste" Size="15" StrokeWidth="2" />
-                    <TextBlock Text="Add link" />
+                    <TextBlock Text="{x:Static res:Strings.DownloadsAddLink}" />
                 </StackPanel>
             </Button>
         </Grid>
@@ -48,13 +50,13 @@
                                Text="{Binding BrowserSummary}"
                                TextTrimming="CharacterEllipsis" />
                     <ToggleSwitch Grid.Column="2"
-                                  OnContent="Auto-advance"
-                                  OffContent="Auto-advance"
-                                  AutomationProperties.Name="Go to the next page after each capture"
+                                  OnContent="{x:Static res:Strings.DownloadsAutoAdvance}"
+                                  OffContent="{x:Static res:Strings.DownloadsAutoAdvance}"
+                                  AutomationProperties.Name="{x:Static res:Strings.DownloadsGoToTheNextPageAfter}"
                                   IsChecked="{Binding IsBrowserAutoAdvancing}"
                                   Command="{Binding SetBrowserAutoAdvanceCommand}" />
-                    <Button Grid.Column="3" Classes="secondary-button" Content="Next page" Command="{Binding NextBrowserPageCommand}" />
-                    <Button Grid.Column="4" Classes="text-button" Content="Close browser" Command="{Binding CloseMsbeBrowserCommand}" />
+                    <Button Grid.Column="3" Classes="secondary-button" Content="{x:Static res:Strings.DownloadsNextPage}" Command="{Binding NextBrowserPageCommand}" />
+                    <Button Grid.Column="4" Classes="text-button" Content="{x:Static res:Strings.BrowserClose}" Command="{Binding CloseMsbeBrowserCommand}" />
                 </Grid>
             </Border>
             <Button Classes="secondary-button"
@@ -63,7 +65,7 @@
                     Command="{Binding NextBrowserPageCommand}">
                 <StackPanel Orientation="Horizontal" Spacing="7">
                     <LucideIcon Kind="Globe" Size="15" StrokeWidth="2" />
-                    <TextBlock Text="Open waiting pages in the MSBE browser" />
+                    <TextBlock Text="{x:Static res:Strings.DownloadsOpenWaitingPagesInTheMsbe}" />
                 </StackPanel>
             </Button>
         </Panel>
@@ -106,7 +108,7 @@
 
                 <StackPanel Spacing="10" IsVisible="{Binding HasQueuedDownloads}">
                     <StackPanel Orientation="Horizontal" Spacing="8">
-                        <TextBlock Classes="download-section" Text="UP NEXT" />
+                        <TextBlock Classes="download-section" Text="{x:Static res:Strings.DownloadsUpNext}" />
                         <TextBlock Classes="download-count" Text="{Binding QueuedDownloads.Count}" />
                     </StackPanel>
                     <ItemsControl ItemsSource="{Binding QueuedDownloads}">
@@ -136,36 +138,44 @@
                                             <TextBlock Classes="download-meta" VerticalAlignment="Center" Text="{Binding StatusText}" />
                                             <Button Classes="secondary-button"
                                                     IsVisible="{Binding NeedsProfile}"
-                                                    Content="Add to selected profile"
+                                                    Content="{x:Static res:Strings.DownloadsAddToSelectedProfile}"
                                                     Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).AddDownloadToProfileCommand}"
                                                     CommandParameter="{Binding}" />
                                         </StackPanel>
                                         <StackPanel Grid.Column="3" Classes="download-actions" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
                                             <Button Classes="icon-button"
                                                     IsVisible="{Binding IsAwaitingUser}"
-                                                    ToolTip.Tip="Open the page in the MSBE browser"
-                                                    AutomationProperties.Name="Open the page in the MSBE browser"
+                                                    ToolTip.Tip="{x:Static res:Strings.DownloadOpenPageInBrowser}"
+                                                    AutomationProperties.Name="{x:Static res:Strings.DownloadOpenPageInBrowser}"
+                                                    Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).OpenDownloadPageInBrowserCommand}"
+                                                    CommandParameter="{Binding}">
+                                                <LucideIcon Kind="ExternalLink" Size="16" StrokeWidth="2" />
+                                            </Button>
+                                            <Button Classes="icon-button"
+                                                    IsVisible="{Binding IsAwaitingUser}"
+                                                    ToolTip.Tip="{x:Static res:Strings.DownloadsOpenThePageInTheMsbe}"
+                                                    AutomationProperties.Name="{x:Static res:Strings.DownloadsOpenThePageInTheMsbe}"
                                                     Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).OpenDownloadPageCommand}"
                                                     CommandParameter="{Binding}">
                                                 <LucideIcon Kind="Globe" Size="16" StrokeWidth="2" />
                                             </Button>
                                             <Button Classes="icon-button"
-                                                    ToolTip.Tip="Move up"
-                                                    AutomationProperties.Name="Move up"
+                                                    ToolTip.Tip="{x:Static res:Strings.DownloadsMoveUp}"
+                                                    AutomationProperties.Name="{x:Static res:Strings.DownloadsMoveUp}"
                                                     Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).MoveDownloadUpCommand}"
                                                     CommandParameter="{Binding}">
                                                 <LucideIcon Kind="ChevronUp" Size="16" StrokeWidth="2" />
                                             </Button>
                                             <Button Classes="icon-button"
-                                                    ToolTip.Tip="Move down"
-                                                    AutomationProperties.Name="Move down"
+                                                    ToolTip.Tip="{x:Static res:Strings.DownloadsMoveDown}"
+                                                    AutomationProperties.Name="{x:Static res:Strings.DownloadsMoveDown}"
                                                     Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).MoveDownloadDownCommand}"
                                                     CommandParameter="{Binding}">
                                                 <LucideIcon Kind="ChevronDown" Size="16" StrokeWidth="2" />
                                             </Button>
                                             <Button Classes="icon-button"
-                                                    ToolTip.Tip="Remove from queue"
-                                                    AutomationProperties.Name="Remove from queue"
+                                                    ToolTip.Tip="{x:Static res:Strings.DownloadsRemoveFromQueue}"
+                                                    AutomationProperties.Name="{x:Static res:Strings.DownloadsRemoveFromQueue}"
                                                     Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).RemoveQueuedDownloadCommand}"
                                                     CommandParameter="{Binding}">
                                                 <LucideIcon Kind="X" Size="16" StrokeWidth="2" />
@@ -181,10 +191,10 @@
                 <StackPanel Spacing="10" IsVisible="{Binding HasFinishedDownloads}">
                     <Grid ColumnDefinitions="*,Auto">
                         <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                            <TextBlock Classes="download-section" Text="COMPLETED" />
+                            <TextBlock Classes="download-section" Text="{x:Static res:Strings.DownloadsCompleted}" />
                             <TextBlock Classes="download-count" Text="{Binding FinishedDownloads.Count}" />
                         </StackPanel>
-                        <Button Grid.Column="1" Classes="text-button" Content="Clear" Command="{Binding ClearFinishedDownloadsCommand}" />
+                        <Button Grid.Column="1" Classes="text-button" Content="{x:Static res:Strings.DownloadsClear}" Command="{Binding ClearFinishedDownloadsCommand}" />
                     </Grid>
                     <ItemsControl ItemsSource="{Binding FinishedDownloads}">
                         <ItemsControl.ItemsPanel>
@@ -214,8 +224,8 @@
                                             <LucideIcon Classes="download-ok" Kind="CircleCheck" Size="17" StrokeWidth="2" IsVisible="{Binding IsCompleted}" />
                                             <Button Classes="icon-button"
                                                     IsVisible="{Binding IsFailed}"
-                                                    ToolTip.Tip="Retry"
-                                                    AutomationProperties.Name="Retry download"
+                                                    ToolTip.Tip="{x:Static res:Strings.DownloadsRetry}"
+                                                    AutomationProperties.Name="{x:Static res:Strings.DownloadsRetryDownload}"
                                                     Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).RetryDownloadCommand}"
                                                     CommandParameter="{Binding}">
                                                 <LucideIcon Kind="RotateCw" Size="15" StrokeWidth="2" />

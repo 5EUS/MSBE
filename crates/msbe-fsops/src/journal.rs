@@ -23,6 +23,11 @@ use crate::{
 pub struct TxnId(u64);
 
 impl TxnId {
+    /// Names the transaction with numeric id `id`, such as one a user chose from the journal.
+    pub const fn new(id: u64) -> Self {
+        Self(id)
+    }
+
     /// The numeric id.
     pub const fn get(self) -> u64 {
         self.0

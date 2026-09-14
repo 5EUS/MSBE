@@ -21,7 +21,7 @@ use msbe_rpc_schema::{
     PACK_CAPTURE_EXECUTE_METHOD, PACK_CAPTURE_PREVIEW_METHOD, PACK_EXPORT_EXECUTE_METHOD,
     PACK_EXPORT_PREVIEW_METHOD, PACK_IMPORT_EXECUTE_METHOD, PACK_IMPORT_PREVIEW_METHOD,
     PACK_UPDATE_EXECUTE_METHOD, PACK_UPDATE_PREVIEW_METHOD, Response, SNAPSHOT_CREATE_METHOD,
-    SNAPSHOT_RESTORE_METHOD, codes,
+    SNAPSHOT_RESTORE_METHOD, UPDATE_APPLY_METHOD, codes,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -388,6 +388,7 @@ pub(crate) fn start(plans: &mut Plans, params: &Value) -> Result<(String, Work),
                 input: absolute(request.input)?,
             }
         }
+        UPDATE_APPLY_METHOD => Work::UpdateApply(required(&start.params)?),
         other => return Err(Failure::Params(format!("{other} is not a job method"))),
     };
     Ok((start.method, work))
@@ -483,6 +484,16 @@ pub(crate) fn execute(
             value(&msbe_pack::restore_snapshot(&home, &preview, progress)?)
         }
         Work::DownloadAdd { id } => crate::downloads::add(&environment.downloads, &home, id),
+        Work::UpdateApply(request) => msbe_cli::update_report(
+            &providers,
+            &home,
+            &request.instance,
+            request.profile.as_deref().unwrap_or(DEFAULT_PROFILE),
+            &request.modules,
+            false,
+            connect,
+        )
+        .map_err(|message| PackError::issue(IssueCode::HostFailure, message)),
     }
 }
 

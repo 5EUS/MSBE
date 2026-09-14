@@ -31,10 +31,11 @@ msbe lock                       # solve selections -> lockfile
 msbe sync                       # make disk match lockfile (the workhorse)
 msbe deploy | undeploy | purge  # materialization control
 msbe verify                     # re-hash deployment, report drift
-msbe rollback [<txn>]           # undo the last transaction
+msbe journal   <instance>       # deployments still in effect, newest first
+msbe rollback  <instance> [--to <txn>]  # undo the last deployment, or every one after <txn>
 
 msbe order     list | set | sort | pin | unpin
-msbe conflicts list | resolve
+msbe conflicts <instance> [--profile p]  # mods placing different contents at one path
 
 msbe pack      formats | options <codec>
 msbe pack      import <instance> <input> [--codec <codec>] [--options <file>] [--dry-run]
@@ -47,7 +48,8 @@ msbe snapshot  create <instance> <output> | restore <input> [--dry-run]
 msbe plan      list | show | new | validate | test | explain
 msbe registry  update | sources | trust
 
-msbe auth      login <provider> | logout | status
+msbe auth      status | acknowledge <provider> | logout <provider>
+msbe auth      login <provider> --token-from-stdin | --token-file <file>
 msbe download  add | list | pause | resume | cancel | retry | move | confirm | clear
 msbe handoff   <uri>            # a provider link from the browser, into the download queue
 msbe handler   status [<scheme>] | register <scheme> [--replace] | unregister <scheme>
@@ -136,11 +138,16 @@ Primary surfaces:
 - **Mod list** — virtualized (must stay smooth at 1000+ rows), drag-reorder where the
   plan declares ordering, inline enable/disable, filter by provider/tag/state.
 - **Browse** — unified search across providers, with provider policy shown honestly
-  ("this mod must be downloaded from the site").
+  ("this mod must be downloaded from the site"). A result whose provider needs a key or accepted
+  terms, hands files over on its own page, or runs a registered tool is marked "Needs you" before
+  it is queued, and the marked list says how many will wait. A provider that cannot be searched
+  takes a project reference instead. Both come from `provider.list`, never from provider names.
 - **Install preview** — the `OperationSet` rendered before anything happens:
   files to place, conflicts, **excluded/quarantined files with the rule that matched**,
   config merges, components to install. This is the trust-building screen.
-- **Conflicts** — a tree of file and semantic conflicts with resolution actions.
+- **Conflicts** — a tree of file and semantic conflicts with resolution actions. File conflicts
+  (`conflicts.list`) are in the History workspace: each path, the mods that place it, and removing
+  one of them.
 - **Wizard host** — renders `Question` events (FOMOD etc.) as native dialogs.
 - **Download queue** — including the browser-assisted queue with clear progress.
 
@@ -150,13 +157,27 @@ execution plan: the daemon holds it under a plan ID and digest and runs exactly 
 so Desktop and CLI show identical inclusion and policy decisions. The pack codec flag is `--codec`,
 because `--format` is the global output format. See [17](17-pack-formats-and-native-bundles.md).
 
-- **Browser tab** — the CEF component, visually distinct so it is obvious the user is
-  on a third-party site.
-- **Journal / history** — every transaction with a one-click rollback.
+- **MSBE browser** — the CEF component, a separate window visually distinct so it is obvious the
+  user is on a third-party site. Downloads drives it. Settings → Browser component says whether it
+  is installed (`browser.status` `installed`); without it, a waiting row's page opens in the user's
+  own browser and the link comes back through a link handler or the paste box.
+- **History** — every deployment still in effect, newest first, with rollback to any of them after
+  a confirmation that says how many later deployments it undoes (`journal.list`,
+  `journal.rollback`); provider updates, previewed and then applied as a job (`update.preview`,
+  `update.apply`); and snapshot restore, also a job.
+- **Settings** — Accounts from `auth.status`: sign-in state, a link to the program's key page,
+  paste → check → keep, sign out, terms, and quota headroom. A pasted key leaves the view as it is
+  sent and never comes back. Link handlers, which ask before taking a scheme from another
+  application; Browser component; and External tools, which register a program by SHA-256 once
+  its provider's terms are accepted.
 
 Accessibility and i18n are in from the start: keyboard navigation everywhere, screen
 reader labels on custom controls (an AOT-compatibility test case in its own right),
-and no string concatenation for translatable text.
+and no string concatenation for translatable text. Every user-visible string lives in
+`Resources/Strings.resx`. `Microsoft.CodeAnalysis.ResxSourceGenerator` emits `Strings.Name`
+accessors and `Strings.FormatName(...)` methods for placeholders at compile time, so resources need
+no reflection under NativeAOT; views use `{x:Static res:Strings.Name}`. A translation is a
+`Strings.<culture>.resx` beside it.
 
 ## 9.5 Headless / server mode
 

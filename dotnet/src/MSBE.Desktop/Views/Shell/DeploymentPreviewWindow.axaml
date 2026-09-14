@@ -1,17 +1,18 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:res="using:MSBE.Desktop.Resources"
         xmlns:vm="using:MSBE.Desktop.ViewModels"
         x:Class="MSBE.Desktop.Views.Shell.DeploymentPreviewWindow"
         x:DataType="vm:MainViewModel"
-        Title="Review deployment"
+        Title="{x:Static res:Strings.InstancesReviewDeployment}"
         Background="#121419"
         Width="780" Height="640"
         MinWidth="620" MinHeight="480"
         CanResize="True">
     <Grid Margin="22" RowDefinitions="Auto,Auto,*,Auto" RowSpacing="16">
         <StackPanel Spacing="4">
-            <TextBlock Classes="sectionHeading" Text="Review deployment" />
-            <TextBlock Classes="caption" Text="Inspect every managed filesystem change before applying this profile." />
+            <TextBlock Classes="sectionHeading" Text="{x:Static res:Strings.InstancesReviewDeployment}" />
+            <TextBlock Classes="caption" Text="{x:Static res:Strings.DeploymentPreviewInspectEveryManagedFilesystemChangeBefore}" />
         </StackPanel>
 
         <Grid Grid.Row="1" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="20">
@@ -20,11 +21,11 @@
                 <TextBlock Classes="caption" Text="{Binding SelectedInstance}" />
             </StackPanel>
             <StackPanel Grid.Column="1" Spacing="2">
-                <TextBlock Classes="detail-label" Text="UNCHANGED" />
+                <TextBlock Classes="detail-label" Text="{x:Static res:Strings.DeploymentPreviewUnchanged}" />
                 <TextBlock Text="{Binding DeploymentUnchangedCount}" />
             </StackPanel>
             <StackPanel Grid.Column="2" Spacing="2">
-                <TextBlock Classes="detail-label" Text="LOCAL CHANGES KEPT" />
+                <TextBlock Classes="detail-label" Text="{x:Static res:Strings.DeploymentPreviewLocalChangesKept}" />
                 <TextBlock Text="{Binding DeploymentKeptCount}" />
             </StackPanel>
         </Grid>
@@ -37,10 +38,10 @@
             </Border>
 
             <TabControl Margin="0,10,0,0" IsVisible="{Binding !HasDeploymentError}">
-                <TabItem Header="Changes">
+                <TabItem Header="{x:Static res:Strings.DeploymentPreviewChanges}">
                     <Grid RowDefinitions="Auto,*" Margin="0,12,0,0" RowSpacing="8">
-                        <TextBlock Classes="caption" Text="{Binding DeploymentChanges.Count, StringFormat={}{0} ordered operations}" />
-                        <ListBox Grid.Row="1" Classes="preview-list" ItemsSource="{Binding DeploymentChanges}">
+                        <TextBlock Classes="caption" Text="{Binding DeploymentChanges.Count, StringFormat={x:Static res:Strings.DeploymentOrderedOperations}}" />
+                        <ListBox Grid.Row="1" Classes="preview-list" ItemsSource="{Binding DeploymentChanges}" AutomationProperties.Name="{x:Static res:Strings.AccessDeploymentChanges}">
                             <ListBox.ItemTemplate>
                                 <DataTemplate x:DataType="vm:DeploymentPreviewItem">
                                     <Grid ColumnDefinitions="28,110,*" ColumnSpacing="10">
@@ -54,10 +55,10 @@
                     </Grid>
                 </TabItem>
 
-                <TabItem Header="Excluded">
+                <TabItem Header="{x:Static res:Strings.DeploymentPreviewExcluded}">
                     <Grid RowDefinitions="Auto,*" Margin="0,12,0,0" RowSpacing="8">
-                        <TextBlock Classes="caption" Text="{Binding DeploymentExclusions.Count, StringFormat={}{0} files withheld by policy}" />
-                        <ListBox Grid.Row="1" Classes="preview-list" ItemsSource="{Binding DeploymentExclusions}">
+                        <TextBlock Classes="caption" Text="{Binding DeploymentExclusions.Count, StringFormat={x:Static res:Strings.DeploymentWithheldFiles}}" />
+                        <ListBox Grid.Row="1" Classes="preview-list" ItemsSource="{Binding DeploymentExclusions}" AutomationProperties.Name="{x:Static res:Strings.AccessDeploymentExclusions}">
                             <ListBox.ItemTemplate>
                                 <DataTemplate x:DataType="vm:DeploymentExclusionItem">
                                     <Grid ColumnDefinitions="130,*" RowDefinitions="Auto,Auto" ColumnSpacing="12">
@@ -74,11 +75,11 @@
         </Grid>
 
         <Grid Grid.Row="3" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
-            <TextBlock Classes="caption" VerticalAlignment="Center" Text="Unmanaged files are never removed." />
-            <Button Grid.Column="1" Classes="secondary-button" Content="Cancel" Command="{Binding CancelDeploymentPreviewCommand}" />
+            <TextBlock Classes="caption" VerticalAlignment="Center" Text="{x:Static res:Strings.DeploymentPreviewUnmanagedFilesAreNeverRemoved}" />
+            <Button Grid.Column="1" Classes="secondary-button" Content="{x:Static res:Strings.Cancel}" Command="{Binding CancelDeploymentPreviewCommand}" />
             <Button Grid.Column="2"
                     Classes="primary-button"
-                    Content="Apply deployment"
+                    Content="{x:Static res:Strings.DeploymentPreviewApplyDeployment}"
                     IsEnabled="{Binding !IsDeploymentBusy}"
                     Command="{Binding ApplyDeploymentCommand}" />
         </Grid>

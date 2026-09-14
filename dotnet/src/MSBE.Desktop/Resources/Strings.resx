@@ -1,0 +1,1537 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <resheader name="resmimetype">
+    <value>text/microsoft-resx</value>
+  </resheader>
+  <resheader name="version">
+    <value>2.0</value>
+  </resheader>
+  <resheader name="reader">
+    <value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <resheader name="writer">
+    <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <data name="AccountsNotConnected" xml:space="preserve">
+    <value>Connect to a daemon to see provider accounts.</value>
+  </data>
+  <data name="AccountsNone" xml:space="preserve">
+    <value>No enabled provider needs a key or accepted terms.</value>
+  </data>
+  <data name="AccountsSummary" xml:space="preserve">
+    <value>Signed in to {0} of {1} providers.</value>
+  </data>
+  <data name="AccountsUnsupported" xml:space="preserve">
+    <value>This daemon cannot manage provider accounts; restart MSBE to update it.</value>
+  </data>
+  <data name="AccountsFailed" xml:space="preserve">
+    <value>Could not read provider accounts: {0}</value>
+  </data>
+  <data name="AccountTermsAccepted" xml:space="preserve">
+    <value>Terms accepted.</value>
+  </data>
+  <data name="AccountTermsNotAccepted" xml:space="preserve">
+    <value>Accept the provider's terms before signing in or downloading.</value>
+  </data>
+  <data name="AccountQuota" xml:space="preserve">
+    <value>{0} requests left ({1})</value>
+  </data>
+  <data name="AccountSignInRequired" xml:space="preserve">
+    <value>Not signed in. This provider needs a key.</value>
+  </data>
+  <data name="AccountNotSignedIn" xml:space="preserve">
+    <value>Not signed in. A key is optional.</value>
+  </data>
+  <data name="AccountSignedInFromEnvironment" xml:space="preserve">
+    <value>Signed in with a key set in the environment.</value>
+  </data>
+  <data name="AccountSignedInAs" xml:space="preserve">
+    <value>Signed in as {0}; the key is kept in the {1}.</value>
+  </data>
+  <data name="AccountSignedIn" xml:space="preserve">
+    <value>Signed in; the key is kept in the {0}.</value>
+  </data>
+  <data name="AccountSignedInLastUsed" xml:space="preserve">
+    <value>{0} Last used {1}.</value>
+  </data>
+  <data name="CredentialSourceKeyring" xml:space="preserve">
+    <value>system keyring</value>
+  </data>
+  <data name="CredentialSourceEncryptedFile" xml:space="preserve">
+    <value>encrypted file</value>
+  </data>
+  <data name="CredentialSourceMemory" xml:space="preserve">
+    <value>daemon's memory</value>
+  </data>
+  <data name="AccountTermsAcceptedStatus" xml:space="preserve">
+    <value>Accepted the terms of {0}.</value>
+  </data>
+  <data name="AccountSignedInStatus" xml:space="preserve">
+    <value>Signed in to {0}.</value>
+  </data>
+  <data name="AccountSignedOutStatus" xml:space="preserve">
+    <value>Signed out of {0}.</value>
+  </data>
+  <data name="WebPageNotHttps" xml:space="preserve">
+    <value>Only HTTPS pages are opened.</value>
+  </data>
+  <data name="WebPageOpened" xml:space="preserve">
+    <value>Opened {0} in your browser.</value>
+  </data>
+  <data name="WebPageNotOpened" xml:space="preserve">
+    <value>Could not open {0} in your browser.</value>
+  </data>
+  <data name="BrowseLinkPlaceholder" xml:space="preserve">
+    <value>Project reference, with or without {0}</value>
+  </data>
+  <data name="BrowseLinkPlaceholderNoProvider" xml:space="preserve">
+    <value>Choose a provider</value>
+  </data>
+  <data name="ProvidersFailed" xml:space="preserve">
+    <value>Could not read the enabled providers: {0}</value>
+  </data>
+  <data name="BrowseNeedsSignIn" xml:space="preserve">
+    <value>Sign in to {0} in Settings before this can download.</value>
+  </data>
+  <data name="BrowseNeedsTerms" xml:space="preserve">
+    <value>Accept the terms of {0} in Settings before this can download.</value>
+  </data>
+  <data name="BrowseNeedsTool" xml:space="preserve">
+    <value>Downloads through the program you register for {0} in Settings.</value>
+  </data>
+  <data name="BrowseNeedsPage" xml:space="preserve">
+    <value>Waits for you to start the download on the {0} page.</value>
+  </data>
+  <data name="BrowseMarkedNeedUser" xml:space="preserve">
+    <value>{0} of these wait for you after they are queued.</value>
+  </data>
+  <data name="DownloadsUnsupported" xml:space="preserve">
+    <value>This daemon has no download queue; restart MSBE to update it.</value>
+  </data>
+  <data name="BrowseAddedByLink" xml:space="preserve">
+    <value>Queued {0} from {1} for {2}.</value>
+  </data>
+  <data name="BrowseAddByLinkFailed" xml:space="preserve">
+    <value>Could not queue the project: {0}</value>
+  </data>
+  <data name="HandlerTitle" xml:space="preserve">
+    <value>{0}:// links</value>
+  </data>
+  <data name="HandlerProvider" xml:space="preserve">
+    <value>Handed over by {0}</value>
+  </data>
+  <data name="HandlerOwnedByMsbe" xml:space="preserve">
+    <value>MSBE opens these links.</value>
+  </data>
+  <data name="HandlerOwnedByMsbeReplacing" xml:space="preserve">
+    <value>MSBE opens these links. Unregistering gives them back to {0}.</value>
+  </data>
+  <data name="HandlerOwnedByMovedMsbe" xml:space="preserve">
+    <value>Registered to an MSBE installation that has moved. Register again.</value>
+  </data>
+  <data name="HandlerOwnedByOther" xml:space="preserve">
+    <value>{0} opens these links.</value>
+  </data>
+  <data name="HandlerOwnedByNobody" xml:space="preserve">
+    <value>No application opens these links.</value>
+  </data>
+  <data name="HandlerOtherApplication" xml:space="preserve">
+    <value>Another application</value>
+  </data>
+  <data name="HandlerReplaceConfirm" xml:space="preserve">
+    <value>{0} opens {1}:// links. Replace it with MSBE?</value>
+  </data>
+  <data name="HandlerRegisteredStatus" xml:space="preserve">
+    <value>MSBE now opens {0}:// links.</value>
+  </data>
+  <data name="HandlerUnregisteredStatus" xml:space="preserve">
+    <value>MSBE no longer opens {0}:// links.</value>
+  </data>
+  <data name="LinkHandlersNone" xml:space="preserve">
+    <value>No enabled provider hands links over.</value>
+  </data>
+  <data name="LinkHandlersUnsupported" xml:space="preserve">
+    <value>This daemon cannot register link handlers; restart MSBE to update it.</value>
+  </data>
+  <data name="LinkHandlersFailed" xml:space="preserve">
+    <value>Could not read link handlers: {0}</value>
+  </data>
+  <data name="BrowserComponentInstalled" xml:space="preserve">
+    <value>Installed beside the daemon. Pages that downloads wait on open in the MSBE browser.</value>
+  </data>
+  <data name="BrowserComponentMissing" xml:space="preserve">
+    <value>Not installed beside the daemon. Open waiting pages in your own browser; a link handler or the link box in Downloads brings their links back.</value>
+  </data>
+  <data name="BrowserComponentFailed" xml:space="preserve">
+    <value>Could not read the MSBE browser: {0}</value>
+  </data>
+  <data name="ToolProgram" xml:space="preserve">
+    <value>{0} (SHA-256 {1}…)</value>
+  </data>
+  <data name="ToolRegistered" xml:space="preserve">
+    <value>Registered</value>
+  </data>
+  <data name="ToolChanged" xml:space="preserve">
+    <value>Changed since it was registered. Register it again to run it.</value>
+  </data>
+  <data name="ToolMissing" xml:space="preserve">
+    <value>The registered program is missing.</value>
+  </data>
+  <data name="ToolUnregistered" xml:space="preserve">
+    <value>No program registered</value>
+  </data>
+  <data name="ToolsNone" xml:space="preserve">
+    <value>No enabled provider fetches content with an external tool.</value>
+  </data>
+  <data name="ToolsUnsupported" xml:space="preserve">
+    <value>This daemon cannot register external tools; restart MSBE to update it.</value>
+  </data>
+  <data name="ToolsFailed" xml:space="preserve">
+    <value>Could not read external tools: {0}</value>
+  </data>
+  <data name="ToolRegisteredStatus" xml:space="preserve">
+    <value>Registered the program for {0}.</value>
+  </data>
+  <data name="ToolForgottenStatus" xml:space="preserve">
+    <value>Forgot the program for {0}.</value>
+  </data>
+  <data name="Refresh" xml:space="preserve">
+    <value>Refresh</value>
+  </data>
+  <data name="Cancel" xml:space="preserve">
+    <value>Cancel</value>
+  </data>
+  <data name="SettingsAccountsTab" xml:space="preserve">
+    <value>Accounts</value>
+  </data>
+  <data name="SettingsAccountsTitle" xml:space="preserve">
+    <value>Provider accounts</value>
+  </data>
+  <data name="SettingsAccountsCaption" xml:space="preserve">
+    <value>Sign in to providers that need a key, and accept the terms providers require. A key is checked with its provider and kept by the daemon in the system keyring or an encrypted file. MSBE never shows it again.</value>
+  </data>
+  <data name="SettingsAccountsRefreshTip" xml:space="preserve">
+    <value>Read provider accounts again</value>
+  </data>
+  <data name="AccountReadTerms" xml:space="preserve">
+    <value>Read terms</value>
+  </data>
+  <data name="AccountAcceptTerms" xml:space="preserve">
+    <value>Accept terms</value>
+  </data>
+  <data name="AccountGetKey" xml:space="preserve">
+    <value>Get a key</value>
+  </data>
+  <data name="AccountKeyPlaceholder" xml:space="preserve">
+    <value>Paste your key</value>
+  </data>
+  <data name="AccountKeyName" xml:space="preserve">
+    <value>Provider key</value>
+  </data>
+  <data name="AccountSignIn" xml:space="preserve">
+    <value>Sign in</value>
+  </data>
+  <data name="AccountSignOut" xml:space="preserve">
+    <value>Sign out</value>
+  </data>
+  <data name="SettingsLinkHandlersTab" xml:space="preserve">
+    <value>Link handlers</value>
+  </data>
+  <data name="SettingsLinkHandlersTitle" xml:space="preserve">
+    <value>Link handlers</value>
+  </data>
+  <data name="SettingsLinkHandlersCaption" xml:space="preserve">
+    <value>Provider pages hand downloads over as links in their own scheme. Registering MSBE for a scheme sends those links from your browser to the download queue. Registration is for your user account only.</value>
+  </data>
+  <data name="SettingsLinkHandlersRefreshTip" xml:space="preserve">
+    <value>Read link handlers again</value>
+  </data>
+  <data name="HandlerRegister" xml:space="preserve">
+    <value>Register MSBE</value>
+  </data>
+  <data name="HandlerUnregister" xml:space="preserve">
+    <value>Unregister</value>
+  </data>
+  <data name="HandlerReplace" xml:space="preserve">
+    <value>Replace</value>
+  </data>
+  <data name="SettingsBrowserTab" xml:space="preserve">
+    <value>Browser component</value>
+  </data>
+  <data name="SettingsBrowserTitle" xml:space="preserve">
+    <value>MSBE browser</value>
+  </data>
+  <data name="SettingsBrowserCaption" xml:space="preserve">
+    <value>A separate window for the provider pages that downloads wait on. It shows the provider's own site, captures the download or link the page hands over, and passes nothing else to MSBE.</value>
+  </data>
+  <data name="SettingsBrowserRefreshTip" xml:space="preserve">
+    <value>Check the MSBE browser again</value>
+  </data>
+  <data name="BrowserOpenWaitingPages" xml:space="preserve">
+    <value>Open waiting pages</value>
+  </data>
+  <data name="BrowserClose" xml:space="preserve">
+    <value>Close browser</value>
+  </data>
+  <data name="SettingsToolsTab" xml:space="preserve">
+    <value>External tools</value>
+  </data>
+  <data name="SettingsToolsTitle" xml:space="preserve">
+    <value>External tools</value>
+  </data>
+  <data name="SettingsToolsCaption" xml:space="preserve">
+    <value>Some providers fetch content with a program you install yourself. MSBE runs a registered program only while it still has the SHA-256 it was registered with, in a clean environment and a fresh folder.</value>
+  </data>
+  <data name="SettingsToolsRefreshTip" xml:space="preserve">
+    <value>Read external tools again</value>
+  </data>
+  <data name="ToolProgramPlaceholder" xml:space="preserve">
+    <value>Full path of the installed program</value>
+  </data>
+  <data name="ToolProgramName" xml:space="preserve">
+    <value>Program path</value>
+  </data>
+  <data name="ToolAcceptTerms" xml:space="preserve">
+    <value>I accept this provider's terms</value>
+  </data>
+  <data name="ToolRegister" xml:space="preserve">
+    <value>Register</value>
+  </data>
+  <data name="ToolForget" xml:space="preserve">
+    <value>Forget</value>
+  </data>
+  <data name="DownloadOpenPageInBrowser" xml:space="preserve">
+    <value>Open the page in your browser</value>
+  </data>
+  <data name="BrowseAddByReferenceTitle" xml:space="preserve">
+    <value>ADD FROM</value>
+  </data>
+  <data name="BrowseAddByReferenceProviderName" xml:space="preserve">
+    <value>Provider to add a project from</value>
+  </data>
+  <data name="BrowseAddByReferenceName" xml:space="preserve">
+    <value>Project reference</value>
+  </data>
+  <data name="BrowseAddByReference" xml:space="preserve">
+    <value>Queue</value>
+  </data>
+  <data name="BrowseNeedsYou" xml:space="preserve">
+    <value>Needs you</value>
+  </data>
+  <data name="WorkspaceTabHistory" xml:space="preserve">
+    <value>HISTORY</value>
+  </data>
+  <data name="WorkspaceHistory" xml:space="preserve">
+    <value>History</value>
+  </data>
+  <data name="HistoryCaption" xml:space="preserve">
+    <value>Deployments, conflicts, updates and snapshots for the selected instance and profile.</value>
+  </data>
+  <data name="HistoryDeploymentsTab" xml:space="preserve">
+    <value>Deployments</value>
+  </data>
+  <data name="HistoryDeploymentsCaption" xml:space="preserve">
+    <value>Every deployment still in effect, newest first. Rolling back to one undoes every deployment after it.</value>
+  </data>
+  <data name="HistoryRefreshTip" xml:space="preserve">
+    <value>Read deployments and conflicts again</value>
+  </data>
+  <data name="JournalDeployed" xml:space="preserve">
+    <value>Deployed</value>
+  </data>
+  <data name="JournalRollBackTo" xml:space="preserve">
+    <value>Roll back to here</value>
+  </data>
+  <data name="JournalConfirm" xml:space="preserve">
+    <value>Roll back</value>
+  </data>
+  <data name="HistoryConflictsTab" xml:space="preserve">
+    <value>Conflicts</value>
+  </data>
+  <data name="HistoryConflictsCaption" xml:space="preserve">
+    <value>Paths that more than one mod in the selected profile would place with different contents. Deployment stops until each is resolved.</value>
+  </data>
+  <data name="HistoryUpdatesTab" xml:space="preserve">
+    <value>Updates</value>
+  </data>
+  <data name="HistoryUpdatesCaption" xml:space="preserve">
+    <value>Newer compatible releases for the selected profile's mods. Updating changes the profile; review deployment to apply it to the game.</value>
+  </data>
+  <data name="UpdatesCheck" xml:space="preserve">
+    <value>Check for updates</value>
+  </data>
+  <data name="UpdatesApply" xml:space="preserve">
+    <value>Update mods</value>
+  </data>
+  <data name="HistorySnapshotsTab" xml:space="preserve">
+    <value>Snapshots</value>
+  </data>
+  <data name="HistorySnapshotsCaption" xml:space="preserve">
+    <value>Restore an instance snapshot taken with msbe snapshot create. The instance returns to the state the snapshot recorded.</value>
+  </data>
+  <data name="SnapshotPathPlaceholder" xml:space="preserve">
+    <value>Full path of the snapshot</value>
+  </data>
+  <data name="SnapshotPathName" xml:space="preserve">
+    <value>Snapshot path</value>
+  </data>
+  <data name="SnapshotRestore" xml:space="preserve">
+    <value>Restore</value>
+  </data>
+  <data name="HistoryUnsupported" xml:space="preserve">
+    <value>This daemon cannot show deployments, conflicts or updates; restart MSBE to update it.</value>
+  </data>
+  <data name="JournalTransaction" xml:space="preserve">
+    <value>Transaction {0}</value>
+  </data>
+  <data name="JournalDetail" xml:space="preserve">
+    <value>{0} · {1} files</value>
+  </data>
+  <data name="JournalEmpty" xml:space="preserve">
+    <value>Nothing is deployed to {0}.</value>
+  </data>
+  <data name="JournalNoInstance" xml:space="preserve">
+    <value>Choose an instance to see its deployments.</value>
+  </data>
+  <data name="JournalConfirmRollback" xml:space="preserve">
+    <value>Undo {0} later deployment(s) so that transaction {1} is in effect again?</value>
+  </data>
+  <data name="JournalRolledBack" xml:space="preserve">
+    <value>Rolled back to transaction {0}; undid {1} deployment(s).</value>
+  </data>
+  <data name="JournalFailed" xml:space="preserve">
+    <value>Could not read the deployments: {0}</value>
+  </data>
+  <data name="JournalRollbackFailed" xml:space="preserve">
+    <value>Could not roll back: {0}</value>
+  </data>
+  <data name="JournalRollBackToName" xml:space="preserve">
+    <value>Roll back to transaction {0}</value>
+  </data>
+  <data name="ConflictsNone" xml:space="preserve">
+    <value>No mods in {0} place different contents at the same path.</value>
+  </data>
+  <data name="ConflictsSummary" xml:space="preserve">
+    <value>{0} path(s) are placed by more than one mod. Remove a mod to resolve each.</value>
+  </data>
+  <data name="ConflictsFailed" xml:space="preserve">
+    <value>Could not read conflicts: {0}</value>
+  </data>
+  <data name="ConflictClaims" xml:space="preserve">
+    <value>{0} mods</value>
+  </data>
+  <data name="ConflictClaim" xml:space="preserve">
+    <value>Would place {0}</value>
+  </data>
+  <data name="ConflictRemoveMod" xml:space="preserve">
+    <value>Remove {0}</value>
+  </data>
+  <data name="ConflictRemovedStatus" xml:space="preserve">
+    <value>Removed {0} from {1}. Review deployment to apply it.</value>
+  </data>
+  <data name="ConflictRemoveFailed" xml:space="preserve">
+    <value>Could not remove {0}: {1}</value>
+  </data>
+  <data name="UpdatesNotChecked" xml:space="preserve">
+    <value>Check the selected profile's mods for newer compatible releases.</value>
+  </data>
+  <data name="UpdatesNone" xml:space="preserve">
+    <value>Every mod in {0} that a provider can update is current.</value>
+  </data>
+  <data name="UpdatesAvailable" xml:space="preserve">
+    <value>{0} mod(s) in {1} can be updated.</value>
+  </data>
+  <data name="UpdatesOther" xml:space="preserve">
+    <value>{0} current · {1} with no compatible release · {2} unlisted · {3} not updatable</value>
+  </data>
+  <data name="UpdatesProblems" xml:space="preserve">
+    <value>{0} requirement(s) could not be met, and {1} incompatibility(ies) are declared.</value>
+  </data>
+  <data name="UpdateChange" xml:space="preserve">
+    <value>{0} → {1}</value>
+  </data>
+  <data name="UpdatesFailed" xml:space="preserve">
+    <value>Could not check for updates: {0}</value>
+  </data>
+  <data name="UpdatesApplied" xml:space="preserve">
+    <value>Updated {0} mod(s) in {1}. Review deployment to apply them.</value>
+  </data>
+  <data name="UpdatesApplyFailed" xml:space="preserve">
+    <value>Could not update mods: {0}</value>
+  </data>
+  <data name="SnapshotConfirmRestore" xml:space="preserve">
+    <value>Restore the snapshot at {0}? The instance it was taken from returns to the state it recorded.</value>
+  </data>
+  <data name="SnapshotRestored" xml:space="preserve">
+    <value>Restored the snapshot at {0}.</value>
+  </data>
+  <data name="SnapshotRestoreFailed" xml:space="preserve">
+    <value>Could not restore the snapshot: {0}</value>
+  </data>
+  <data name="SnapshotPathNotAbsolute" xml:space="preserve">
+    <value>Enter the snapshot's full path.</value>
+  </data>
+  <data name="DownloadStateQueued" xml:space="preserve">
+    <value>Queued</value>
+  </data>
+  <data name="DownloadStatePaused" xml:space="preserve">
+    <value>Paused</value>
+  </data>
+  <data name="DownloadStateResolving" xml:space="preserve">
+    <value>Resolving</value>
+  </data>
+  <data name="DownloadStateDownloading" xml:space="preserve">
+    <value>Downloading</value>
+  </data>
+  <data name="DownloadStateAwaitingUser" xml:space="preserve">
+    <value>Waiting for you</value>
+  </data>
+  <data name="DownloadStateChooseProfile" xml:space="preserve">
+    <value>Choose a profile</value>
+  </data>
+  <data name="DownloadStateDownloaded" xml:space="preserve">
+    <value>Downloaded</value>
+  </data>
+  <data name="DownloadStateAdding" xml:space="preserve">
+    <value>Adding</value>
+  </data>
+  <data name="DownloadStateAdded" xml:space="preserve">
+    <value>Added</value>
+  </data>
+  <data name="DownloadStateFailed" xml:space="preserve">
+    <value>Failed</value>
+  </data>
+  <data name="DownloadStateCancelled" xml:space="preserve">
+    <value>Cancelled</value>
+  </data>
+  <data name="DownloadFallbackTitle" xml:space="preserve">
+    <value>Download {0}</value>
+  </data>
+  <data name="DownloadSummaryNoProfile" xml:space="preserve">
+    <value>{0} · no profile yet</value>
+  </data>
+  <data name="DownloadSummary" xml:space="preserve">
+    <value>{0} · {1} / {2}</value>
+  </data>
+  <data name="DownloadSourceLink" xml:space="preserve">
+    <value>link</value>
+  </data>
+  <data name="DownloadSourceUrl" xml:space="preserve">
+    <value>url</value>
+  </data>
+  <data name="DownloadFilesProgress" xml:space="preserve">
+    <value>{0} of {1} files downloaded</value>
+  </data>
+  <data name="DownloadAlreadyInProfile" xml:space="preserve">
+    <value>Already in profile</value>
+  </data>
+  <data name="DownloadNothingAdded" xml:space="preserve">
+    <value>Nothing was added</value>
+  </data>
+  <data name="DownloadAddedOneMod" xml:space="preserve">
+    <value>Added 1 mod</value>
+  </data>
+  <data name="DownloadAddedMods" xml:space="preserve">
+    <value>Added {0} mods</value>
+  </data>
+  <data name="DownloadStartAt" xml:space="preserve">
+    <value>Start the download at {0}</value>
+  </data>
+  <data name="DownloadFailedFallback" xml:space="preserve">
+    <value>The download failed.</value>
+  </data>
+  <data name="DownloadNeedsProfile" xml:space="preserve">
+    <value>A link started this download. Add it to a profile.</value>
+  </data>
+  <data name="DownloadAddedWithWarnings" xml:space="preserve">
+    <value>{0} · {1} unresolved</value>
+  </data>
+  <data name="AddInstanceRequired" xml:space="preserve">
+    <value>Name, game, game folder, and ecosystem are required.</value>
+  </data>
+  <data name="BrowseQueueFailed" xml:space="preserve">
+    <value>Could not queue {0} downloads: {1}</value>
+  </data>
+  <data name="BrowseQueuedSomeAlready" xml:space="preserve">
+    <value>Queued {0} mod(s) for {1}; {2} already in the queue.</value>
+  </data>
+  <data name="BrowseQueued" xml:space="preserve">
+    <value>Queued {0} mod(s) for {1}.</value>
+  </data>
+  <data name="BrowseMarkedCount" xml:space="preserve">
+    <value>{0} selected</value>
+  </data>
+  <data name="BrowseDownloadsMillions" xml:space="preserve">
+    <value>{0}M downloads</value>
+  </data>
+  <data name="BrowseDownloadsThousands" xml:space="preserve">
+    <value>{0}K downloads</value>
+  </data>
+  <data name="BrowseDownloads" xml:space="preserve">
+    <value>{0} downloads</value>
+  </data>
+  <data name="ExtensionKindCodec" xml:space="preserve">
+    <value>Pack codec</value>
+  </data>
+  <data name="ExtensionKindProgram" xml:space="preserve">
+    <value>Provider program</value>
+  </data>
+  <data name="ExtensionKindTrustRoot" xml:space="preserve">
+    <value>Trust root</value>
+  </data>
+  <data name="ExtensionRefused" xml:space="preserve">
+    <value>Refused</value>
+  </data>
+  <data name="ExtensionSignedBy" xml:space="preserve">
+    <value>Signed by {0}, {1}</value>
+  </data>
+  <data name="ExtensionActive" xml:space="preserve">
+    <value>Active</value>
+  </data>
+  <data name="ShellNotConnected" xml:space="preserve">
+    <value>Not connected to a daemon.</value>
+  </data>
+  <data name="ShellConnected" xml:space="preserve">
+    <value>Connected to daemon {0} (RPC {1}).</value>
+  </data>
+  <data name="ShellDaemonOutdated" xml:space="preserve">
+    <value>Daemon RPC {0} is outdated; restart MSBE to enable Pack configuration.</value>
+  </data>
+  <data name="ShellDaemonUnavailable" xml:space="preserve">
+    <value>Daemon unavailable: {0}</value>
+  </data>
+  <data name="WorkspaceInstances" xml:space="preserve">
+    <value>Instances</value>
+  </data>
+  <data name="WorkspaceGames" xml:space="preserve">
+    <value>Games</value>
+  </data>
+  <data name="WorkspaceBrowse" xml:space="preserve">
+    <value>Browse</value>
+  </data>
+  <data name="WorkspacePack" xml:space="preserve">
+    <value>Pack</value>
+  </data>
+  <data name="WorkspaceDownloads" xml:space="preserve">
+    <value>Downloads</value>
+  </data>
+  <data name="WorkspaceSettings" xml:space="preserve">
+    <value>Settings</value>
+  </data>
+  <data name="InstanceSortNameDescending" xml:space="preserve">
+    <value>Name (Z-A)</value>
+  </data>
+  <data name="InstanceSortNameAscending" xml:space="preserve">
+    <value>Name (A-Z)</value>
+  </data>
+  <data name="CliExitCode" xml:space="preserve">
+    <value>
+Exit code: {0}</value>
+  </data>
+  <data name="InstancesLoading" xml:space="preserve">
+    <value>Loading registered instances...</value>
+  </data>
+  <data name="InstancesLoadFailed" xml:space="preserve">
+    <value>Could not load instances.</value>
+  </data>
+  <data name="InstancesCount" xml:space="preserve">
+    <value>{0} registered instance(s).</value>
+  </data>
+  <data name="InstanceRemoved" xml:space="preserve">
+    <value>Removed instance {0}. Its game files remain in place.</value>
+  </data>
+  <data name="InstanceRemoveFailed" xml:space="preserve">
+    <value>Could not remove {0}: {1}</value>
+  </data>
+  <data name="InstanceRemoveFailedStatus" xml:space="preserve">
+    <value>Could not remove instance.</value>
+  </data>
+  <data name="InstanceVersionNotSet" xml:space="preserve">
+    <value>Version not set</value>
+  </data>
+  <data name="InstanceNotDeployed" xml:space="preserve">
+    <value>Not deployed</value>
+  </data>
+  <data name="InstanceTarget" xml:space="preserve">
+    <value>{0} · {1}</value>
+  </data>
+  <data name="InstanceDeployment" xml:space="preserve">
+    <value>{0} · {1} managed files</value>
+  </data>
+  <data name="InstanceLoadFailed" xml:space="preserve">
+    <value>Could not load {0}: {1}</value>
+  </data>
+  <data name="DownloadsNone" xml:space="preserve">
+    <value>No downloads in progress</value>
+  </data>
+  <data name="DownloadsPausedQueued" xml:space="preserve">
+    <value>Paused · {0} queued</value>
+  </data>
+  <data name="DownloadsQueued" xml:space="preserve">
+    <value>{0} queued</value>
+  </data>
+  <data name="DownloadsActive" xml:space="preserve">
+    <value>{0} {1}</value>
+  </data>
+  <data name="DownloadsActivePaused" xml:space="preserve">
+    <value>{0} {1} · queue paused</value>
+  </data>
+  <data name="DownloadsActiveQueued" xml:space="preserve">
+    <value>{0} {1} · {2} queued</value>
+  </data>
+  <data name="DownloadsResumeQueue" xml:space="preserve">
+    <value>Resume queue</value>
+  </data>
+  <data name="DownloadsPauseQueue" xml:space="preserve">
+    <value>Pause queue</value>
+  </data>
+  <data name="DownloadsQueuePaused" xml:space="preserve">
+    <value>Queue paused</value>
+  </data>
+  <data name="DownloadsNothingDownloading" xml:space="preserve">
+    <value>Nothing downloading</value>
+  </data>
+  <data name="DownloadsIdleHintPaused" xml:space="preserve">
+    <value>Resume the queue to start the next download. Links from your browser are still received.</value>
+  </data>
+  <data name="DownloadsIdleHint" xml:space="preserve">
+    <value>Mods you install from Browse line up here, and MSBE keeps downloading them while this window is closed.</value>
+  </data>
+  <data name="DownloadsReadFailed" xml:space="preserve">
+    <value>Could not read the download queue: {0}</value>
+  </data>
+  <data name="DownloadsOpenPageFailed" xml:space="preserve">
+    <value>Could not open the page</value>
+  </data>
+  <data name="DownloadsNextPageFailed" xml:space="preserve">
+    <value>Could not open the next page</value>
+  </data>
+  <data name="DownloadsAutoAdvanceFailed" xml:space="preserve">
+    <value>Could not change auto-advance</value>
+  </data>
+  <data name="DownloadsCloseBrowserFailed" xml:space="preserve">
+    <value>Could not close the MSBE browser</value>
+  </data>
+  <data name="FailureReason" xml:space="preserve">
+    <value>{0}: {1}</value>
+  </data>
+  <data name="BrowserPosition" xml:space="preserve">
+    <value>{0} of {1}</value>
+  </data>
+  <data name="BrowserWaiting" xml:space="preserve">
+    <value>{0} waiting</value>
+  </data>
+  <data name="BrowserSummaryShown" xml:space="preserve">
+    <value>{0} · {1} · {2}</value>
+  </data>
+  <data name="BrowserSummary" xml:space="preserve">
+    <value>{0} · {1}</value>
+  </data>
+  <data name="HandoffReceivedMatched" xml:space="preserve">
+    <value>Received {0}:{1} release {2}; its download continues.</value>
+  </data>
+  <data name="HandoffReceivedUnmatched" xml:space="preserve">
+    <value>Received {0}:{1} release {2}. Add it to a profile from Downloads.</value>
+  </data>
+  <data name="HandoffFailed" xml:space="preserve">
+    <value>Could not add the link: {0}</value>
+  </data>
+  <data name="DownloadsCancelFailed" xml:space="preserve">
+    <value>Could not cancel the download</value>
+  </data>
+  <data name="DownloadsRetryFailed" xml:space="preserve">
+    <value>Could not retry the download</value>
+  </data>
+  <data name="DownloadsConfirmFailed" xml:space="preserve">
+    <value>Could not add the download</value>
+  </data>
+  <data name="DownloadsClearFailed" xml:space="preserve">
+    <value>Could not clear finished downloads</value>
+  </data>
+  <data name="DownloadsResumeFailed" xml:space="preserve">
+    <value>Could not resume the queue</value>
+  </data>
+  <data name="DownloadsPauseFailed" xml:space="preserve">
+    <value>Could not pause the queue</value>
+  </data>
+  <data name="DownloadsMoveFailed" xml:space="preserve">
+    <value>Could not move the download</value>
+  </data>
+  <data name="ModAddedToProfile" xml:space="preserve">
+    <value>Added {0} to {1}. Review deployment to apply it.</value>
+  </data>
+  <data name="ModRemovedFromProfile" xml:space="preserve">
+    <value>Removed {0} from {1}. Review deployment to apply it.</value>
+  </data>
+  <data name="RollbackLatestDone" xml:space="preserve">
+    <value>Rolled back the latest deployment.</value>
+  </data>
+  <data name="RollbackLatestNothing" xml:space="preserve">
+    <value>There was no deployment to roll back.</value>
+  </data>
+  <data name="DeploymentExclusionPattern" xml:space="preserve">
+    <value>{0} - {1}</value>
+  </data>
+  <data name="DeploymentDone" xml:space="preserve">
+    <value>Deployed {0} to {1}.</value>
+  </data>
+  <data name="DeploymentActionPlace" xml:space="preserve">
+    <value>Place</value>
+  </data>
+  <data name="DeploymentActionRemove" xml:space="preserve">
+    <value>Remove</value>
+  </data>
+  <data name="DeploymentActionCreateFolder" xml:space="preserve">
+    <value>Create folder</value>
+  </data>
+  <data name="DeploymentActionRemoveFolder" xml:space="preserve">
+    <value>Remove folder</value>
+  </data>
+  <data name="DeploymentActionChange" xml:space="preserve">
+    <value>Change</value>
+  </data>
+  <data name="PackCaptureNothing" xml:space="preserve">
+    <value>No in-game changes to capture.</value>
+  </data>
+  <data name="PackCaptured" xml:space="preserve">
+    <value>Captured {0} file(s) into {1}.</value>
+  </data>
+  <data name="ModSourceLocalFile" xml:space="preserve">
+    <value>Local file</value>
+  </data>
+  <data name="PackDaemonOutdated" xml:space="preserve">
+    <value>The running daemon is older than the Pack workspace. Stop it and restart MSBE to load the updated daemon.</value>
+  </data>
+  <data name="JobCancelling" xml:space="preserve">
+    <value>Cancelling</value>
+  </data>
+  <data name="JobQueued" xml:space="preserve">
+    <value>Queued</value>
+  </data>
+  <data name="JobEnded" xml:space="preserve">
+    <value>The job ended as {0}.</value>
+  </data>
+  <data name="PackConfigSaved" xml:space="preserve">
+    <value>Saved {0}.</value>
+  </data>
+  <data name="PackConfigRemoved" xml:space="preserve">
+    <value>Removed {0}.</value>
+  </data>
+  <data name="PackValid" xml:space="preserve">
+    <value>Pack is valid: {0} reproducible file(s).</value>
+  </data>
+  <data name="PackValidationFailed" xml:space="preserve">
+    <value>Pack validation failed.</value>
+  </data>
+  <data name="PackGroupProviderReference" xml:space="preserve">
+    <value>Provider reference</value>
+  </data>
+  <data name="PackGroupUserAction" xml:space="preserve">
+    <value>User action</value>
+  </data>
+  <data name="PackGroupEnvironmentInput" xml:space="preserve">
+    <value>Environment input</value>
+  </data>
+  <data name="PackGroupEmbeddedConfig" xml:space="preserve">
+    <value>Embedded config</value>
+  </data>
+  <data name="PackGroupEmbeddedLocal" xml:space="preserve">
+    <value>Embedded local content</value>
+  </data>
+  <data name="PackGroupEmbeddedOther" xml:space="preserve">
+    <value>Embedded content</value>
+  </data>
+  <data name="PackGroupDerived" xml:space="preserve">
+    <value>Derived</value>
+  </data>
+  <data name="PackGroupPolicyBlocker" xml:space="preserve">
+    <value>Policy blocker</value>
+  </data>
+  <data name="PackGroupOmitted" xml:space="preserve">
+    <value>Omitted</value>
+  </data>
+  <data name="PackExported" xml:space="preserve">
+    <value>Exported {0} to {1}.</value>
+  </data>
+  <data name="PackExportSummary" xml:space="preserve">
+    <value>{0} referenced, {1} environment input(s), {2} bytes embedded</value>
+  </data>
+  <data name="PackObservedAt" xml:space="preserve">
+    <value>{0} observed {1}</value>
+  </data>
+  <data name="PackObservedToday" xml:space="preserve">
+    <value>{0} observed today</value>
+  </data>
+  <data name="PackObservedDaysAgo" xml:space="preserve">
+    <value>{0} observed {1} day(s) ago</value>
+  </data>
+  <data name="PackActionInStore" xml:space="preserve">
+    <value>Already stored</value>
+  </data>
+  <data name="PackActionEmbedded" xml:space="preserve">
+    <value>Embedded</value>
+  </data>
+  <data name="PackActionAcquire" xml:space="preserve">
+    <value>Download</value>
+  </data>
+  <data name="PackActionReuse" xml:space="preserve">
+    <value>Unchanged</value>
+  </data>
+  <data name="PackActionMissing" xml:space="preserve">
+    <value>Missing</value>
+  </data>
+  <data name="PackUpdated" xml:space="preserve">
+    <value>Updated the pack layer of {0}.</value>
+  </data>
+  <data name="PackImported" xml:space="preserve">
+    <value>Imported the pack into {0}.</value>
+  </data>
+  <data name="PackReapplyChange" xml:space="preserve">
+    <value>Reapply change</value>
+  </data>
+  <data name="PackIssueBlocked" xml:space="preserve">
+    <value>Blocked</value>
+  </data>
+  <data name="PackIssueWarning" xml:space="preserve">
+    <value>Warning</value>
+  </data>
+  <data name="SettingsDataDirectoryUnknown" xml:space="preserve">
+    <value>Not reported by the daemon.</value>
+  </data>
+  <data name="ExtensionsNotConnected" xml:space="preserve">
+    <value>Connect to a daemon to list installed extensions.</value>
+  </data>
+  <data name="SettingsDataFolderOpened" xml:space="preserve">
+    <value>Opened data folder {0}.</value>
+  </data>
+  <data name="SettingsDataFolderNotOpened" xml:space="preserve">
+    <value>Could not open {0}. MSBE creates it when the first instance is added.</value>
+  </data>
+  <data name="ExtensionsUnsupported" xml:space="preserve">
+    <value>This daemon cannot list installed extensions; restart MSBE to update it.</value>
+  </data>
+  <data name="ExtensionsNone" xml:space="preserve">
+    <value>No extensions are installed. Signed codecs and provider programs are copied into the extensions folder inside the data folder.</value>
+  </data>
+  <data name="ExtensionsSummary" xml:space="preserve">
+    <value>{0} of {1} installed extensions are active.</value>
+  </data>
+  <data name="ExtensionsRefusedByDaemon" xml:space="preserve">
+    <value>This daemon cannot list installed extensions: {0}</value>
+  </data>
+  <data name="ExtensionsFailed" xml:space="preserve">
+    <value>Could not list installed extensions: {0}</value>
+  </data>
+  <data name="ProfileTargetUnavailable" xml:space="preserve">
+    <value>Compatibility target unavailable</value>
+  </data>
+  <data name="ProfileTargetUpdated" xml:space="preserve">
+    <value>Updated compatibility for {0}.</value>
+  </data>
+  <data name="ProfileCreated" xml:space="preserve">
+    <value>Created profile {0}.</value>
+  </data>
+  <data name="ProfileRemoved" xml:space="preserve">
+    <value>Removed profile {0}.</value>
+  </data>
+  <data name="ModFileCountOne" xml:space="preserve">
+    <value>1 file</value>
+  </data>
+  <data name="ModFileCount" xml:space="preserve">
+    <value>{0} files</value>
+  </data>
+  <data name="ExtensionRefusedDetail" xml:space="preserve">
+    <value>{0} ({1})</value>
+  </data>
+  <data name="ExtensionRefusedReason" xml:space="preserve">
+    <value>Refused.</value>
+  </data>
+  <data name="GameSearchSearchGamesOrEcosystems" xml:space="preserve">
+    <value>Search games or ecosystems</value>
+  </data>
+  <data name="GameSearchSearchSupportedGames" xml:space="preserve">
+    <value>Search supported games</value>
+  </data>
+  <data name="GameSearchSupportedGames" xml:space="preserve">
+    <value>Supported games</value>
+  </data>
+  <data name="GameSearchNoMatchingGames" xml:space="preserve">
+    <value>No matching games</value>
+  </data>
+  <data name="GameSearchTryAGameNameOrEcosystem" xml:space="preserve">
+    <value>Try a game name or ecosystem.</value>
+  </data>
+  <data name="GameSearchNoGameSupportIsLoadedBy" xml:space="preserve">
+    <value>No game support is loaded by the daemon.</value>
+  </data>
+  <data name="BrowseBrowseCompatibleMods" xml:space="preserve">
+    <value>Browse compatible mods</value>
+  </data>
+  <data name="BrowseProviderResultsAreFilteredForThe" xml:space="preserve">
+    <value>Provider results are filtered for the selected instance and profile.</value>
+  </data>
+  <data name="BrowseInstallTarget" xml:space="preserve">
+    <value>INSTALL TARGET</value>
+  </data>
+  <data name="BrowseSearchConfiguredProviders" xml:space="preserve">
+    <value>Search configured providers</value>
+  </data>
+  <data name="BrowseSearch" xml:space="preserve">
+    <value>Search</value>
+  </data>
+  <data name="BrowseMarkForInstallation" xml:space="preserve">
+    <value>Mark for installation</value>
+  </data>
+  <data name="BrowseInstalledItemsAreAlreadyIncludedIn" xml:space="preserve">
+    <value>Installed items are already included in this profile</value>
+  </data>
+  <data name="BrowseUseTheCheckboxesToMarkMods" xml:space="preserve">
+    <value>Use the checkboxes to mark mods for installation.</value>
+  </data>
+  <data name="BrowseMarkedForInstallation" xml:space="preserve">
+    <value>Marked for installation</value>
+  </data>
+  <data name="BrowseIncludeRequiredDependencies" xml:space="preserve">
+    <value>Include required dependencies</value>
+  </data>
+  <data name="BrowseAddToDownloadQueue" xml:space="preserve">
+    <value>Add to download queue</value>
+  </data>
+  <data name="BrowseSearchCompatibleProviderCatalogs" xml:space="preserve">
+    <value>Search compatible provider catalogs</value>
+  </data>
+  <data name="BrowseChooseAnInstanceAndProfileThen" xml:space="preserve">
+    <value>Choose an instance and profile, then search by mod name or purpose.</value>
+  </data>
+  <data name="DownloadsPasteALinkAProviderPage" xml:space="preserve">
+    <value>Paste a link a provider page handed over</value>
+  </data>
+  <data name="DownloadsProviderLink" xml:space="preserve">
+    <value>Provider link</value>
+  </data>
+  <data name="DownloadsAddLink" xml:space="preserve">
+    <value>Add link</value>
+  </data>
+  <data name="DownloadsAutoAdvance" xml:space="preserve">
+    <value>Auto-advance</value>
+  </data>
+  <data name="DownloadsGoToTheNextPageAfter" xml:space="preserve">
+    <value>Go to the next page after each capture</value>
+  </data>
+  <data name="DownloadsNextPage" xml:space="preserve">
+    <value>Next page</value>
+  </data>
+  <data name="DownloadsOpenWaitingPagesInTheMsbe" xml:space="preserve">
+    <value>Open waiting pages in the MSBE browser</value>
+  </data>
+  <data name="DownloadsUpNext" xml:space="preserve">
+    <value>UP NEXT</value>
+  </data>
+  <data name="DownloadsAddToSelectedProfile" xml:space="preserve">
+    <value>Add to selected profile</value>
+  </data>
+  <data name="DownloadsOpenThePageInTheMsbe" xml:space="preserve">
+    <value>Open the page in the MSBE browser</value>
+  </data>
+  <data name="DownloadsMoveUp" xml:space="preserve">
+    <value>Move up</value>
+  </data>
+  <data name="DownloadsMoveDown" xml:space="preserve">
+    <value>Move down</value>
+  </data>
+  <data name="DownloadsRemoveFromQueue" xml:space="preserve">
+    <value>Remove from queue</value>
+  </data>
+  <data name="DownloadsCompleted" xml:space="preserve">
+    <value>COMPLETED</value>
+  </data>
+  <data name="DownloadsClear" xml:space="preserve">
+    <value>Clear</value>
+  </data>
+  <data name="DownloadsRetry" xml:space="preserve">
+    <value>Retry</value>
+  </data>
+  <data name="DownloadsRetryDownload" xml:space="preserve">
+    <value>Retry download</value>
+  </data>
+  <data name="GamesGamesCurrentlyAvailableThroughTheConnected" xml:space="preserve">
+    <value>Games currently available through the connected daemon.</value>
+  </data>
+  <data name="GamesNoSupportedGamesLoaded" xml:space="preserve">
+    <value>No supported games loaded</value>
+  </data>
+  <data name="GamesTheDaemonDidNotFindAny" xml:space="preserve">
+    <value>The daemon did not find any game support definitions at startup.</value>
+  </data>
+  <data name="InstancesRegisteredInstallationsManagedByTheLocal" xml:space="preserve">
+    <value>Registered installations managed by the local daemon.</value>
+  </data>
+  <data name="InstancesAddInstance" xml:space="preserve">
+    <value>Add instance</value>
+  </data>
+  <data name="InstancesInstancesCouldNotBeLoaded" xml:space="preserve">
+    <value>Instances could not be loaded</value>
+  </data>
+  <data name="InstancesTryAgain" xml:space="preserve">
+    <value>Try again</value>
+  </data>
+  <data name="InstancesChooseAnInstanceFromTheLibrary" xml:space="preserve">
+    <value>Choose an instance from the library</value>
+  </data>
+  <data name="InstancesSelectAnInstallationInTheLeft" xml:space="preserve">
+    <value>Select an installation in the left sidebar, or register a new one to begin.</value>
+  </data>
+  <data name="InstancesRollbackLatest" xml:space="preserve">
+    <value>Rollback latest</value>
+  </data>
+  <data name="InstancesRemoveInstance" xml:space="preserve">
+    <value>Remove instance</value>
+  </data>
+  <data name="InstancesRestoreManagedFilesAndRemoveThis" xml:space="preserve">
+    <value>Restore managed files and remove this instance from MSBE. The game folder is kept.</value>
+  </data>
+  <data name="InstancesGame" xml:space="preserve">
+    <value>GAME</value>
+  </data>
+  <data name="InstancesTarget" xml:space="preserve">
+    <value>TARGET</value>
+  </data>
+  <data name="InstancesDeployment" xml:space="preserve">
+    <value>DEPLOYMENT</value>
+  </data>
+  <data name="InstancesMods" xml:space="preserve">
+    <value>Mods</value>
+  </data>
+  <data name="InstancesProfile" xml:space="preserve">
+    <value>PROFILE</value>
+  </data>
+  <data name="InstancesProfiles" xml:space="preserve">
+    <value>Profiles</value>
+  </data>
+  <data name="InstancesReviewDeployment" xml:space="preserve">
+    <value>Review deployment</value>
+  </data>
+  <data name="InstancesLocalPathHttpsUrlOrProvider" xml:space="preserve">
+    <value>Local path, HTTPS URL, or provider:project</value>
+  </data>
+  <data name="InstancesDependencies" xml:space="preserve">
+    <value>Dependencies</value>
+  </data>
+  <data name="InstancesRemoveSelected" xml:space="preserve">
+    <value>Remove selected</value>
+  </data>
+  <data name="InstancesAddSource" xml:space="preserve">
+    <value>Add source</value>
+  </data>
+  <data name="InstancesInstalledMod" xml:space="preserve">
+    <value>Installed mod</value>
+  </data>
+  <data name="InstancesNoModsInThisProfile" xml:space="preserve">
+    <value>No mods in this profile</value>
+  </data>
+  <data name="InstancesAddedModsWillAppearHereIn" xml:space="preserve">
+    <value>Added mods will appear here in deployment order.</value>
+  </data>
+  <data name="PackPacks" xml:space="preserve">
+    <value>Packs</value>
+  </data>
+  <data name="PackOwnConfigFilesThenExportImport" xml:space="preserve">
+    <value>Own config files, then export, import, update or capture through the formats the daemon discovers.</value>
+  </data>
+  <data name="PackConfigs" xml:space="preserve">
+    <value>Configs</value>
+  </data>
+  <data name="PackPackOwnedFiles" xml:space="preserve">
+    <value>PACK-OWNED FILES</value>
+  </data>
+  <data name="PackNewConfig" xml:space="preserve">
+    <value>New config</value>
+  </data>
+  <data name="PackRemoveSelectedConfig" xml:space="preserve">
+    <value>Remove selected config</value>
+  </data>
+  <data name="PackGameRelativePath" xml:space="preserve">
+    <value>GAME-RELATIVE PATH</value>
+  </data>
+  <data name="PackConfigContents" xml:space="preserve">
+    <value>Config contents</value>
+  </data>
+  <data name="PackSaveConfig" xml:space="preserve">
+    <value>Save config</value>
+  </data>
+  <data name="PackValidateLock" xml:space="preserve">
+    <value>Validate &amp; lock</value>
+  </data>
+  <data name="PackExport" xml:space="preserve">
+    <value>Export</value>
+  </data>
+  <data name="PackFormat" xml:space="preserve">
+    <value>FORMAT</value>
+  </data>
+  <data name="PackPreset" xml:space="preserve">
+    <value>PRESET</value>
+  </data>
+  <data name="PackDefaults" xml:space="preserve">
+    <value>Defaults</value>
+  </data>
+  <data name="PackDestination" xml:space="preserve">
+    <value>DESTINATION</value>
+  </data>
+  <data name="PackAbsolutePathOfThePackTo" xml:space="preserve">
+    <value>Absolute path of the pack to write</value>
+  </data>
+  <data name="PackPreviewExport" xml:space="preserve">
+    <value>Preview export</value>
+  </data>
+  <data name="PackPreview" xml:space="preserve">
+    <value>PREVIEW</value>
+  </data>
+  <data name="PackImportUpdate" xml:space="preserve">
+    <value>Import &amp; update</value>
+  </data>
+  <data name="PackPackFile" xml:space="preserve">
+    <value>PACK FILE</value>
+  </data>
+  <data name="PackAbsolutePathOfThePack" xml:space="preserve">
+    <value>Absolute path of the pack</value>
+  </data>
+  <data name="PackNewProfile" xml:space="preserve">
+    <value>NEW PROFILE</value>
+  </data>
+  <data name="PackPreviewImport" xml:space="preserve">
+    <value>Preview import</value>
+  </data>
+  <data name="PackPreviewUpdateOfProfile" xml:space="preserve">
+    <value>Preview update of profile</value>
+  </data>
+  <data name="PackAnImportCreatesAProfileWhose" xml:space="preserve">
+    <value>An import creates a profile whose pack layer is the pack. An update replaces the selected profile's pack layer and reapplies your changes; a change that no longer applies waits for your resolution.</value>
+  </data>
+  <data name="PackResolve" xml:space="preserve">
+    <value>Resolve</value>
+  </data>
+  <data name="PackRun" xml:space="preserve">
+    <value>Run</value>
+  </data>
+  <data name="PackCapture" xml:space="preserve">
+    <value>Capture</value>
+  </data>
+  <data name="PackAdoptFilesTheGameChangedBeneath" xml:space="preserve">
+    <value>Adopt files the game changed beneath the plan's mutable roots into the deployed profile as pack-owned files. Nothing outside those roots is ever captured.</value>
+  </data>
+  <data name="PackPreviewCapture" xml:space="preserve">
+    <value>Preview capture</value>
+  </data>
+  <data name="SettingsPreferencesAndShortcutsForThisMsbe" xml:space="preserve">
+    <value>Preferences and shortcuts for this MSBE installation.</value>
+  </data>
+  <data name="SettingsStorage" xml:space="preserve">
+    <value>Storage</value>
+  </data>
+  <data name="SettingsDataFolder" xml:space="preserve">
+    <value>Data folder</value>
+  </data>
+  <data name="SettingsInstancesJournalsProfilesAndPinnedPlans" xml:space="preserve">
+    <value>Instances, journals, profiles and pinned plans, as reported by the daemon.</value>
+  </data>
+  <data name="SettingsShowTheDataFolderInThe" xml:space="preserve">
+    <value>Show the data folder in the file manager</value>
+  </data>
+  <data name="SettingsOpenDataFolder" xml:space="preserve">
+    <value>Open data folder</value>
+  </data>
+  <data name="SettingsExtensions" xml:space="preserve">
+    <value>Extensions</value>
+  </data>
+  <data name="SettingsInstalledExtensions" xml:space="preserve">
+    <value>Installed extensions</value>
+  </data>
+  <data name="SettingsSignedPackCodecsAndProviderPrograms" xml:space="preserve">
+    <value>Signed pack codecs and provider programs in the extensions folder of the data folder. Each is admitted or refused on its own, so a refused one never stops the others.</value>
+  </data>
+  <data name="SettingsReadTheInstalledExtensionsAgain" xml:space="preserve">
+    <value>Read the installed extensions again</value>
+  </data>
+  <data name="SettingsAbout" xml:space="preserve">
+    <value>About</value>
+  </data>
+  <data name="SettingsManagedGameInstallations" xml:space="preserve">
+    <value>Managed game installations</value>
+  </data>
+  <data name="SettingsTheLocalDaemonOwnsInstanceData" xml:space="preserve">
+    <value>The local daemon owns instance data and deployment history. Game folders remain yours.</value>
+  </data>
+  <data name="AddInstanceAddAnInstance" xml:space="preserve">
+    <value>Add an instance</value>
+  </data>
+  <data name="AddInstanceRegisterAnExistingInstallationForA" xml:space="preserve">
+    <value>Register an existing installation for a supported game.</value>
+  </data>
+  <data name="AddInstanceName" xml:space="preserve">
+    <value>NAME</value>
+  </data>
+  <data name="AddInstanceMyInstance" xml:space="preserve">
+    <value>My instance</value>
+  </data>
+  <data name="AddInstanceAShortUniqueNameUsedBy" xml:space="preserve">
+    <value>A short unique name used by profiles and commands.</value>
+  </data>
+  <data name="AddInstanceGameFolder" xml:space="preserve">
+    <value>GAME FOLDER</value>
+  </data>
+  <data name="AddInstanceEcosystem" xml:space="preserve">
+    <value>ECOSYSTEM</value>
+  </data>
+  <data name="AddInstanceSide" xml:space="preserve">
+    <value>SIDE</value>
+  </data>
+  <data name="AddInstanceGameVersionOptional" xml:space="preserve">
+    <value>GAME VERSION (OPTIONAL)</value>
+  </data>
+  <data name="CliMsbeCommandLine" xml:space="preserve">
+    <value>MSBE Command Line</value>
+  </data>
+  <data name="MenuFile" xml:space="preserve">
+    <value>File</value>
+  </data>
+  <data name="MenuRefreshInstances" xml:space="preserve">
+    <value>Refresh instances</value>
+  </data>
+  <data name="MenuOpenCommandLine" xml:space="preserve">
+    <value>Open command line</value>
+  </data>
+  <data name="MenuView" xml:space="preserve">
+    <value>View</value>
+  </data>
+  <data name="MenuToggleLibrary" xml:space="preserve">
+    <value>Toggle library</value>
+  </data>
+  <data name="MenuCommand" xml:space="preserve">
+    <value>Command</value>
+  </data>
+  <data name="MenuOpenCommandLineCtrlShiftP" xml:space="preserve">
+    <value>Open command line (Ctrl+Shift+P)</value>
+  </data>
+  <data name="MenuMinimizeWindow" xml:space="preserve">
+    <value>Minimize window</value>
+  </data>
+  <data name="MenuMinimize" xml:space="preserve">
+    <value>Minimize</value>
+  </data>
+  <data name="MenuMaximizeOrRestoreWindow" xml:space="preserve">
+    <value>Maximize or restore window</value>
+  </data>
+  <data name="MenuMaximizeOrRestore" xml:space="preserve">
+    <value>Maximize or restore</value>
+  </data>
+  <data name="MenuCloseWindow" xml:space="preserve">
+    <value>Close window</value>
+  </data>
+  <data name="MenuClose" xml:space="preserve">
+    <value>Close</value>
+  </data>
+  <data name="DeploymentPreviewInspectEveryManagedFilesystemChangeBefore" xml:space="preserve">
+    <value>Inspect every managed filesystem change before applying this profile.</value>
+  </data>
+  <data name="DeploymentPreviewUnchanged" xml:space="preserve">
+    <value>UNCHANGED</value>
+  </data>
+  <data name="DeploymentPreviewLocalChangesKept" xml:space="preserve">
+    <value>LOCAL CHANGES KEPT</value>
+  </data>
+  <data name="DeploymentPreviewChanges" xml:space="preserve">
+    <value>Changes</value>
+  </data>
+  <data name="DeploymentPreviewExcluded" xml:space="preserve">
+    <value>Excluded</value>
+  </data>
+  <data name="DeploymentPreviewUnmanagedFilesAreNeverRemoved" xml:space="preserve">
+    <value>Unmanaged files are never removed.</value>
+  </data>
+  <data name="DeploymentPreviewApplyDeployment" xml:space="preserve">
+    <value>Apply deployment</value>
+  </data>
+  <data name="ShellThisWorkspaceIsReadyForDaemon" xml:space="preserve">
+    <value>This workspace is ready for daemon-backed content.</value>
+  </data>
+  <data name="ShellManageDownloads" xml:space="preserve">
+    <value>Manage downloads</value>
+  </data>
+  <data name="SidebarLibrary" xml:space="preserve">
+    <value>LIBRARY</value>
+  </data>
+  <data name="SidebarSearchInstances" xml:space="preserve">
+    <value>Search instances</value>
+  </data>
+  <data name="ProfilesManageProfiles" xml:space="preserve">
+    <value>Manage profiles</value>
+  </data>
+  <data name="ProfilesCreateACleanProfileOrClone" xml:space="preserve">
+    <value>Create a clean profile or clone an existing setup before changing it.</value>
+  </data>
+  <data name="ProfilesProfiles" xml:space="preserve">
+    <value>PROFILES</value>
+  </data>
+  <data name="ProfilesNewProfileName" xml:space="preserve">
+    <value>NEW PROFILE NAME</value>
+  </data>
+  <data name="ProfilesCopyFrom" xml:space="preserve">
+    <value>COPY FROM</value>
+  </data>
+  <data name="ProfilesStartEmpty" xml:space="preserve">
+    <value>Start empty</value>
+  </data>
+  <data name="ProfilesClearTheSelectionToCreateAn" xml:space="preserve">
+    <value>Clear the selection to create an empty profile.</value>
+  </data>
+  <data name="ProfilesCreateProfile" xml:space="preserve">
+    <value>Create profile</value>
+  </data>
+  <data name="ProfilesSelectedProfile" xml:space="preserve">
+    <value>SELECTED PROFILE</value>
+  </data>
+  <data name="ProfilesThisProfileIsDeployedAndCannot" xml:space="preserve">
+    <value>This profile is deployed and cannot be deleted.</value>
+  </data>
+  <data name="ProfilesModLoader" xml:space="preserve">
+    <value>MOD LOADER</value>
+  </data>
+  <data name="ProfilesLoaderId" xml:space="preserve">
+    <value>Loader ID</value>
+  </data>
+  <data name="ProfilesLoaderVersion" xml:space="preserve">
+    <value>LOADER VERSION</value>
+  </data>
+  <data name="ProfilesOptional" xml:space="preserve">
+    <value>Optional</value>
+  </data>
+  <data name="ProfilesGameSide" xml:space="preserve">
+    <value>GAME SIDE</value>
+  </data>
+  <data name="ProfilesSaveCompatibilityTarget" xml:space="preserve">
+    <value>Save compatibility target</value>
+  </data>
+  <data name="ProfilesBrowseResultsAndInstallsUseThis" xml:space="preserve">
+    <value>Browse results and installs use this profile-specific compatibility target.</value>
+  </data>
+  <data name="ProfilesDeleteSelectedProfile" xml:space="preserve">
+    <value>Delete selected profile</value>
+  </data>
+  <data name="ProfilesDone" xml:space="preserve">
+    <value>Done</value>
+  </data>
+  <data name="TabInstances" xml:space="preserve">
+    <value>INSTANCES</value>
+  </data>
+  <data name="TabGames" xml:space="preserve">
+    <value>GAMES</value>
+  </data>
+  <data name="TabBrowse" xml:space="preserve">
+    <value>BROWSE</value>
+  </data>
+  <data name="TabPack" xml:space="preserve">
+    <value>PACK</value>
+  </data>
+  <data name="TabDownloads" xml:space="preserve">
+    <value>DOWNLOADS</value>
+  </data>
+  <data name="TabSettings" xml:space="preserve">
+    <value>SETTINGS</value>
+  </data>
+  <data name="ProfileTarget" xml:space="preserve">
+    <value>{0} · {1}</value>
+  </data>
+  <data name="ProfileTargetWithVersion" xml:space="preserve">
+    <value>{0} {1} · {2}</value>
+  </data>
+  <data name="GamesSupportVersion" xml:space="preserve">
+    <value>Support {0}</value>
+  </data>
+  <data name="DeploymentOrderedOperations" xml:space="preserve">
+    <value>{0} ordered operations</value>
+  </data>
+  <data name="DeploymentWithheldFiles" xml:space="preserve">
+    <value>{0} files withheld by policy</value>
+  </data>
+  <data name="PackLockfile" xml:space="preserve">
+    <value>Lockfile: {0}</value>
+  </data>
+  <data name="InstancesModCount" xml:space="preserve">
+    <value>{0} in this profile</value>
+  </data>
+  <data name="AccessBrowseResults" xml:space="preserve">
+    <value>Search results</value>
+  </data>
+  <data name="AccessProfile" xml:space="preserve">
+    <value>Profile</value>
+  </data>
+  <data name="AccessMods" xml:space="preserve">
+    <value>Mods in this profile</value>
+  </data>
+  <data name="AccessPackConfigs" xml:space="preserve">
+    <value>Pack-owned files</value>
+  </data>
+  <data name="AccessGameRelativePath" xml:space="preserve">
+    <value>Game-relative path</value>
+  </data>
+  <data name="AccessExportFormat" xml:space="preserve">
+    <value>Export format</value>
+  </data>
+  <data name="AccessExportPreview" xml:space="preserve">
+    <value>Export preview</value>
+  </data>
+  <data name="AccessNewProfile" xml:space="preserve">
+    <value>New profile name</value>
+  </data>
+  <data name="AccessImportPreview" xml:space="preserve">
+    <value>Import preview</value>
+  </data>
+  <data name="AccessCaptureItems" xml:space="preserve">
+    <value>Files to capture</value>
+  </data>
+  <data name="AccessGameFolder" xml:space="preserve">
+    <value>Game folder</value>
+  </data>
+  <data name="AccessEcosystem" xml:space="preserve">
+    <value>Ecosystem</value>
+  </data>
+  <data name="AccessSide" xml:space="preserve">
+    <value>Side</value>
+  </data>
+  <data name="AccessGameVersion" xml:space="preserve">
+    <value>Game version</value>
+  </data>
+  <data name="AccessCommandOutput" xml:space="preserve">
+    <value>Command output</value>
+  </data>
+  <data name="AccessCommand" xml:space="preserve">
+    <value>Command</value>
+  </data>
+  <data name="AccessDeploymentChanges" xml:space="preserve">
+    <value>Planned changes</value>
+  </data>
+  <data name="AccessDeploymentExclusions" xml:space="preserve">
+    <value>Excluded files</value>
+  </data>
+  <data name="AccessInstanceSort" xml:space="preserve">
+    <value>Sort instances</value>
+  </data>
+  <data name="AccessInstanceLibrary" xml:space="preserve">
+    <value>Instance library</value>
+  </data>
+  <data name="AccessGameSide" xml:space="preserve">
+    <value>Game side</value>
+  </data>
+  <data name="AccessExportPreset" xml:space="preserve">
+    <value>Export preset</value>
+  </data>
+  <data name="AccessCopyFrom" xml:space="preserve">
+    <value>Copy from</value>
+  </data>
+  <data name="AccessLoaderVersion" xml:space="preserve">
+    <value>Loader version</value>
+  </data>
+  <data name="AccessInstanceName" xml:space="preserve">
+    <value>Instance name</value>
+  </data>
+</root>

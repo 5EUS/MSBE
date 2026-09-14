@@ -11,6 +11,7 @@ namespace MSBE.Client;
 /// <param name="Title">The title of the page the browser shows.</param>
 /// <param name="IsAutoAdvancing">Whether the browser goes to the next page once a download or link arrives.</param>
 /// <param name="Message">Why the last capture was refused, or why the browser stopped.</param>
+/// <param name="IsInstalled">Whether the browser component is installed beside the daemon.</param>
 public sealed record BrowserStatusInfo(
     bool IsRunning,
     string? Provider,
@@ -21,4 +22,5 @@ public sealed record BrowserStatusInfo(
     string? Location,
     string? Title,
     bool IsAutoAdvancing,
-    string? Message);
+    string? Message,
+    bool IsInstalled);

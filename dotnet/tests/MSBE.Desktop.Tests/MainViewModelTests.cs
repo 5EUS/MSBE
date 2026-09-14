@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Text.Json;
 
 using MSBE.Client;
+using MSBE.Desktop.Resources;
 using MSBE.Desktop.Services;
 using MSBE.Desktop.ViewModels;
 
@@ -809,6 +810,344 @@ public sealed class MainViewModelTests
         Assert.Equal("Updated the pack layer of default.", vm.StatusMessage);
     }
 
+    /// <summary>Accounts accepts terms, sends a pasted key once without keeping or repeating it, and signs out.</summary>
+    /// <returns>A task representing the test.</returns>
+    [Fact]
+    public async Task AccountsAcceptTermsSignInWithAPastedKeyAndSignOut()
+    {
+        const string Key = "pasted-provider-key-0123";
+        const string KeyPage = "https://www.keyed.test/account/keys";
+        const string Unsigned = """{"provider":"keyed","name":"Keyed","requires_auth":true,"signed_in":false,"key_page":"https://www.keyed.test/account/keys","terms":"https://www.keyed.test/terms","ack_required":true,"acknowledged":false}""";
+        const string Accepted = """{"provider":"keyed","name":"Keyed","requires_auth":true,"signed_in":false,"key_page":"https://www.keyed.test/account/keys","terms":"https://www.keyed.test/terms","ack_required":true,"acknowledged":true}""";
+        const string SignedIn = """{"provider":"keyed","name":"Keyed","requires_auth":true,"signed_in":true,"source":"keyring","account":"Player","key_page":"https://www.keyed.test/account/keys","terms":"https://www.keyed.test/terms","ack_required":true,"acknowledged":true,"quota":{"x-hourly-remaining":90}}""";
+        var links = new TestLinkLauncher();
+        var client = new TestClient(_ => new CommandResult(0, "[]", string.Empty))
+        {
+            Answer = (method, _) => method switch
+            {
+                "auth.status" => $"[{Unsigned}]",
+                "auth.acknowledge" or "auth.logout" => Accepted,
+                "auth.login" => SignedIn,
+                "provider.list" => "[]",
+                _ => null,
+            },
+        };
+        MainViewModel vm = new(client, folders: null, time: null, links);
+
+        await vm.LoadAccountsCommand.ExecuteAsync(parameter: null);
+        AccountItem account = Assert.Single(vm.Accounts);
+        Assert.Equal(Strings.AccountSignInRequired, account.SignInText);
+        Assert.Equal(Strings.FormatAccountsSummary(0, 1), vm.AccountsStatus);
+        account.Key = Key;
+        Assert.False(account.CanSignIn);
+
+        await vm.AcknowledgeTermsCommand.ExecuteAsync(account);
+        Assert.True(account.CanSignIn);
+        await vm.SignInCommand.ExecuteAsync(account);
+
+        Assert.Equal(Key, client.LastParameters("auth.login").GetProperty("token").GetString());
+        Assert.Empty(account.Key);
+        Assert.True(account.IsSignedIn);
+        Assert.Equal(Strings.FormatAccountSignedInAs("Player", Strings.CredentialSourceKeyring), account.SignInText);
+        Assert.Equal(Strings.FormatAccountQuota(90, "x-hourly-remaining"), account.QuotaText);
+        Assert.Equal(Strings.FormatAccountSignedInStatus("Keyed"), vm.StatusMessage);
+
+        await vm.OpenWebPageCommand.ExecuteAsync(account.KeyPage);
+        Assert.Equal([new Uri(KeyPage)], links.Opened);
+
+        await vm.SignOutCommand.ExecuteAsync(account);
+        Assert.False(account.IsSignedIn);
+        Assert.Equal("keyed", client.LastParameters("auth.logout").GetProperty("provider").GetString());
+    }
+
+    /// <summary>Registering MSBE for a scheme another application opens asks first, and replaces it only once confirmed.</summary>
+    /// <returns>A task representing the test.</returns>
+    [Fact]
+    public async Task LinkHandlersAskBeforeTakingASchemeFromAnotherApplication()
+    {
+        const string Owner = "Other (other.desktop)";
+        const string Other = """{"scheme":"handoff","provider":"assisted","owner":{"kind":"other","name":"Other (other.desktop)"},"current":false}""";
+        const string Registered = """{"scheme":"handoff","provider":"assisted","owner":{"kind":"msbe"},"current":true,"previous":"Other (other.desktop)"}""";
+        var client = new TestClient(_ => new CommandResult(0, "[]", string.Empty))
+        {
+            Answer = (method, parameters) => method switch
+            {
+                "handler.status" => $"[{Other}]",
+                "handler.register" when !parameters.GetProperty("replace").GetBoolean() =>
+                    throw new MsbeRpcException("another application opens handoff links", HandlerRpc.OwnedByAnotherApplication, failureCode: null),
+                "handler.register" => Registered,
+                "handler.unregister" => Other,
+                _ => null,
+            },
+        };
+        MainViewModel vm = new(client);
+
+        await vm.LoadLinkHandlersCommand.ExecuteAsync(parameter: null);
+        HandlerItem handler = Assert.Single(vm.LinkHandlers);
+        Assert.Equal(Strings.FormatHandlerOwnedByOther(Owner), handler.OwnerText);
+        Assert.True(handler.CanRegister);
+
+        await vm.RegisterLinkHandlerCommand.ExecuteAsync(handler);
+        Assert.True(handler.IsConfirmingReplace);
+        Assert.False(handler.IsRegistered);
+        Assert.Equal(Strings.FormatHandlerReplaceConfirm(Owner, "handoff"), handler.ReplaceText);
+
+        await vm.ConfirmLinkHandlerReplaceCommand.ExecuteAsync(handler);
+        Assert.True(client.LastParameters("handler.register").GetProperty("replace").GetBoolean());
+        Assert.True(handler.IsRegistered);
+        Assert.False(handler.IsConfirmingReplace);
+        Assert.Equal(Strings.FormatHandlerOwnedByMsbeReplacing(Owner), handler.OwnerText);
+
+        await vm.UnregisterLinkHandlerCommand.ExecuteAsync(handler);
+        Assert.False(handler.IsOwnedByMsbe);
+        Assert.Equal(Strings.FormatHandlerUnregisteredStatus("handoff"), vm.StatusMessage);
+    }
+
+    /// <summary>External tools register only an absolute program whose provider's terms are accepted, and forget it.</summary>
+    /// <returns>A task representing the test.</returns>
+    [Fact]
+    public async Task ExternalToolsRegisterAnAbsoluteProgramOnlyOnceTheTermsAreAccepted()
+    {
+        const string Unregistered = """{"provider":"example-tool","name":"Example tool","terms":"https://www.example.test/terms","state":"unregistered"}""";
+        const string Registered = """{"provider":"example-tool","name":"Example tool","terms":"https://www.example.test/terms","program":"/opt/tool/fetch","sha256":"0123456789abcdef0123","state":"registered"}""";
+        string program = OperatingSystem.IsWindows() ? @"C:\tools\fetch.exe" : "/opt/tool/fetch";
+        var client = new TestClient(_ => new CommandResult(0, "[]", string.Empty))
+        {
+            Answer = (method, _) => method switch
+            {
+                "tool.list" => $"[{Unregistered}]",
+                "tool.register" => Registered,
+                "tool.forget" => Unregistered,
+                _ => null,
+            },
+        };
+        MainViewModel vm = new(client);
+
+        await vm.LoadExternalToolsCommand.ExecuteAsync(parameter: null);
+        ToolItem tool = Assert.Single(vm.ExternalTools);
+        Assert.Equal(Strings.ToolUnregistered, tool.StateText);
+
+        tool.ProgramPath = "relative/fetch";
+        tool.AcceptsTerms = true;
+        Assert.False(tool.CanRegister);
+        tool.ProgramPath = program;
+        Assert.True(tool.CanRegister);
+        await vm.RegisterExternalToolCommand.ExecuteAsync(tool);
+
+        JsonElement registered = client.LastParameters("tool.register");
+        Assert.Equal(program, registered.GetProperty("program").GetString());
+        Assert.True(registered.GetProperty("accept_terms").GetBoolean());
+        Assert.Equal(Strings.ToolRegistered, tool.StateText);
+        Assert.Equal(Strings.FormatToolProgram("/opt/tool/fetch", "0123456789ab"), tool.ProgramText);
+        Assert.False(tool.AcceptsTerms);
+
+        await vm.ForgetExternalToolCommand.ExecuteAsync(tool);
+        Assert.False(tool.HasProgram);
+        Assert.Equal(Strings.FormatToolForgottenStatus("Example tool"), vm.StatusMessage);
+    }
+
+    /// <summary>Without the browser component, a waiting download's page opens in the user's own browser, and only over HTTPS.</summary>
+    /// <returns>A task representing the test.</returns>
+    [Fact]
+    public async Task WaitingPagesOpenInTheUsersBrowserWhenTheBrowserComponentIsMissing()
+    {
+        const string Missing = """{"running":false,"installed":false,"waiting":1,"auto_advance":false}""";
+        const string ToolPage = "https://www.example.test/tool";
+        var links = new TestLinkLauncher();
+        TestClient client = DownloadQueueClient(() => QueueJson);
+        client.Answer = (method, _) => method switch
+        {
+            "download.list" => QueueJson,
+            "browser.status" => Missing,
+            _ => EmptyQueueJson,
+        };
+        MainViewModel vm = new(client, folders: null, time: null, links) { IsDownloadQueueSupported = true };
+
+        await vm.RefreshDownloadsCommand.ExecuteAsync(parameter: null);
+
+        Assert.False(vm.IsBrowserComponentInstalled);
+        Assert.False(vm.CanOpenWaitingPages);
+        Assert.Equal(Strings.BrowserComponentMissing, vm.BrowserComponentStatus);
+        await vm.OpenDownloadPageInBrowserCommand.ExecuteAsync(vm.QueuedDownloads[1]);
+        Assert.Equal([new Uri(ToolPage)], links.Opened);
+        Assert.Equal(Strings.FormatWebPageOpened("www.example.test"), vm.StatusMessage);
+
+        await vm.OpenWebPageCommand.ExecuteAsync("http://www.example.test/plain");
+        Assert.Equal(Strings.WebPageNotHttps, vm.StatusMessage);
+        Assert.Single(links.Opened);
+    }
+
+    /// <summary>Browse says which results wait for the user before they are queued, and adds projects from providers without search by reference.</summary>
+    /// <returns>A task representing the test.</returns>
+    [Fact]
+    public async Task BrowseSaysWhichResultsNeedTheUserAndAddsFromProvidersWithoutSearch()
+    {
+        const string StatusJson = """{"name":"alpha","root":"/games/alpha","plan_id":"minecraft","plan_version":"1","loader":"fabric","game_version":"1.21.1","deployed_profile":"default","deployed_files":0}""";
+        const string ProfilesJson = """{"profiles":["default"],"deployed":"default"}""";
+        const string ModsJson = """{"order":[],"components":{},"mods":{}}""";
+        const string SearchJson = """[{"provider":"assisted","project":"gear","slug":"gear","title":"Gear","description":"Cogs","icon_url":null,"downloads":5},{"provider":"modrinth","project":"YL57xq9U","slug":"iris","title":"Iris","description":"Shader support","icon_url":null,"downloads":9000000}]""";
+        const string Providers = """[{"id":"assisted","name":"Assisted","prefix":"assisted:","search":true,"acquisition":"browser_assisted","requires_auth":false,"signed_in":false,"ack_required":false,"acknowledged":true},{"id":"linked","name":"Linked","prefix":"linked:","search":false,"acquisition":"direct_https","requires_auth":false,"signed_in":false,"ack_required":false,"acknowledged":true},{"id":"modrinth","name":"Modrinth","prefix":"modrinth:","search":true,"acquisition":"direct_https","requires_auth":false,"signed_in":false,"ack_required":false,"acknowledged":true}]""";
+        const string Queued = """{"id":9,"revision":1,"source":"linked:4242","target":{"instance":"alpha","profile":"default"},"with_deps":true,"attempts":0,"state":{"kind":"queued"},"files":[]}""";
+        var client = new TestClient(arguments =>
+        {
+            string output = arguments.FirstOrDefault(argument => argument is "status" or "list" or "search") switch
+            {
+                "status" => StatusJson,
+                "list" => ProfilesJson,
+                "search" => SearchJson,
+                _ => ModsJson,
+            };
+            return new CommandResult(0, output, string.Empty);
+        })
+        {
+            Answer = (method, _) => method switch
+            {
+                "provider.list" => Providers,
+                "download.enqueue" => Queued,
+                _ => EmptyQueueJson,
+            },
+        };
+        MainViewModel vm = new(client) { SelectedInstance = "alpha", BrowseQuery = "cogs", IsDownloadQueueSupported = true };
+
+        await vm.LoadProvidersCommand.ExecuteAsync(parameter: null);
+        await vm.SearchBrowseCommand.ExecuteAsync(parameter: null);
+
+        Assert.Equal(Strings.FormatBrowseNeedsPage("Assisted"), vm.BrowseResults[0].Attention);
+        Assert.False(vm.BrowseResults[1].NeedsUser);
+        vm.BrowseResults[0].IsMarked = true;
+        vm.BrowseResults[1].IsMarked = true;
+        Assert.True(vm.HasMarkedNeedingUser);
+        Assert.Equal(Strings.FormatBrowseMarkedNeedUser(1), vm.MarkedNeedUserText);
+
+        Assert.Equal("linked", Assert.Single(vm.LinkProviders).Id);
+        Assert.Equal("linked", vm.SelectedLinkProvider?.Id);
+        Assert.Equal(Strings.FormatBrowseLinkPlaceholder("linked:"), vm.LinkReferencePlaceholder);
+        vm.LinkReference = " 4242 ";
+        await vm.AddByLinkCommand.ExecuteAsync(parameter: null);
+
+        Assert.Equal("linked:4242", client.LastParameters("download.enqueue").GetProperty("source").GetString());
+        Assert.Empty(vm.LinkReference);
+        Assert.Equal(Strings.FormatBrowseAddedByLink("linked:4242", "Linked", "default"), vm.StatusMessage);
+    }
+
+    /// <summary>History rolls back to a chosen deployment only after confirming how many later deployments it undoes.</summary>
+    /// <returns>A task representing the test.</returns>
+    [Fact]
+    public async Task HistoryRollsBackToAChosenDeploymentOnlyAfterConfirming()
+    {
+        const string RolledBack = """{"rolled_back":[3,2],"journal":[{"txn":1,"profile":"default","files":3}]}""";
+        string journal = """[{"txn":1,"profile":"default","files":3},{"txn":2,"profile":"default","files":4},{"txn":3,"profile":"testing","files":5}]""";
+        string RollBack()
+        {
+            journal = """[{"txn":1,"profile":"default","files":3}]""";
+            return RolledBack;
+        }
+
+        (TestClient client, _) = HistoryClient(() => journal, RollBack);
+        MainViewModel vm = new(client) { SelectedInstance = "alpha" };
+
+        vm.NavigateCommand.Execute(WorkspacePage.History);
+        await vm.LoadHistoryCommand.ExecuteAsync(parameter: null);
+
+        Assert.Equal([3L, 2L, 1L], vm.JournalEntries.Select(entry => entry.Transaction));
+        Assert.True(vm.JournalEntries[0].IsDeployed);
+        Assert.Equal(Strings.FormatJournalDetail("testing", 5), vm.JournalEntries[0].Detail);
+        vm.RequestRollbackToCommand.Execute(vm.JournalEntries[0]);
+        Assert.False(vm.HasPendingRollback);
+        vm.RequestRollbackToCommand.Execute(vm.JournalEntries[2]);
+        Assert.Equal(Strings.FormatJournalConfirmRollback(2, 1), vm.PendingRollbackText);
+        Assert.DoesNotContain(client.Invocations, call => string.Equals(call.Method, "journal.rollback", StringComparison.Ordinal));
+
+        await vm.ConfirmRollbackCommand.ExecuteAsync(parameter: null);
+
+        JsonElement rollback = client.LastParameters("journal.rollback");
+        Assert.Equal("alpha", rollback.GetProperty("instance").GetString());
+        Assert.Equal(1L, rollback.GetProperty("txn").GetInt64());
+        Assert.Equal([1L], vm.JournalEntries.Select(entry => entry.Transaction));
+        Assert.False(vm.HasPendingRollback);
+        Assert.Equal(Strings.FormatJournalRolledBack(1, 2), vm.StatusMessage);
+    }
+
+    /// <summary>History removes a conflicting mod, and applies updates and restores a snapshot as jobs.</summary>
+    /// <returns>A task representing the test.</returns>
+    [Fact]
+    public async Task HistoryRemovesConflictingModsAndRunsUpdatesAndSnapshotRestoreAsJobs()
+    {
+        (TestClient client, List<IReadOnlyList<string>> calls) = HistoryClient(
+            () => """[{"txn":1,"profile":"default","files":3}]""",
+            () => """{"rolled_back":[],"journal":[]}""");
+        MainViewModel vm = new(client) { SelectedInstance = "alpha" };
+        vm.NavigateCommand.Execute(WorkspacePage.History);
+
+        ConflictItem conflict = Assert.Single(vm.Conflicts);
+        Assert.Equal("mods/common.jar", conflict.Path);
+        Assert.Equal(["pack-a", "pack-b"], conflict.Claims.Select(claim => claim.Module));
+        Assert.Equal(Strings.FormatConflictClaim("sha256:bbbbbbbbbbbb"), conflict.Claims[1].Detail);
+        await vm.RemoveConflictingModCommand.ExecuteAsync(conflict.Claims[1]);
+        Assert.Contains(calls, arguments => arguments.SequenceEqual(["--format", "json", "remove", "alpha", "pack-b", "--profile", "default"], StringComparer.Ordinal));
+        Assert.Equal(Strings.FormatConflictRemovedStatus("pack-b", "default"), vm.StatusMessage);
+
+        await vm.CheckUpdatesCommand.ExecuteAsync(parameter: null);
+        Assert.Equal(Strings.FormatUpdateChange("1.7.0", "1.8.0"), Assert.Single(vm.AvailableUpdates).Change);
+        Assert.Equal(Strings.FormatUpdatesOther(1, 0, 0, 1), vm.UpdatesDetail);
+        Assert.True(vm.CanApplyUpdates);
+        await vm.ApplyUpdatesCommand.ExecuteAsync(parameter: null);
+
+        JsonElement started = client.LastParameters("job.start");
+        Assert.Equal("update.apply", started.GetProperty("method").GetString());
+        Assert.Equal("default", started.GetProperty("params").GetProperty("profile").GetString());
+        Assert.Empty(vm.AvailableUpdates);
+        Assert.Equal(Strings.FormatUpdatesApplied(1, "default"), vm.StatusMessage);
+
+        string snapshot = Path.Combine(Path.GetTempPath(), "alpha.msbesnapshot");
+        vm.SnapshotRestorePath = snapshot;
+        vm.RequestSnapshotRestoreCommand.Execute(parameter: null);
+        Assert.True(vm.IsConfirmingSnapshotRestore);
+        await vm.ConfirmSnapshotRestoreCommand.ExecuteAsync(parameter: null);
+
+        started = client.LastParameters("job.start");
+        Assert.Equal("snapshot.restore", started.GetProperty("method").GetString());
+        Assert.Equal(snapshot, started.GetProperty("params").GetProperty("input").GetString());
+        Assert.Equal(Strings.FormatSnapshotRestored(snapshot), vm.StatusMessage);
+    }
+
+    /// <summary>A client whose daemon answers the History workspace's methods, and the commands it ran.</summary>
+    private static (TestClient Client, List<IReadOnlyList<string>> Calls) HistoryClient(Func<string> journal, Func<string> rollBack)
+    {
+        const string StatusJson = """{"name":"alpha","root":"/games/alpha","plan_id":"minecraft","plan_version":"1","loader":"fabric","game_version":"1.21.1","deployed_profile":"default","deployed_files":0}""";
+        const string ProfilesJson = """{"profiles":["default"],"deployed":"default"}""";
+        const string ModsJson = """{"order":[],"components":{},"mods":{}}""";
+        const string Conflicts = """[{"path":"mods/common.jar","claims":[{"module":"pack-a","blob":"sha256:aaaaaaaaaaaaaaaaaaaaaaaa"},{"module":"pack-b","blob":"sha256:bbbbbbbbbbbbbbbbbbbbbbbb"}]}]""";
+        const string Updates = """{"dry_run":true,"updated":[{"module":"iris","from":"1.7.0","to":"1.8.0"}],"current":["sodium"],"no_compatible_version":[],"unlisted":[],"not_updatable":["local"],"unresolved":[],"incompatible":[]}""";
+        const string JobDone = """{"job_id":5,"method":"update.apply","state":"succeeded","events":[{"sequence":1,"kind":"done","result":{}}],"next":1}""";
+        List<IReadOnlyList<string>> calls = [];
+        var client = new TestClient(arguments =>
+        {
+            calls.Add(arguments);
+            string output = arguments.FirstOrDefault(argument => argument is "status" or "list" or "remove") switch
+            {
+                "status" => StatusJson,
+                "list" => ProfilesJson,
+                "remove" => "\"pack-b\"",
+                _ => ModsJson,
+            };
+            return new CommandResult(0, output, string.Empty);
+        })
+        {
+            Answer = (method, _) => method switch
+            {
+                "journal.list" => journal(),
+                "journal.rollback" => rollBack(),
+                "conflicts.list" => Conflicts,
+                "update.preview" => Updates,
+                "job.start" => """{"job_id":5}""",
+                "job.events" => JobDone,
+                _ => null,
+            },
+        };
+        return (client, calls);
+    }
+
     private static CommandResult PackWorkflowResponse(IReadOnlyList<string> arguments, List<IReadOnlyList<string>> calls)
     {
         calls.Add(arguments);
@@ -866,6 +1205,17 @@ public sealed class MainViewModelTests
                 _ => EmptyQueueJson,
             },
         };
+    }
+
+    private sealed class TestLinkLauncher : ILinkLauncher
+    {
+        public List<Uri> Opened { get; } = [];
+
+        public Task<bool> OpenAsync(Uri page)
+        {
+            this.Opened.Add(page);
+            return Task.FromResult(true);
+        }
     }
 
     private sealed class TestFolderLauncher : IFolderLauncher

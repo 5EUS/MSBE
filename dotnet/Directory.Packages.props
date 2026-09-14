@@ -16,6 +16,8 @@
     <!-- Source-generator based MVVM. Reflection-based frameworks are unusable under AOT. -->
     <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.4.2" />
     <PackageVersion Include="Lucide.Avalonia" Version="0.2.21" />
+    <!-- Strongly typed accessors for Strings.resx, generated at compile time: no reflection, AOT-safe. -->
+    <PackageVersion Include="Microsoft.CodeAnalysis.ResxSourceGenerator" Version="5.0.0-1.25277.114" />
   </ItemGroup>
 
   <ItemGroup Label="Runtime">

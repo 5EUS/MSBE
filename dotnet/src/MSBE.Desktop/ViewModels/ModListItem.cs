@@ -1,5 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 
+using MSBE.Desktop.Resources;
+
 namespace MSBE.Desktop.ViewModels;
 
 /// <summary>A mod displayed in an instance profile.</summary>
@@ -13,7 +15,7 @@ namespace MSBE.Desktop.ViewModels;
 public sealed record ModListItem(string Name, string Origin, string Source, string Project, string Version, int FileCount)
 {
     /// <summary>Gets a compact file-count label.</summary>
-    public string FileSummary => this.FileCount == 1 ? "1 file" : $"{this.FileCount} files";
+    public string FileSummary => this.FileCount == 1 ? Strings.ModFileCountOne : Strings.FormatModFileCount(this.FileCount);
 
     /// <summary>Gets a one-character visual identifier.</summary>
     public string Monogram => this.Name.Length == 0 ? "?" : this.Name[..1].ToUpperInvariant();

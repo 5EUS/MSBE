@@ -1,5 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:res="using:MSBE.Desktop.Resources"
              xmlns:vm="using:MSBE.Desktop.ViewModels"
              x:Class="MSBE.Desktop.Views.Shell.CommandBarView"
              x:DataType="vm:MainViewModel">
@@ -8,18 +9,18 @@
             <TextBlock Classes="brand" Text="MSBE" />
             <Menu Grid.Column="1"
                   Background="Transparent">
-                <MenuItem Header="File">
-                    <MenuItem Header="Refresh instances" Command="{Binding RefreshInstancesCommand}" InputGesture="Ctrl+R" />
+                <MenuItem Header="{x:Static res:Strings.MenuFile}">
+                    <MenuItem Header="{x:Static res:Strings.MenuRefreshInstances}" Command="{Binding RefreshInstancesCommand}" InputGesture="Ctrl+R" />
                     <Separator />
-                    <MenuItem Header="Open command line" Command="{Binding ToggleCliCommand}" InputGesture="Ctrl+Shift+P" />
+                    <MenuItem Header="{x:Static res:Strings.MenuOpenCommandLine}" Command="{Binding ToggleCliCommand}" InputGesture="Ctrl+Shift+P" />
                 </MenuItem>
-                <MenuItem Header="View">
-                    <MenuItem Header="Toggle library" Command="{Binding ToggleSidebarCommand}" InputGesture="Ctrl+B" />
-                    <MenuItem Header="Instances" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Instances}" />
-                    <MenuItem Header="Games" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Games}" />
-                    <MenuItem Header="Browse" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Browse}" />
-                    <MenuItem Header="Downloads" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Downloads}" />
-                    <MenuItem Header="Settings" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Settings}" InputGesture="Ctrl+," />
+                <MenuItem Header="{x:Static res:Strings.MenuView}">
+                    <MenuItem Header="{x:Static res:Strings.MenuToggleLibrary}" Command="{Binding ToggleSidebarCommand}" InputGesture="Ctrl+B" />
+                    <MenuItem Header="{x:Static res:Strings.WorkspaceInstances}" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Instances}" />
+                    <MenuItem Header="{x:Static res:Strings.WorkspaceGames}" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Games}" />
+                    <MenuItem Header="{x:Static res:Strings.WorkspaceBrowse}" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Browse}" />
+                    <MenuItem Header="{x:Static res:Strings.WorkspaceDownloads}" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Downloads}" />
+                    <MenuItem Header="{x:Static res:Strings.WorkspaceSettings}" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Settings}" InputGesture="Ctrl+," />
                 </MenuItem>
             </Menu>
             <Border x:Name="TitleBarDragRegion"
@@ -31,26 +32,26 @@
             </Border>
             <Button Grid.Column="3"
                     Classes="command-button"
-                    Content="Command"
+                    Content="{x:Static res:Strings.MenuCommand}"
                     Command="{Binding ToggleCliCommand}"
-                    ToolTip.Tip="Open command line (Ctrl+Shift+P)" />
+                    ToolTip.Tip="{x:Static res:Strings.MenuOpenCommandLineCtrlShiftP}" />
             <StackPanel Grid.Column="4" Margin="4,0,0,0" Orientation="Horizontal">
                 <Button x:Name="MinimizeButton"
                         Classes="caption-button"
-                        AutomationProperties.Name="Minimize window"
-                        ToolTip.Tip="Minimize">
+                        AutomationProperties.Name="{x:Static res:Strings.MenuMinimizeWindow}"
+                        ToolTip.Tip="{x:Static res:Strings.MenuMinimize}">
                     <LucideIcon Kind="Minus" Size="15" StrokeWidth="1.8" />
                 </Button>
                 <Button x:Name="MaximizeButton"
                         Classes="caption-button"
-                        AutomationProperties.Name="Maximize or restore window"
-                        ToolTip.Tip="Maximize or restore">
+                        AutomationProperties.Name="{x:Static res:Strings.MenuMaximizeOrRestoreWindow}"
+                        ToolTip.Tip="{x:Static res:Strings.MenuMaximizeOrRestore}">
                     <LucideIcon Kind="Maximize2" Size="14" StrokeWidth="1.8" />
                 </Button>
                 <Button x:Name="CloseButton"
                         Classes="caption-button close"
-                        AutomationProperties.Name="Close window"
-                        ToolTip.Tip="Close">
+                        AutomationProperties.Name="{x:Static res:Strings.MenuCloseWindow}"
+                        ToolTip.Tip="{x:Static res:Strings.MenuClose}">
                     <LucideIcon Kind="X" Size="16" StrokeWidth="1.8" />
                 </Button>
             </StackPanel>

@@ -12,7 +12,7 @@ use std::{
     collections::BTreeSet,
     fmt, fs,
     io::{self, Read, Write},
-    path::Path,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{Arc, Mutex, MutexGuard, PoisonError},
     thread,
@@ -48,12 +48,17 @@ impl fmt::Debug for Process {
 /// Starts the browser process for a launch.
 pub type Launcher = Arc<dyn Fn(&Launch) -> io::Result<Process> + Send + Sync>;
 
+/// Where the browser component belongs: `msbe-browser` beside the daemon's executable.
+fn component() -> io::Result<PathBuf> {
+    Ok(std::env::current_exe()?
+        .with_file_name(format!("msbe-browser{}", std::env::consts::EXE_SUFFIX)))
+}
+
 /// Starts `msbe-browser` from beside the daemon's executable, with its standard input and output as
 /// the channel. No `MSBE_<PROVIDER>_TOKEN` variable reaches it.
 pub fn installed_launcher() -> Launcher {
     Arc::new(|launch| {
-        let program = std::env::current_exe()?
-            .with_file_name(format!("msbe-browser{}", std::env::consts::EXE_SUFFIX));
+        let program = component()?;
         if !program.is_file() {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
@@ -116,6 +121,9 @@ struct State {
     session: Option<Session>,
     auto_advance: bool,
     message: Option<String>,
+    /// Checks, on every report, whether the browser component is installed. A launcher a test
+    /// supplies has none, and is always there.
+    component: Option<fn() -> bool>,
 }
 
 struct Session {
@@ -143,6 +151,7 @@ impl State {
         let shown = session.and_then(|session| session.shown.as_ref());
         BrowserStatus {
             running: session.is_some(),
+            installed: self.component.is_none_or(|installed| installed()),
             provider: session.map(|session| session.provider.clone()),
             item: target.map(|target| target.item),
             page: target.map(|target| target.page.clone()),
@@ -196,6 +205,13 @@ impl Browser {
             launcher,
             state: Mutex::new(State::default()),
         }
+    }
+
+    /// The browser component installed beside the daemon, started by [`installed_launcher`].
+    pub fn installed() -> Self {
+        let browser = Self::new(installed_launcher());
+        browser.state().component = Some(|| component().is_ok_and(|program| program.is_file()));
+        browser
     }
 
     fn state(&self) -> MutexGuard<'_, State> {

@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using CommunityToolkit.Mvvm.ComponentModel;
 
 using MSBE.Client;
+using MSBE.Desktop.Resources;
 using MSBE.Desktop.Services;
 
 namespace MSBE.Desktop.ViewModels;
@@ -20,16 +21,19 @@ internal sealed partial class MainViewModel : ViewModelBase
 {
     private readonly IMsbeClient client;
     private readonly IFolderLauncher? folders;
+    private readonly ILinkLauncher? links;
     private readonly TimeProvider time;
 
     /// <summary>Initializes a new instance of the <see cref="MainViewModel" /> class.</summary>
     /// <param name="client">The client used for daemon-owned operations.</param>
     /// <param name="folders">Shows folders in the file manager, or <see langword="null" /> where there is none.</param>
     /// <param name="time">The clock ages are measured against, or <see langword="null" /> for the system clock.</param>
-    public MainViewModel(IMsbeClient client, IFolderLauncher? folders = null, TimeProvider? time = null)
+    /// <param name="links">Opens web pages in the user's own browser, or <see langword="null" /> where there is none.</param>
+    public MainViewModel(IMsbeClient client, IFolderLauncher? folders = null, TimeProvider? time = null, ILinkLauncher? links = null)
     {
         this.client = client;
         this.folders = folders;
+        this.links = links;
         this.time = time ?? TimeProvider.System;
         this.BrowseResults.CollectionChanged += this.OnBrowseResultsChanged;
         this.QueuedDownloads.CollectionChanged += this.OnDownloadsChanged;
@@ -48,7 +52,7 @@ internal sealed partial class MainViewModel : ViewModelBase
 
     /// <summary>Gets or sets the message shown in the status bar.</summary>
     [ObservableProperty]
-    public partial string StatusMessage { get; set; } = "Not connected to a daemon.";
+    public partial string StatusMessage { get; set; } = Strings.ShellNotConnected;
 
     /// <summary>Connects to the local daemon and updates the shell status.</summary>
     /// <returns>A task that completes after the connection attempt.</returns>
@@ -76,12 +80,13 @@ internal sealed partial class MainViewModel : ViewModelBase
             await this.LoadExtensionsAsync().ConfigureAwait(true);
             if (this.IsDownloadQueueSupported)
             {
+                await this.LoadIntegrationsAsync().ConfigureAwait(true);
                 this.StartDownloadPolling();
             }
 
             this.StatusMessage = this.IsPackConfigurationSupported
-                ? $"Connected to daemon {daemon.Version} (RPC {daemon.RpcVersion})."
-                : $"Daemon RPC {daemon.RpcVersion} is outdated; restart MSBE to enable Pack configuration.";
+                ? Strings.FormatShellConnected(daemon.Version, daemon.RpcVersion)
+                : Strings.FormatShellDaemonOutdated(daemon.RpcVersion);
             if (this.IsDownloadQueueSupported)
             {
                 await this.SubmitPendingLinksAsync().ConfigureAwait(true);
@@ -89,7 +94,7 @@ internal sealed partial class MainViewModel : ViewModelBase
         }
         catch (Exception exception) when (exception is IOException or SocketException or InvalidOperationException)
         {
-            this.StatusMessage = $"Daemon unavailable: {exception.Message}";
+            this.StatusMessage = Strings.FormatShellDaemonUnavailable(exception.Message);
         }
     }
 }

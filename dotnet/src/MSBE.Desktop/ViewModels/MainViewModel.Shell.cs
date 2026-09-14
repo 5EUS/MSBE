@@ -4,6 +4,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 
 using MSBE.Client;
+using MSBE.Desktop.Resources;
 
 namespace MSBE.Desktop.ViewModels;
 
@@ -28,7 +29,7 @@ internal sealed partial class MainViewModel
 
     /// <summary>Gets or sets the selected presentation order for the instance library.</summary>
     [ObservableProperty]
-    public partial string InstanceSort { get; set; } = "Name (A-Z)";
+    public partial string InstanceSort { get; set; } = Strings.InstanceSortNameAscending;
 
     /// <summary>Gets or sets the command staged in the CLI.</summary>
     [ObservableProperty]
@@ -41,12 +42,13 @@ internal sealed partial class MainViewModel
     /// <summary>Gets the title shown above the active workspace.</summary>
     public string ActiveWorkspaceTitle => this.ActiveWorkspace switch
     {
-        WorkspacePage.Instances => "Instances",
-        WorkspacePage.Games => "Games",
-        WorkspacePage.Browse => "Browse",
-        WorkspacePage.Pack => "Pack",
-        WorkspacePage.Downloads => "Downloads",
-        WorkspacePage.Settings => "Settings",
+        WorkspacePage.Instances => Strings.WorkspaceInstances,
+        WorkspacePage.Games => Strings.WorkspaceGames,
+        WorkspacePage.Browse => Strings.WorkspaceBrowse,
+        WorkspacePage.Pack => Strings.WorkspacePack,
+        WorkspacePage.Downloads => Strings.WorkspaceDownloads,
+        WorkspacePage.History => Strings.WorkspaceHistory,
+        WorkspacePage.Settings => Strings.WorkspaceSettings,
         _ => "MSBE",
     };
 
@@ -65,14 +67,17 @@ internal sealed partial class MainViewModel
     /// <summary>Gets a value indicating whether the downloads workspace is active.</summary>
     public bool IsDownloadsWorkspace => this.ActiveWorkspace == WorkspacePage.Downloads;
 
+    /// <summary>Gets a value indicating whether the history workspace is active.</summary>
+    public bool IsHistoryWorkspace => this.ActiveWorkspace == WorkspacePage.History;
+
     /// <summary>Gets a value indicating whether the settings workspace is active.</summary>
     public bool IsSettingsWorkspace => this.ActiveWorkspace == WorkspacePage.Settings;
 
     /// <summary>Gets a value indicating whether a not-yet-implemented workspace is active.</summary>
-    public bool IsPlaceholderWorkspace => !this.IsInstancesWorkspace && !this.IsBrowseWorkspace && !this.IsGamesWorkspace && !this.IsPackWorkspace && !this.IsDownloadsWorkspace && !this.IsSettingsWorkspace;
+    public bool IsPlaceholderWorkspace => !this.IsInstancesWorkspace && !this.IsBrowseWorkspace && !this.IsGamesWorkspace && !this.IsPackWorkspace && !this.IsDownloadsWorkspace && !this.IsHistoryWorkspace && !this.IsSettingsWorkspace;
 
     /// <summary>Gets the available instance library sort orders.</summary>
-    public IReadOnlyList<string> InstanceSorts { get; } = ["Name (A-Z)", "Name (Z-A)"];
+    public IReadOnlyList<string> InstanceSorts { get; } = [Strings.InstanceSortNameAscending, Strings.InstanceSortNameDescending];
 
     private static string[] SplitArguments(string command) => command.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
@@ -84,8 +89,13 @@ internal sealed partial class MainViewModel
         this.OnPropertyChanged(nameof(this.IsGamesWorkspace));
         this.OnPropertyChanged(nameof(this.IsPackWorkspace));
         this.OnPropertyChanged(nameof(this.IsDownloadsWorkspace));
+        this.OnPropertyChanged(nameof(this.IsHistoryWorkspace));
         this.OnPropertyChanged(nameof(this.IsSettingsWorkspace));
         this.OnPropertyChanged(nameof(this.IsPlaceholderWorkspace));
+        if (value == WorkspacePage.History)
+        {
+            _ = this.LoadHistoryAsync();
+        }
     }
 
     [RelayCommand]
@@ -116,11 +126,11 @@ internal sealed partial class MainViewModel
             CommandResult result = await this.client.RunCommandAsync(SplitArguments(command), CancellationToken.None).ConfigureAwait(false);
             this.CliTranscript += result.StandardOutput;
             this.CliTranscript += result.StandardError;
-            this.CliTranscript += $"\nExit code: {result.ExitCode}";
+            this.CliTranscript += Strings.FormatCliExitCode(result.ExitCode);
         }
         catch (Exception exception) when (exception is IOException or SocketException or InvalidOperationException)
         {
-            this.CliTranscript += $"Daemon unavailable: {exception.Message}";
+            this.CliTranscript += Strings.FormatShellDaemonUnavailable(exception.Message);
         }
     }
 }

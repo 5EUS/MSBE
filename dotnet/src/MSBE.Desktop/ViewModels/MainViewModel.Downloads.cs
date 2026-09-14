@@ -7,6 +7,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 
 using MSBE.Client;
+using MSBE.Desktop.Resources;
 
 namespace MSBE.Desktop.ViewModels;
 
@@ -68,7 +69,7 @@ internal sealed partial class MainViewModel
     public partial bool IsBrowserAutoAdvancing { get; set; }
 
     /// <summary>Gets a value indicating whether files wait on a page and the MSBE browser is closed.</summary>
-    public bool CanOpenWaitingPages => this.WaitingPageCount > 0 && !this.IsBrowserOpen;
+    public bool CanOpenWaitingPages => this.WaitingPageCount > 0 && !this.IsBrowserOpen && this.IsBrowserComponentInstalled;
 
     /// <summary>Gets a value indicating whether the daemon is working on a download.</summary>
     public bool IsDownloading => this.ActiveDownload is not null;
@@ -88,24 +89,24 @@ internal sealed partial class MainViewModel
     /// <summary>Gets a one-line account of the queue.</summary>
     public string DownloadSummary => (this.ActiveDownload, this.QueuedDownloads.Count) switch
     {
-        (null, 0) => "No downloads in progress",
-        (null, int queued) when this.IsDownloadQueuePaused => $"Paused · {queued} queued",
-        (null, int queued) => $"{queued} queued",
-        ({ } active, 0) => $"{active.StatusText} {active.Title}",
-        ({ } active, _) when this.IsDownloadQueuePaused => $"{active.StatusText} {active.Title} · queue paused",
-        ({ } active, int queued) => $"{active.StatusText} {active.Title} · {queued} queued",
+        (null, 0) => Strings.DownloadsNone,
+        (null, int queued) when this.IsDownloadQueuePaused => Strings.FormatDownloadsPausedQueued(queued),
+        (null, int queued) => Strings.FormatDownloadsQueued(queued),
+        ({ } active, 0) => Strings.FormatDownloadsActive(active.StatusText, active.Title),
+        ({ } active, _) when this.IsDownloadQueuePaused => Strings.FormatDownloadsActivePaused(active.StatusText, active.Title),
+        ({ } active, int queued) => Strings.FormatDownloadsActiveQueued(active.StatusText, active.Title, queued),
     };
 
     /// <summary>Gets the label of the pause toggle.</summary>
-    public string DownloadQueueToggleLabel => this.IsDownloadQueuePaused ? "Resume queue" : "Pause queue";
+    public string DownloadQueueToggleLabel => this.IsDownloadQueuePaused ? Strings.DownloadsResumeQueue : Strings.DownloadsPauseQueue;
 
     /// <summary>Gets the heading shown while nothing is downloading.</summary>
-    public string DownloadIdleTitle => this.IsDownloadQueuePaused && this.HasQueuedDownloads ? "Queue paused" : "Nothing downloading";
+    public string DownloadIdleTitle => this.IsDownloadQueuePaused && this.HasQueuedDownloads ? Strings.DownloadsQueuePaused : Strings.DownloadsNothingDownloading;
 
     /// <summary>Gets the hint shown while nothing is downloading.</summary>
     public string DownloadIdleHint => this.IsDownloadQueuePaused && this.HasQueuedDownloads
-        ? "Resume the queue to start the next download. Links from your browser are still received."
-        : "Mods you install from Browse line up here, and MSBE keeps downloading them while this window is closed.";
+        ? Strings.DownloadsIdleHintPaused
+        : Strings.DownloadsIdleHint;
 
     /// <summary>Hands a link the operating system opened MSBE with to the daemon's download queue, holding it until the daemon connects.</summary>
     /// <param name="link">The link a provider page handed over.</param>
@@ -170,7 +171,7 @@ internal sealed partial class MainViewModel
         }
         catch (Exception exception) when (exception is IOException or SocketException or JsonException or InvalidOperationException or KeyNotFoundException)
         {
-            this.StatusMessage = $"Could not read the download queue: {exception.Message}";
+            this.StatusMessage = Strings.FormatDownloadsReadFailed(exception.Message);
             return;
         }
 
@@ -189,24 +190,29 @@ internal sealed partial class MainViewModel
     [RelayCommand]
     private Task OpenDownloadPageAsync(DownloadQueueItem? download) => download is not { IsAwaitingUser: true }
         ? Task.CompletedTask
-        : this.ChangeBrowserAsync(() => this.client.OpenBrowserAsync(download.Id, this.IsBrowserAutoAdvancing, CancellationToken.None), "Could not open the page");
+        : this.ChangeBrowserAsync(() => this.client.OpenBrowserAsync(download.Id, this.IsBrowserAutoAdvancing, CancellationToken.None), Strings.DownloadsOpenPageFailed);
+
+    [RelayCommand]
+    private Task OpenDownloadPageInBrowserAsync(DownloadQueueItem? download) => download is not { IsAwaitingUser: true, Page: { } page }
+        ? Task.CompletedTask
+        : this.OpenWebPageAsync(page);
 
     [RelayCommand]
     private Task NextBrowserPageAsync()
     {
         // While the browser shows a page the daemon already has the setting, and sending it alone would only change it.
         bool? autoAdvance = this.IsBrowserOpen ? null : this.IsBrowserAutoAdvancing;
-        return this.ChangeBrowserAsync(() => this.client.OpenBrowserAsync(id: null, autoAdvance, CancellationToken.None), "Could not open the next page");
+        return this.ChangeBrowserAsync(() => this.client.OpenBrowserAsync(id: null, autoAdvance, CancellationToken.None), Strings.DownloadsNextPageFailed);
     }
 
     [RelayCommand]
     private Task SetBrowserAutoAdvanceAsync() => this.IsBrowserOpen
-        ? this.ChangeBrowserAsync(() => this.client.OpenBrowserAsync(id: null, this.IsBrowserAutoAdvancing, CancellationToken.None), "Could not change auto-advance")
+        ? this.ChangeBrowserAsync(() => this.client.OpenBrowserAsync(id: null, this.IsBrowserAutoAdvancing, CancellationToken.None), Strings.DownloadsAutoAdvanceFailed)
         : Task.CompletedTask;
 
     [RelayCommand]
     private Task CloseMsbeBrowserAsync() =>
-        this.ChangeBrowserAsync(() => this.client.CloseBrowserAsync(CancellationToken.None), "Could not close the MSBE browser");
+        this.ChangeBrowserAsync(() => this.client.CloseBrowserAsync(CancellationToken.None), Strings.DownloadsCloseBrowserFailed);
 
     /// <summary>Asks the daemon to change the MSBE browser, then shows the browser as it now is.</summary>
     private async Task ChangeBrowserAsync(Func<Task<BrowserStatusInfo>> change, string failure)
@@ -222,18 +228,19 @@ internal sealed partial class MainViewModel
         }
         catch (Exception exception) when (exception is IOException or SocketException or JsonException or InvalidOperationException or KeyNotFoundException)
         {
-            this.StatusMessage = $"{failure}: {exception.Message}";
+            this.StatusMessage = Strings.FormatFailureReason(failure, exception.Message);
         }
     }
 
     private void ApplyBrowserStatus(BrowserStatusInfo status)
     {
         this.IsBrowserOpen = status.IsRunning;
+        this.IsBrowserComponentInstalled = status.IsInstalled;
         this.WaitingPageCount = status.Waiting;
         this.IsBrowserAutoAdvancing = status.IsAutoAdvancing;
-        string position = status.Position is long at ? $"{at} of {status.Waiting}" : $"{status.Waiting} waiting";
+        string position = status.Position is long at ? Strings.FormatBrowserPosition(at, status.Waiting) : Strings.FormatBrowserWaiting(status.Waiting);
         string shown = status.Title is { Length: > 0 } title ? title : status.Location ?? status.Page ?? string.Empty;
-        this.BrowserSummary = shown.Length > 0 ? $"{status.Provider} · {position} · {shown}" : $"{status.Provider} · {position}";
+        this.BrowserSummary = shown.Length > 0 ? Strings.FormatBrowserSummaryShown(status.Provider, position, shown) : Strings.FormatBrowserSummary(status.Provider, position);
         if (status.Message is { } message && !string.Equals(message, this.browserMessage, StringComparison.Ordinal))
         {
             this.StatusMessage = message;
@@ -260,9 +267,9 @@ internal sealed partial class MainViewModel
     /// <summary>Hands the links that arrived before the daemon connected to its download queue.</summary>
     private async Task SubmitPendingLinksAsync()
     {
-        List<string> links = [.. this.pendingLinks];
+        List<string> arrived = [.. this.pendingLinks];
         this.pendingLinks.Clear();
-        foreach (string link in links)
+        foreach (string link in arrived)
         {
             await this.SubmitLinkAsync(link).ConfigureAwait(true);
         }
@@ -274,14 +281,13 @@ internal sealed partial class MainViewModel
         try
         {
             HandoffReceiptInfo receipt = await this.client.SubmitHandoffAsync(link, CancellationToken.None).ConfigureAwait(true);
-            string received = $"{receipt.Provider}:{receipt.Project} release {receipt.Release}";
             this.StatusMessage = receipt.IsMatched
-                ? $"Received {received}; its download continues."
-                : $"Received {received}. Add it to a profile from Downloads.";
+                ? Strings.FormatHandoffReceivedMatched(receipt.Provider, receipt.Project, receipt.Release)
+                : Strings.FormatHandoffReceivedUnmatched(receipt.Provider, receipt.Project, receipt.Release);
         }
         catch (Exception exception) when (exception is IOException or SocketException or JsonException or InvalidOperationException or KeyNotFoundException)
         {
-            this.StatusMessage = $"Could not add the link: {exception.Message}";
+            this.StatusMessage = Strings.FormatHandoffFailed(exception.Message);
             return false;
         }
 
@@ -298,12 +304,12 @@ internal sealed partial class MainViewModel
     [RelayCommand]
     private Task RemoveQueuedDownloadAsync(DownloadQueueItem? download) => download is null
         ? Task.CompletedTask
-        : this.ChangeDownloadsAsync(() => this.client.CancelDownloadAsync(download.Id, CancellationToken.None), "Could not cancel the download");
+        : this.ChangeDownloadsAsync(() => this.client.CancelDownloadAsync(download.Id, CancellationToken.None), Strings.DownloadsCancelFailed);
 
     [RelayCommand]
     private Task RetryDownloadAsync(DownloadQueueItem? download) => download is not { IsFailed: true }
         ? Task.CompletedTask
-        : this.ChangeDownloadsAsync(() => this.client.RetryDownloadAsync(download.Id, CancellationToken.None), "Could not retry the download");
+        : this.ChangeDownloadsAsync(() => this.client.RetryDownloadAsync(download.Id, CancellationToken.None), Strings.DownloadsRetryFailed);
 
     [RelayCommand]
     private Task AddDownloadToProfileAsync(DownloadQueueItem? download)
@@ -313,17 +319,17 @@ internal sealed partial class MainViewModel
             return Task.CompletedTask;
         }
 
-        return this.ChangeDownloadsAsync(() => this.client.ConfirmDownloadAsync(download.Id, instance, profile, CancellationToken.None), "Could not add the download");
+        return this.ChangeDownloadsAsync(() => this.client.ConfirmDownloadAsync(download.Id, instance, profile, CancellationToken.None), Strings.DownloadsConfirmFailed);
     }
 
     [RelayCommand]
     private Task ClearFinishedDownloadsAsync() =>
-        this.ChangeDownloadsAsync(() => this.client.ClearDownloadsAsync(CancellationToken.None), "Could not clear finished downloads");
+        this.ChangeDownloadsAsync(() => this.client.ClearDownloadsAsync(CancellationToken.None), Strings.DownloadsClearFailed);
 
     [RelayCommand]
     private Task ToggleDownloadQueuePausedAsync() => this.IsDownloadQueuePaused
-        ? this.ChangeDownloadsAsync(() => this.client.ResumeDownloadsAsync(id: null, CancellationToken.None), "Could not resume the queue")
-        : this.ChangeDownloadsAsync(() => this.client.PauseDownloadsAsync(id: null, CancellationToken.None), "Could not pause the queue");
+        ? this.ChangeDownloadsAsync(() => this.client.ResumeDownloadsAsync(id: null, CancellationToken.None), Strings.DownloadsResumeFailed)
+        : this.ChangeDownloadsAsync(() => this.client.PauseDownloadsAsync(id: null, CancellationToken.None), Strings.DownloadsPauseFailed);
 
     private Task MoveQueuedDownloadAsync(DownloadQueueItem? download, int offset)
     {
@@ -337,7 +343,7 @@ internal sealed partial class MainViewModel
         int position = this.downloadOrder.IndexOf(this.QueuedDownloads[target].Id);
         return position < 0
             ? Task.CompletedTask
-            : this.ChangeDownloadsAsync(() => this.client.MoveDownloadAsync(download.Id, position, CancellationToken.None), "Could not move the download");
+            : this.ChangeDownloadsAsync(() => this.client.MoveDownloadAsync(download.Id, position, CancellationToken.None), Strings.DownloadsMoveFailed);
     }
 
     /// <summary>Asks the daemon to change the queue, then shows the queue as it now is.</summary>
@@ -354,7 +360,7 @@ internal sealed partial class MainViewModel
         }
         catch (Exception exception) when (exception is IOException or SocketException or JsonException or InvalidOperationException or KeyNotFoundException)
         {
-            this.StatusMessage = $"{failure}: {exception.Message}";
+            this.StatusMessage = Strings.FormatFailureReason(failure, exception.Message);
             return;
         }
 
@@ -410,7 +416,7 @@ internal sealed partial class MainViewModel
         }
 
         DownloadQueueItem last = added[^1];
-        this.StatusMessage = $"Added {last.Title} to {last.Profile}. Review deployment to apply it.";
+        this.StatusMessage = Strings.FormatModAddedToProfile(last.Title, last.Profile);
         if (this.SelectedInstance is { } instance && this.SelectedProfile is { } profile &&
             added.Exists(item => string.Equals(item.Instance, instance, StringComparison.Ordinal) && string.Equals(item.Profile, profile, StringComparison.Ordinal)))
         {

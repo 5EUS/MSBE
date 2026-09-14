@@ -6,6 +6,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 
 using MSBE.Client;
+using MSBE.Desktop.Resources;
 
 namespace MSBE.Desktop.ViewModels;
 
@@ -94,7 +95,7 @@ internal sealed partial class MainViewModel
     {
         this.IsInstancesLoading = true;
         this.InstanceError = string.Empty;
-        this.StatusMessage = "Loading registered instances...";
+        this.StatusMessage = Strings.InstancesLoading;
         try
         {
             CommandResult result = await this.client.RunCommandAsync(["--format", "json", "instance", "list"], CancellationToken.None).ConfigureAwait(true);
@@ -116,14 +117,14 @@ internal sealed partial class MainViewModel
 
             this.ApplyInstanceFilter();
             this.SelectedInstance ??= this.Instances.FirstOrDefault();
-            this.StatusMessage = $"{this.allInstances.Count} registered instance(s).";
+            this.StatusMessage = Strings.FormatInstancesCount(this.allInstances.Count);
         }
         catch (Exception exception) when (exception is IOException or SocketException or JsonException or InvalidOperationException)
         {
             this.allInstances.Clear();
             this.Instances.Clear();
             this.InstanceError = exception.Message;
-            this.StatusMessage = "Could not load instances.";
+            this.StatusMessage = Strings.InstancesLoadFailed;
         }
         finally
         {
@@ -154,12 +155,12 @@ internal sealed partial class MainViewModel
 
             this.SelectedInstance = null;
             await this.RefreshInstancesAsync().ConfigureAwait(true);
-            this.StatusMessage = $"Removed instance {instance}. Its game files remain in place.";
+            this.StatusMessage = Strings.FormatInstanceRemoved(instance);
         }
         catch (Exception exception) when (exception is IOException or SocketException or InvalidOperationException)
         {
-            this.InstanceError = $"Could not remove {instance}: {exception.Message}";
-            this.StatusMessage = "Could not remove instance.";
+            this.InstanceError = Strings.FormatInstanceRemoveFailed(instance, exception.Message);
+            this.StatusMessage = Strings.InstanceRemoveFailedStatus;
         }
         finally
         {
@@ -170,7 +171,7 @@ internal sealed partial class MainViewModel
     private void ApplyInstanceFilter()
     {
         IEnumerable<string> filtered = this.allInstances.Where(name => name.Contains(this.InstanceSearchText, StringComparison.OrdinalIgnoreCase));
-        filtered = string.Equals(this.InstanceSort, "Name (Z-A)", StringComparison.Ordinal)
+        filtered = string.Equals(this.InstanceSort, Strings.InstanceSortNameDescending, StringComparison.Ordinal)
             ? filtered.OrderByDescending(name => name, StringComparer.OrdinalIgnoreCase)
             : filtered.OrderBy(name => name, StringComparer.OrdinalIgnoreCase);
 
@@ -217,20 +218,20 @@ internal sealed partial class MainViewModel
             string gameId = status.GetProperty("plan_id").GetString() ?? string.Empty;
             this.SelectedGameName = this.Games.FirstOrDefault(game => string.Equals(game.Id, gameId, StringComparison.Ordinal))?.Name ?? gameId;
             string gameVersion = status.TryGetProperty("game_version", out JsonElement version) && version.ValueKind == JsonValueKind.String
-                ? version.GetString() ?? "Version not set"
-                : "Version not set";
-            this.SelectedInstanceTarget = $"{gameVersion} · {status.GetProperty("loader").GetString()}";
+                ? version.GetString() ?? Strings.InstanceVersionNotSet
+                : Strings.InstanceVersionNotSet;
+            this.SelectedInstanceTarget = Strings.FormatInstanceTarget(gameVersion, status.GetProperty("loader").GetString());
             string deployed = status.TryGetProperty("deployed_profile", out JsonElement profile) && profile.ValueKind == JsonValueKind.String
-                ? profile.GetString() ?? "Not deployed"
-                : "Not deployed";
-            this.SelectedInstanceDeployment = $"{deployed} · {status.GetProperty("deployed_files").GetInt32()} managed files";
+                ? profile.GetString() ?? Strings.InstanceNotDeployed
+                : Strings.InstanceNotDeployed;
+            this.SelectedInstanceDeployment = Strings.FormatInstanceDeployment(deployed, status.GetProperty("deployed_files").GetInt32());
         }
         catch (Exception exception) when (exception is IOException or SocketException or JsonException or InvalidOperationException)
         {
             if (string.Equals(this.SelectedInstance, name, StringComparison.Ordinal))
             {
                 this.ClearInstanceDetails();
-                this.InstanceError = $"Could not load {name}: {exception.Message}";
+                this.InstanceError = Strings.FormatInstanceLoadFailed(name, exception.Message);
             }
         }
     }

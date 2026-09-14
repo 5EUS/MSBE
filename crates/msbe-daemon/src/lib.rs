@@ -17,29 +17,34 @@ use msbe_provider_api::{HttpClient, HttpError};
 use msbe_providers::Providers;
 use msbe_rpc_schema::{
     BROWSER_CLOSE_METHOD, BROWSER_OPEN_METHOD, BROWSER_STATUS_METHOD, BrowserOpen, COMMAND_METHOD,
-    CONTRACT_VERSION, DOWNLOAD_CANCEL_METHOD, DOWNLOAD_CLEAR_METHOD, DOWNLOAD_CONFIRM_METHOD,
-    DOWNLOAD_ENQUEUE_METHOD, DOWNLOAD_LIST_METHOD, DOWNLOAD_MOVE_METHOD, DOWNLOAD_PAUSE_METHOD,
-    DOWNLOAD_RESUME_METHOD, DOWNLOAD_RETRY_METHOD, DaemonInfo, DownloadItemId, DownloadListRequest,
-    DownloadPause, EXTENSION_LIST_METHOD, GAME_LIST_METHOD, HANDLER_REGISTER_METHOD,
-    HANDLER_STATUS_METHOD, HANDLER_UNREGISTER_METHOD, HANDOFF_SUBMIT_METHOD, HandlerRegister,
-    HandlerScheme, HandlerStatusRequest, INFO_METHOD, JOB_CANCEL_METHOD, JOB_EVENTS_METHOD,
-    JOB_METHODS, JOB_START_METHOD, PACK_CAPTURE_PREVIEW_METHOD, PACK_CODEC_LIST_METHOD,
+    CONFLICTS_LIST_METHOD, CONTRACT_VERSION, DOWNLOAD_CANCEL_METHOD, DOWNLOAD_CLEAR_METHOD,
+    DOWNLOAD_CONFIRM_METHOD, DOWNLOAD_ENQUEUE_METHOD, DOWNLOAD_LIST_METHOD, DOWNLOAD_MOVE_METHOD,
+    DOWNLOAD_PAUSE_METHOD, DOWNLOAD_RESUME_METHOD, DOWNLOAD_RETRY_METHOD, DaemonInfo,
+    DownloadItemId, DownloadListRequest, DownloadPause, EXTENSION_LIST_METHOD, GAME_LIST_METHOD,
+    HANDLER_REGISTER_METHOD, HANDLER_STATUS_METHOD, HANDLER_UNREGISTER_METHOD,
+    HANDOFF_SUBMIT_METHOD, HandlerRegister, HandlerScheme, HandlerStatusRequest, INFO_METHOD,
+    JOB_CANCEL_METHOD, JOB_EVENTS_METHOD, JOB_METHODS, JOB_START_METHOD, JOURNAL_LIST_METHOD,
+    JOURNAL_ROLLBACK_METHOD, PACK_CAPTURE_PREVIEW_METHOD, PACK_CODEC_LIST_METHOD,
     PACK_CODEC_OPTIONS_METHOD, PACK_EXPORT_PREVIEW_METHOD, PACK_IMPORT_PREVIEW_METHOD,
-    PACK_UPDATE_PREVIEW_METHOD, PLAN_LOAD_METHOD, PLAN_UNLOAD_METHOD, Request, Response,
-    TOOL_FORGET_METHOD, TOOL_LIST_METHOD, TOOL_REGISTER_METHOD, ToolProvider, ToolRegister,
+    PACK_UPDATE_PREVIEW_METHOD, PLAN_LOAD_METHOD, PLAN_UNLOAD_METHOD, PROVIDER_LIST_METHOD,
+    Request, Response, TOOL_FORGET_METHOD, TOOL_LIST_METHOD, TOOL_REGISTER_METHOD, ToolProvider,
+    ToolRegister, UPDATE_PREVIEW_METHOD,
 };
 use msbe_secrets::SystemClock;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
+mod accounts;
 mod browser;
 mod downloads;
 mod handoff;
 mod jobs;
 mod pack;
 mod registry;
+mod state;
 mod tools;
 
+pub use accounts::CredentialsOpener;
 pub use browser::{Browser, Launcher, Process, installed_launcher};
 pub use downloads::{Downloads, Lanes};
 pub use jobs::Jobs;
@@ -60,6 +65,7 @@ pub struct Daemon {
     handlers: Handlers,
     handler_program: Option<PathBuf>,
     browser: Arc<Browser>,
+    credentials: CredentialsOpener,
 }
 
 impl fmt::Debug for Daemon {
@@ -84,7 +90,8 @@ impl Daemon {
             downloads: Arc::new(Downloads::default()),
             handlers: Handlers::discover(),
             handler_program: None,
-            browser: Arc::new(Browser::new(installed_launcher())),
+            browser: Arc::new(Browser::installed()),
+            credentials: Arc::new(|home: &Home| msbe_secrets::Credentials::open(home)),
             connect: Arc::new(|| {
                 msbe_http::UreqClient::connect()
                     .map(|client| -> Box<dyn HttpClient> { Box::new(client) })
@@ -105,6 +112,13 @@ impl Daemon {
     pub fn with_handlers(mut self, handlers: Handlers, program: PathBuf) -> Self {
         self.handlers = handlers;
         self.handler_program = Some(program);
+        self
+    }
+
+    /// Opens credentials through `open`, instead of the platform keyring and the process environment.
+    #[must_use]
+    pub fn with_credentials(mut self, open: CredentialsOpener) -> Self {
+        self.credentials = open;
         self
     }
 
@@ -154,6 +168,13 @@ impl Daemon {
             method if method.starts_with("handler.") => self.handler(id, method, &request.params),
             method if method.starts_with("browser.") => self.browser(id, method, &request.params),
             method if method.starts_with("tool.") => self.tool(id, method, &request.params),
+            method if method.starts_with("auth.") || method == PROVIDER_LIST_METHOD => {
+                self.accounts(id, method, &request.params)
+            }
+            method @ (JOURNAL_LIST_METHOD
+            | JOURNAL_ROLLBACK_METHOD
+            | CONFLICTS_LIST_METHOD
+            | UPDATE_PREVIEW_METHOD) => self.instance_state(id, method, &request.params),
             GAME_LIST_METHOD => game_list(id, &request.params, &self.registry),
             PLAN_LOAD_METHOD => plan_load(id, request.params.clone(), &mut self.registry),
             PLAN_UNLOAD_METHOD => plan_unload(id, request.params.clone(), &mut self.registry),
@@ -275,6 +296,36 @@ impl Daemon {
                 },
             );
             json!({ "job_id": job })
+        });
+        pack::respond(id, result)
+    }
+
+    /// Provider descriptors, sign-in and terms. Keys stay in the daemon.
+    fn accounts(&self, id: Value, method: &str, params: &Value) -> Response {
+        let home = match self.home() {
+            Ok(home) => home,
+            Err(error) => return Response::error(id, -32603, error.to_string()),
+        };
+        match accounts::handle(&home, method, params, &self.credentials, &self.connect) {
+            Ok(value) => Response::success(id, value),
+            Err(accounts::Refusal::Params(message)) => Response::error(id, -32602, message),
+            Err(accounts::Refusal::Failed(message)) => Response::error(id, -32603, message),
+            Err(accounts::Refusal::Method) => Response::error(id, -32601, "method not found"),
+        }
+    }
+
+    /// The typed methods over one instance's state: its journal, conflicts and update preview. Like
+    /// `command.run`, they answer busy while a job holds the instance state. Applying updates
+    /// fetches over the network, so it runs only as a job.
+    fn instance_state(&self, id: Value, method: &str, params: &Value) -> Response {
+        let Ok(_state) = self.jobs.try_state() else {
+            return pack::respond(id, Err(pack::Failure::Busy));
+        };
+        let result = self.pack_home().and_then(|home| match method {
+            JOURNAL_LIST_METHOD => state::journal_list(&home, params),
+            JOURNAL_ROLLBACK_METHOD => state::journal_rollback(&home, params),
+            CONFLICTS_LIST_METHOD => state::conflicts(&home, params),
+            _ => state::update_preview(&home, params, &*self.connect),
         });
         pack::respond(id, result)
     }
@@ -831,6 +882,14 @@ bootstrap = "none"
             let placeholder =
                 Daemon::new(PlanRegistry::discover(PathBuf::from("missing-test-plans")).unwrap());
             self.daemon = std::mem::replace(&mut self.daemon, placeholder).with_browser(launcher);
+            self
+        }
+
+        /// Opens credentials through `open`.
+        fn with_credentials(mut self, open: crate::CredentialsOpener) -> Self {
+            let placeholder =
+                Daemon::new(PlanRegistry::discover(PathBuf::from("missing-test-plans")).unwrap());
+            self.daemon = std::mem::replace(&mut self.daemon, placeholder).with_credentials(open);
             self
         }
 
@@ -1469,7 +1528,7 @@ urls = "/url"
                 msbe_rpc_schema::BROWSER_STATUS_METHOD,
                 Value::Null
             )),
-            json!({ "running": false, "waiting": 2, "auto_advance": false })
+            json!({ "running": false, "installed": true, "waiting": 2, "auto_advance": false })
         );
         let missing = call(
             daemon,
@@ -1505,7 +1564,7 @@ urls = "/url"
         assert_eq!(
             opened,
             json!({
-                "running": true, "provider": "assisted", "item": sprocket, "page": page("sprocket"),
+                "running": true, "installed": true, "provider": "assisted", "item": sprocket, "page": page("sprocket"),
                 "position": 1, "waiting": 2, "auto_advance": true
             })
         );
@@ -1669,8 +1728,8 @@ output = ["content", "{game}", "{item}"]
 timeout = 60
 "#;
 
-    /// Installs `document` as a signed program its signer is granted.
-    fn install_program(home: &Path, document: &str) {
+    /// Installs `document` as a signed program its signer is granted, with `capabilities`.
+    fn install_program(home: &Path, document: &str, capabilities: Vec<ExtensionCapability>) {
         let key = SigningKey::from_bytes(&[9; 32]);
         let payload: ProviderProgram = toml::from_str(document).unwrap();
         let id = payload.provider.id.clone();
@@ -1684,7 +1743,7 @@ timeout = 60
                 minimum: 1,
                 maximum: 1,
             },
-            capabilities: Vec::new(),
+            capabilities,
             signer: "publisher".to_owned(),
             signature: "00".repeat(64),
             payload,
@@ -1713,7 +1772,7 @@ timeout = 60
         use std::os::unix::fs::PermissionsExt as _;
 
         let mut fixture = Fixture::new();
-        install_program(&fixture.home(), TOOL_PROGRAM);
+        install_program(&fixture.home(), TOOL_PROGRAM, Vec::new());
         let program = fixture.root.path().join("bin/example-tool");
         fs::create_dir_all(program.parent().unwrap()).unwrap();
         fs::write(
@@ -1849,6 +1908,277 @@ timeout = 60
             json!({ "scheme": "handoff" }),
         ));
         assert_eq!(at(&released, "/owner"), &other);
+    }
+
+    #[test]
+    fn the_journal_rollback_conflicts_and_update_preview_are_typed_instance_methods() {
+        use msbe_rpc_schema::{
+            CONFLICTS_LIST_METHOD, JOURNAL_LIST_METHOD, JOURNAL_ROLLBACK_METHOD,
+            UPDATE_PREVIEW_METHOD,
+        };
+
+        let mut fixture = Fixture::new();
+        fixture.run(&["deploy", "demo"]);
+        fixture.add_mod("second.txt");
+        fixture.run(&["deploy", "demo"]);
+        let demo = json!({ "instance": "demo" });
+        let daemon = &mut fixture.daemon;
+
+        let journal = success(call(daemon, JOURNAL_LIST_METHOD, demo.clone()));
+        assert_eq!(journal.as_array().map(Vec::len), Some(2), "{journal}");
+        assert_eq!(at(&journal, "/1/profile"), "default");
+        let (first, second) = (
+            at(&journal, "/0/txn").clone(),
+            at(&journal, "/1/txn").clone(),
+        );
+        let rolled = success(call(
+            daemon,
+            JOURNAL_ROLLBACK_METHOD,
+            json!({ "instance": "demo", "txn": first }),
+        ));
+        assert_eq!(at(&rolled, "/rolled_back"), &json!([second]));
+        assert_eq!(at(&rolled, "/journal/0/txn"), &first);
+        let unknown = call(
+            daemon,
+            JOURNAL_ROLLBACK_METHOD,
+            json!({ "instance": "demo", "txn": 999 }),
+        );
+        assert!(
+            matches!(&unknown, Response::Error { error, .. }
+                if error.message.contains("not a deployment still in effect")),
+            "{unknown:?}"
+        );
+        let latest = success(call(daemon, JOURNAL_ROLLBACK_METHOD, demo.clone()));
+        assert_eq!(latest, json!({ "rolled_back": [first], "journal": [] }));
+
+        assert_eq!(
+            success(call(daemon, CONFLICTS_LIST_METHOD, demo.clone())),
+            json!([])
+        );
+        let preview = success(call(daemon, UPDATE_PREVIEW_METHOD, demo.clone()));
+        assert_eq!(at(&preview, "/dry_run"), &json!(true));
+        assert_eq!(at(&preview, "/not_updatable"), &json!(["second", "tool"]));
+        let direct = call(daemon, msbe_rpc_schema::UPDATE_APPLY_METHOD, demo.clone());
+        assert!(matches!(direct, Response::Error { error, .. } if error.code == -32600));
+        let started = success(fixture.start(msbe_rpc_schema::UPDATE_APPLY_METHOD, demo));
+        let job = at(&started, "/job_id").as_u64().unwrap();
+        assert!(fixture.daemon.jobs().run_next());
+        let applied = fixture.status(job);
+        assert_eq!(text(&applied, "state"), "succeeded", "{applied}");
+    }
+
+    /// A catalog for plan `example` that needs a key, checked at `/account`, and accepted terms.
+    const KEYED: &str = r#"
+runtime = "catalog-v1"
+capabilities = ["project", "releases"]
+
+[games]
+example = "game"
+
+[provider]
+schema = 1
+id = "keyed"
+name = "Keyed"
+[provider.source]
+type = "prefixed"
+prefix = "keyed:"
+[provider.metadata]
+api_base = "https://api.keyed.test"
+[provider.acquisition]
+type = "browser_assisted"
+scheme = "keyed"
+[provider.policy]
+requires_auth = true
+respects_distribution_flag = false
+tos_url = "https://www.keyed.test/terms"
+ack_required = true
+
+[auth]
+type = "api-key-v1"
+header = "apikey"
+key_page = "https://www.keyed.test/account/keys"
+validate = "/account"
+
+[routes]
+project = "/projects/{reference}"
+releases = "/projects/{project}/releases"
+
+[pages]
+release = "https://www.keyed.test/{game}/mods/{project}?file={release}"
+
+[handoff]
+host = "game"
+path = ["files", "{project}", "{release}"]
+redeem = "/links/{project}/{release}"
+
+[releases]
+order = "newest-first"
+
+[mappings.project]
+id = "/id"
+title = "/title"
+
+[mappings.release]
+id = "/id"
+number = "/number"
+published = "/published"
+files = { single = "" }
+
+[mappings.release.file]
+url = "/url"
+name = "/name"
+
+[mappings.account]
+name = "/name"
+
+[mappings.handoff]
+urls = "/url"
+"#;
+
+    /// A keyring every credential store the daemon opens shares, so a test can see what it keeps.
+    #[derive(Clone, Debug, Default)]
+    struct SharedKeyring(Arc<Mutex<msbe_secrets::MemoryStore>>);
+
+    impl SharedKeyring {
+        /// Opens credentials with this keyring and an empty environment.
+        fn opener(&self) -> crate::CredentialsOpener {
+            let shared = self.clone();
+            Arc::new(move |home| {
+                msbe_secrets::Credentials::with_stores(
+                    &msbe_secrets::auth_directory(home),
+                    msbe_secrets::EnvironmentStore::with_lookup(|_| None),
+                    Some(Box::new(shared.clone())),
+                    Box::new(msbe_secrets::SystemClock),
+                )
+            })
+        }
+    }
+
+    impl msbe_secrets::SecretStore for SharedKeyring {
+        fn backend(&self) -> msbe_secrets::Backend {
+            msbe_secrets::Backend::Keyring
+        }
+
+        fn get(
+            &self,
+            provider: &str,
+        ) -> Result<Option<msbe_secrets::Secret>, msbe_secrets::StoreError> {
+            self.0.lock().unwrap().get(provider)
+        }
+
+        fn set(
+            &mut self,
+            provider: &str,
+            secret: &msbe_secrets::Secret,
+        ) -> Result<(), msbe_secrets::StoreError> {
+            self.0.lock().unwrap().set(provider, secret)
+        }
+
+        fn delete(&mut self, provider: &str) -> Result<bool, msbe_secrets::StoreError> {
+            self.0.lock().unwrap().delete(provider)
+        }
+    }
+
+    #[test]
+    fn providers_are_described_and_a_key_is_checked_kept_and_forgotten_in_the_daemon() {
+        use msbe_rpc_schema::{
+            AUTH_ACKNOWLEDGE_METHOD, AUTH_LOGIN_METHOD, AUTH_LOGOUT_METHOD, AUTH_STATUS_METHOD,
+            AuthLogin, PROVIDER_LIST_METHOD,
+        };
+        use msbe_secrets::SecretStore as _;
+
+        const TOKEN: &str = "keyed-secret-token-0123456789";
+        let mut web = Web::default();
+        web.json.insert(
+            "https://api.keyed.test/account".to_owned(),
+            json!({ "name": "Player" }),
+        );
+        let keyring = SharedKeyring::default();
+        let mut fixture = Fixture::with(&web).with_credentials(keyring.opener());
+        install_program(&fixture.home(), KEYED, vec![ExtensionCapability::Network]);
+        let daemon = &mut fixture.daemon;
+        let keyed = |listed: &Value| {
+            listed
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|provider| provider.get("id") == Some(&json!("keyed")))
+                .cloned()
+                .unwrap_or_else(|| panic!("no keyed provider in {listed}"))
+        };
+
+        let described = keyed(&success(call(daemon, PROVIDER_LIST_METHOD, Value::Null)));
+        assert_eq!(
+            described,
+            json!({
+                "id": "keyed", "name": "Keyed", "prefix": "keyed:", "search": false,
+                "acquisition": "browser_assisted", "requires_auth": true, "signed_in": false,
+                "ack_required": true, "acknowledged": false
+            })
+        );
+        let statuses = success(call(daemon, AUTH_STATUS_METHOD, Value::Null));
+        assert_eq!(
+            statuses,
+            json!([{
+                "provider": "keyed", "name": "Keyed", "requires_auth": true, "signed_in": false,
+                "key_page": "https://www.keyed.test/account/keys",
+                "terms": "https://www.keyed.test/terms", "ack_required": true, "acknowledged": false
+            }])
+        );
+
+        let login = json!({ "provider": "keyed", "token": TOKEN });
+        let unacknowledged = call(daemon, AUTH_LOGIN_METHOD, login.clone());
+        assert!(
+            refusal(&unacknowledged).contains("https://www.keyed.test/terms"),
+            "{unacknowledged:?}"
+        );
+        assert!(!format!("{unacknowledged:?}").contains(TOKEN));
+        let acknowledged = success(call(
+            daemon,
+            AUTH_ACKNOWLEDGE_METHOD,
+            json!({ "provider": "keyed" }),
+        ));
+        assert_eq!(at(&acknowledged, "/acknowledged"), &json!(true));
+
+        let signed_in = success(call(daemon, AUTH_LOGIN_METHOD, login));
+        assert_eq!(at(&signed_in, "/signed_in"), &json!(true));
+        assert_eq!(at(&signed_in, "/source"), "keyring");
+        assert_eq!(at(&signed_in, "/account"), "Player");
+        assert!(!signed_in.to_string().contains(TOKEN));
+        assert_eq!(
+            keyring.get("keyed").unwrap().unwrap().expose(),
+            TOKEN,
+            "the key is kept in the credential store"
+        );
+        let described = keyed(&success(call(daemon, PROVIDER_LIST_METHOD, Value::Null)));
+        assert_eq!(at(&described, "/signed_in"), &json!(true));
+        assert!(
+            !format!(
+                "{:?}",
+                AuthLogin {
+                    provider: "keyed".to_owned(),
+                    token: TOKEN.to_owned()
+                }
+            )
+            .contains(TOKEN)
+        );
+
+        let signed_out = success(call(
+            daemon,
+            AUTH_LOGOUT_METHOD,
+            json!({ "provider": "keyed" }),
+        ));
+        assert_eq!(at(&signed_out, "/signed_in"), &json!(false));
+        assert!(keyring.get("keyed").unwrap().is_none());
+
+        let unknown = call(daemon, AUTH_LOGOUT_METHOD, json!({ "provider": "missing" }));
+        assert!(refusal(&unknown).contains("missing"), "{unknown:?}");
+        let extra = call(
+            daemon,
+            AUTH_ACKNOWLEDGE_METHOD,
+            json!({ "provider": "keyed", "token": TOKEN }),
+        );
+        assert!(!refusal(&extra).contains(TOKEN));
     }
 
     #[test]

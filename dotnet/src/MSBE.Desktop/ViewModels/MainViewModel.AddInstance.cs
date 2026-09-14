@@ -5,6 +5,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 
 using MSBE.Client;
+using MSBE.Desktop.Resources;
 
 namespace MSBE.Desktop.ViewModels;
 
@@ -110,7 +111,7 @@ internal sealed partial class MainViewModel
             this.NewInstanceGame is null ||
             string.IsNullOrWhiteSpace(this.NewInstanceLoader))
         {
-            this.AddInstanceError = "Name, game, game folder, and ecosystem are required.";
+            this.AddInstanceError = Strings.AddInstanceRequired;
             return;
         }
 

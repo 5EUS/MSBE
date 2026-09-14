@@ -39,4 +39,4 @@ pub use installed::{
     ExtensionKind, ExtensionStatus, ExtensionTrust, InstalledExtension, codecs_directory,
     providers_directory, trust_file,
 };
-pub use registry::{ProgramTrust, Providers, RegistryError, Routed};
+pub use registry::{ProgramTrust, ProviderSummary, Providers, RegistryError, Routed};

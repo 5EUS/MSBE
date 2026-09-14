@@ -51,8 +51,13 @@ fn run_via_daemon(args: Vec<OsString>) -> Result<u8, String> {
     let program = std::iter::once("msbe".to_owned()).chain(command.iter().cloned());
     if let Some(calls) = msbe_cli::daemon_calls(program) {
         check_home(&mut daemon, &command)?;
+        let token = calls.token.as_ref().map(read_token).transpose()?;
         for (method, params) in &calls.calls {
-            let result = daemon.call(method, params.clone())?;
+            let mut params = params.clone();
+            if let (Some(token), Some(fields)) = (&token, params.as_object_mut()) {
+                fields.insert("token".to_owned(), Value::String(token.clone()));
+            }
+            let result = daemon.call(method, params)?;
             calls
                 .print(method, &result, &mut io::stdout().lock())
                 .map_err(|error| error.to_string())?;
@@ -81,6 +86,23 @@ fn run_via_daemon(args: Vec<OsString>) -> Result<u8, String> {
         .and_then(Value::as_u64)
         .ok_or_else(|| "daemon returned no exit code".to_owned())?;
     u8::try_from(exit_code).map_err(|_| "daemon returned an invalid exit code".to_owned())
+}
+
+/// Reads a provider key from standard input or a file, without its trailing line break. It is sent
+/// only to the daemon, which keeps it.
+#[cfg(unix)]
+fn read_token(source: &msbe_cli::TokenSource) -> Result<String, String> {
+    use std::io::Read as _;
+
+    let read = match source {
+        msbe_cli::TokenSource::Stdin => {
+            let mut token = String::new();
+            io::stdin().read_to_string(&mut token).map(|_| token)
+        }
+        msbe_cli::TokenSource::File(path) => std::fs::read_to_string(path),
+    };
+    let token = read.map_err(|error| format!("cannot read the key: {error}"))?;
+    Ok(token.trim_end_matches(['\r', '\n']).to_owned())
 }
 
 /// One connection to the daemon, which answers each request line with one response line.

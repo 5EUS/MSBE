@@ -1,48 +1,272 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:res="using:MSBE.Desktop.Resources"
              xmlns:vm="using:MSBE.Desktop.ViewModels"
              x:Class="MSBE.Desktop.Views.Pages.SettingsPageView"
              x:DataType="vm:MainViewModel">
-    <StackPanel Margin="8" Spacing="16">
+    <Grid Margin="8" RowDefinitions="Auto,*" RowSpacing="16">
         <StackPanel Spacing="3">
-            <TextBlock Classes="sectionHeading" Text="Settings" />
-            <TextBlock Classes="caption" Text="Preferences and shortcuts for this MSBE installation." />
+            <TextBlock Classes="sectionHeading" Text="{x:Static res:Strings.WorkspaceSettings}" />
+            <TextBlock Classes="caption" Text="{x:Static res:Strings.SettingsPreferencesAndShortcutsForThisMsbe}" />
         </StackPanel>
 
-        <TabControl>
-            <TabItem Header="Storage">
+        <TabControl Grid.Row="1">
+            <TabItem Header="{x:Static res:Strings.SettingsStorage}">
                 <StackPanel Margin="0,12,0,0" Spacing="6">
-                    <TextBlock Classes="field-label" Text="Data folder" />
-                    <TextBlock Classes="caption" Text="Instances, journals, profiles and pinned plans, as reported by the daemon." />
+                    <TextBlock Classes="field-label" Text="{x:Static res:Strings.SettingsDataFolder}" />
+                    <TextBlock Classes="caption" Text="{x:Static res:Strings.SettingsInstancesJournalsProfilesAndPinnedPlans}" />
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
                         <SelectableTextBlock VerticalAlignment="Center" TextWrapping="Wrap" Text="{Binding DataDirectoryText}" />
                         <Button Grid.Column="1"
                                 Classes="secondary-button"
                                 Command="{Binding OpenDataDirectoryCommand}"
-                                ToolTip.Tip="Show the data folder in the file manager">
+                                ToolTip.Tip="{x:Static res:Strings.SettingsShowTheDataFolderInThe}"
+                                AutomationProperties.Name="{x:Static res:Strings.SettingsOpenDataFolder}">
                             <StackPanel Orientation="Horizontal" Spacing="6">
                                 <LucideIcon Kind="FolderOpen" Size="15" StrokeWidth="1.8" />
-                                <TextBlock Text="Open data folder" />
+                                <TextBlock Text="{x:Static res:Strings.SettingsOpenDataFolder}" />
                             </StackPanel>
                         </Button>
                     </Grid>
                 </StackPanel>
             </TabItem>
-            <TabItem Header="Extensions">
+            <TabItem Header="{x:Static res:Strings.SettingsAccountsTab}">
+                <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="0,12,4,8" Spacing="10">
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                            <StackPanel Spacing="3">
+                                <TextBlock Classes="field-label" Text="{x:Static res:Strings.SettingsAccountsTitle}" />
+                                <TextBlock Classes="caption" TextWrapping="Wrap" Text="{x:Static res:Strings.SettingsAccountsCaption}" />
+                            </StackPanel>
+                            <Button Grid.Column="1"
+                                    VerticalAlignment="Top"
+                                    Classes="secondary-button"
+                                    Command="{Binding LoadAccountsCommand}"
+                                    ToolTip.Tip="{x:Static res:Strings.SettingsAccountsRefreshTip}"
+                                    AutomationProperties.Name="{x:Static res:Strings.Refresh}">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <LucideIcon Kind="RefreshCw" Size="15" StrokeWidth="1.8" />
+                                    <TextBlock Text="{x:Static res:Strings.Refresh}" />
+                                </StackPanel>
+                            </Button>
+                        </Grid>
+                        <TextBlock Classes="caption" TextWrapping="Wrap" Text="{Binding AccountsStatus}" />
+                        <ItemsControl ItemsSource="{Binding Accounts}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:AccountItem">
+                                    <StackPanel Margin="0,8" Spacing="6">
+                                        <TextBlock FontWeight="SemiBold" Text="{Binding Name}" />
+                                        <TextBlock Classes="caption" TextWrapping="Wrap" Text="{Binding SignInText}" />
+                                        <TextBlock Classes="caption" TextWrapping="Wrap" Text="{Binding QuotaText}" IsVisible="{Binding HasQuota}" />
+                                        <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding HasTerms}">
+                                            <TextBlock Classes="caption" VerticalAlignment="Center" TextWrapping="Wrap" Text="{Binding TermsText}" />
+                                            <Button Classes="text-button"
+                                                    Content="{x:Static res:Strings.AccountReadTerms}"
+                                                    Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).OpenWebPageCommand}"
+                                                    CommandParameter="{Binding Terms}" />
+                                            <Button Classes="secondary-button"
+                                                    IsVisible="{Binding NeedsAcknowledgement}"
+                                                    Content="{x:Static res:Strings.AccountAcceptTerms}"
+                                                    Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).AcknowledgeTermsCommand}"
+                                                    CommandParameter="{Binding}" />
+                                        </StackPanel>
+                                        <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8" IsVisible="{Binding AcceptsKey}">
+                                            <TextBox PasswordChar="•"
+                                                     Text="{Binding Key}"
+                                                     PlaceholderText="{x:Static res:Strings.AccountKeyPlaceholder}"
+                                                     AutomationProperties.Name="{x:Static res:Strings.AccountKeyName}" />
+                                            <Button Grid.Column="1"
+                                                    Classes="text-button"
+                                                    Content="{x:Static res:Strings.AccountGetKey}"
+                                                    Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).OpenWebPageCommand}"
+                                                    CommandParameter="{Binding KeyPage}" />
+                                            <Button Grid.Column="2"
+                                                    Classes="primary-button"
+                                                    IsEnabled="{Binding CanSignIn}"
+                                                    Content="{x:Static res:Strings.AccountSignIn}"
+                                                    Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).SignInCommand}"
+                                                    CommandParameter="{Binding}" />
+                                        </Grid>
+                                        <Button Classes="secondary-button"
+                                                HorizontalAlignment="Left"
+                                                IsVisible="{Binding IsSignedIn}"
+                                                Content="{x:Static res:Strings.AccountSignOut}"
+                                                Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).SignOutCommand}"
+                                                CommandParameter="{Binding}" />
+                                        <TextBlock Classes="download-error" TextWrapping="Wrap" Text="{Binding Error}" IsVisible="{Binding HasError}" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+            <TabItem Header="{x:Static res:Strings.SettingsLinkHandlersTab}">
+                <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="0,12,4,8" Spacing="10">
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                            <StackPanel Spacing="3">
+                                <TextBlock Classes="field-label" Text="{x:Static res:Strings.SettingsLinkHandlersTitle}" />
+                                <TextBlock Classes="caption" TextWrapping="Wrap" Text="{x:Static res:Strings.SettingsLinkHandlersCaption}" />
+                            </StackPanel>
+                            <Button Grid.Column="1"
+                                    VerticalAlignment="Top"
+                                    Classes="secondary-button"
+                                    Command="{Binding LoadLinkHandlersCommand}"
+                                    ToolTip.Tip="{x:Static res:Strings.SettingsLinkHandlersRefreshTip}">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <LucideIcon Kind="RefreshCw" Size="15" StrokeWidth="1.8" />
+                                    <TextBlock Text="{x:Static res:Strings.Refresh}" />
+                                </StackPanel>
+                            </Button>
+                        </Grid>
+                        <TextBlock Classes="caption" TextWrapping="Wrap" Text="{Binding LinkHandlersStatus}" IsVisible="{Binding HasLinkHandlersStatus}" />
+                        <ItemsControl ItemsSource="{Binding LinkHandlers}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:HandlerItem">
+                                    <StackPanel Margin="0,8" Spacing="6">
+                                        <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+                                            <StackPanel Spacing="2">
+                                                <TextBlock FontWeight="SemiBold" Text="{Binding Title}" />
+                                                <TextBlock Classes="caption" Text="{Binding ProviderText}" />
+                                                <TextBlock Classes="caption" TextWrapping="Wrap" Text="{Binding OwnerText}" />
+                                            </StackPanel>
+                                            <Button Grid.Column="1"
+                                                    VerticalAlignment="Top"
+                                                    Classes="secondary-button"
+                                                    IsVisible="{Binding CanRegister}"
+                                                    Content="{x:Static res:Strings.HandlerRegister}"
+                                                    Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).RegisterLinkHandlerCommand}"
+                                                    CommandParameter="{Binding}" />
+                                            <Button Grid.Column="2"
+                                                    VerticalAlignment="Top"
+                                                    Classes="text-button"
+                                                    IsVisible="{Binding IsOwnedByMsbe}"
+                                                    Content="{x:Static res:Strings.HandlerUnregister}"
+                                                    Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).UnregisterLinkHandlerCommand}"
+                                                    CommandParameter="{Binding}" />
+                                        </Grid>
+                                        <Border Classes="error-banner" IsVisible="{Binding IsConfirmingReplace}">
+                                            <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+                                                <TextBlock VerticalAlignment="Center" TextWrapping="Wrap" Text="{Binding ReplaceText}" />
+                                                <Button Grid.Column="1"
+                                                        Classes="danger-button"
+                                                        Content="{x:Static res:Strings.HandlerReplace}"
+                                                        Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).ConfirmLinkHandlerReplaceCommand}"
+                                                        CommandParameter="{Binding}" />
+                                                <Button Grid.Column="2" Classes="secondary-button" Content="{x:Static res:Strings.Cancel}" Command="{Binding CancelReplaceCommand}" />
+                                            </Grid>
+                                        </Border>
+                                        <TextBlock Classes="download-error" TextWrapping="Wrap" Text="{Binding Error}" IsVisible="{Binding HasError}" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+            <TabItem Header="{x:Static res:Strings.SettingsBrowserTab}">
                 <StackPanel Margin="0,12,0,0" Spacing="10">
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
                         <StackPanel Spacing="3">
-                            <TextBlock Classes="field-label" Text="Installed extensions" />
-                            <TextBlock Classes="caption" TextWrapping="Wrap" Text="Signed pack codecs and provider programs in the extensions folder of the data folder. Each is admitted or refused on its own, so a refused one never stops the others." />
+                            <TextBlock Classes="field-label" Text="{x:Static res:Strings.SettingsBrowserTitle}" />
+                            <TextBlock Classes="caption" TextWrapping="Wrap" Text="{x:Static res:Strings.SettingsBrowserCaption}" />
+                        </StackPanel>
+                        <Button Grid.Column="1"
+                                VerticalAlignment="Top"
+                                Classes="secondary-button"
+                                Command="{Binding RefreshBrowserComponentCommand}"
+                                ToolTip.Tip="{x:Static res:Strings.SettingsBrowserRefreshTip}">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <LucideIcon Kind="RefreshCw" Size="15" StrokeWidth="1.8" />
+                                <TextBlock Text="{x:Static res:Strings.Refresh}" />
+                            </StackPanel>
+                        </Button>
+                    </Grid>
+                    <TextBlock TextWrapping="Wrap" Text="{Binding BrowserComponentStatus}" />
+                    <TextBlock Classes="caption" TextWrapping="Wrap" Text="{Binding BrowserSummary}" IsVisible="{Binding IsBrowserOpen}" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Classes="secondary-button"
+                                IsVisible="{Binding CanOpenWaitingPages}"
+                                Content="{x:Static res:Strings.BrowserOpenWaitingPages}"
+                                Command="{Binding NextBrowserPageCommand}" />
+                        <Button Classes="text-button"
+                                IsVisible="{Binding IsBrowserOpen}"
+                                Content="{x:Static res:Strings.BrowserClose}"
+                                Command="{Binding CloseMsbeBrowserCommand}" />
+                    </StackPanel>
+                </StackPanel>
+            </TabItem>
+            <TabItem Header="{x:Static res:Strings.SettingsToolsTab}">
+                <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="0,12,4,8" Spacing="10">
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                            <StackPanel Spacing="3">
+                                <TextBlock Classes="field-label" Text="{x:Static res:Strings.SettingsToolsTitle}" />
+                                <TextBlock Classes="caption" TextWrapping="Wrap" Text="{x:Static res:Strings.SettingsToolsCaption}" />
+                            </StackPanel>
+                            <Button Grid.Column="1"
+                                    VerticalAlignment="Top"
+                                    Classes="secondary-button"
+                                    Command="{Binding LoadExternalToolsCommand}"
+                                    ToolTip.Tip="{x:Static res:Strings.SettingsToolsRefreshTip}">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <LucideIcon Kind="RefreshCw" Size="15" StrokeWidth="1.8" />
+                                    <TextBlock Text="{x:Static res:Strings.Refresh}" />
+                                </StackPanel>
+                            </Button>
+                        </Grid>
+                        <TextBlock Classes="caption" TextWrapping="Wrap" Text="{Binding ExternalToolsStatus}" IsVisible="{Binding HasExternalToolsStatus}" />
+                        <ItemsControl ItemsSource="{Binding ExternalTools}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:ToolItem">
+                                    <StackPanel Margin="0,8" Spacing="6">
+                                        <TextBlock FontWeight="SemiBold" Text="{Binding Name}" />
+                                        <TextBlock Classes="caption" TextWrapping="Wrap" Text="{Binding StateText}" />
+                                        <SelectableTextBlock Classes="caption" TextWrapping="Wrap" Text="{Binding ProgramText}" IsVisible="{Binding HasProgram}" />
+                                        <TextBox Text="{Binding ProgramPath}"
+                                                 PlaceholderText="{x:Static res:Strings.ToolProgramPlaceholder}"
+                                                 AutomationProperties.Name="{x:Static res:Strings.ToolProgramName}" />
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <CheckBox VerticalAlignment="Center" IsChecked="{Binding AcceptsTerms}" Content="{x:Static res:Strings.ToolAcceptTerms}" />
+                                            <Button Classes="text-button"
+                                                    Content="{x:Static res:Strings.AccountReadTerms}"
+                                                    Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).OpenWebPageCommand}"
+                                                    CommandParameter="{Binding Terms}" />
+                                            <Button Classes="primary-button"
+                                                    IsEnabled="{Binding CanRegister}"
+                                                    Content="{x:Static res:Strings.ToolRegister}"
+                                                    Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).RegisterExternalToolCommand}"
+                                                    CommandParameter="{Binding}" />
+                                            <Button Classes="secondary-button"
+                                                    IsVisible="{Binding HasProgram}"
+                                                    Content="{x:Static res:Strings.ToolForget}"
+                                                    Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).ForgetExternalToolCommand}"
+                                                    CommandParameter="{Binding}" />
+                                        </StackPanel>
+                                        <TextBlock Classes="download-error" TextWrapping="Wrap" Text="{Binding Error}" IsVisible="{Binding HasError}" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+            <TabItem Header="{x:Static res:Strings.SettingsExtensions}">
+                <StackPanel Margin="0,12,0,0" Spacing="10">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                        <StackPanel Spacing="3">
+                            <TextBlock Classes="field-label" Text="{x:Static res:Strings.SettingsInstalledExtensions}" />
+                            <TextBlock Classes="caption" TextWrapping="Wrap" Text="{x:Static res:Strings.SettingsSignedPackCodecsAndProviderPrograms}" />
                         </StackPanel>
                         <Button Grid.Column="1"
                                 VerticalAlignment="Top"
                                 Classes="secondary-button"
                                 Command="{Binding LoadExtensionsCommand}"
-                                ToolTip.Tip="Read the installed extensions again">
+                                ToolTip.Tip="{x:Static res:Strings.SettingsReadTheInstalledExtensionsAgain}">
                             <StackPanel Orientation="Horizontal" Spacing="6">
                                 <LucideIcon Kind="RefreshCw" Size="15" StrokeWidth="1.8" />
-                                <TextBlock Text="Refresh" />
+                                <TextBlock Text="{x:Static res:Strings.Refresh}" />
                             </StackPanel>
                         </Button>
                     </Grid>
@@ -63,13 +287,13 @@
                     </ItemsControl>
                 </StackPanel>
             </TabItem>
-            <TabItem Header="About">
+            <TabItem Header="{x:Static res:Strings.SettingsAbout}">
                 <StackPanel Margin="0,12,0,0" Spacing="6">
                     <TextBlock Classes="field-label" Text="MSBE" />
-                    <TextBlock Text="Managed game installations" />
-                    <TextBlock Classes="caption" TextWrapping="Wrap" Text="The local daemon owns instance data and deployment history. Game folders remain yours." />
+                    <TextBlock Text="{x:Static res:Strings.SettingsManagedGameInstallations}" />
+                    <TextBlock Classes="caption" TextWrapping="Wrap" Text="{x:Static res:Strings.SettingsTheLocalDaemonOwnsInstanceData}" />
                 </StackPanel>
             </TabItem>
         </TabControl>
-    </StackPanel>
+    </Grid>
 </UserControl>

@@ -1,23 +1,25 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:res="using:MSBE.Desktop.Resources"
              xmlns:vm="using:MSBE.Desktop.ViewModels"
              x:Class="MSBE.Desktop.Views.Shell.WorkspaceTabsView"
              x:DataType="vm:MainViewModel">
     <Border Classes="workspace-tabs">
         <StackPanel Orientation="Horizontal" Spacing="24">
-            <Button Classes="workspace-tab" Classes.active="{Binding IsInstancesWorkspace}" Content="INSTANCES" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Instances}" />
-            <Button Classes="workspace-tab" Classes.active="{Binding IsGamesWorkspace}" Content="GAMES" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Games}" />
-            <Button Classes="workspace-tab" Classes.active="{Binding IsBrowseWorkspace}" Content="BROWSE" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Browse}" />
-            <Button Classes="workspace-tab" Classes.active="{Binding IsPackWorkspace}" Content="PACK" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Pack}" />
+            <Button Classes="workspace-tab" Classes.active="{Binding IsInstancesWorkspace}" Content="{x:Static res:Strings.TabInstances}" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Instances}" />
+            <Button Classes="workspace-tab" Classes.active="{Binding IsGamesWorkspace}" Content="{x:Static res:Strings.TabGames}" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Games}" />
+            <Button Classes="workspace-tab" Classes.active="{Binding IsBrowseWorkspace}" Content="{x:Static res:Strings.TabBrowse}" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Browse}" />
+            <Button Classes="workspace-tab" Classes.active="{Binding IsPackWorkspace}" Content="{x:Static res:Strings.TabPack}" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Pack}" />
             <Button Classes="workspace-tab" Classes.active="{Binding IsDownloadsWorkspace}" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Downloads}">
                 <StackPanel Orientation="Horizontal" Spacing="8">
-                    <TextBlock Text="DOWNLOADS" />
+                    <TextBlock Text="{x:Static res:Strings.TabDownloads}" />
                     <Border Classes="tab-badge" IsVisible="{Binding HasPendingDownloads}">
                         <TextBlock Text="{Binding PendingDownloadCount}" />
                     </Border>
                 </StackPanel>
             </Button>
-            <Button Classes="workspace-tab" Classes.active="{Binding IsSettingsWorkspace}" Content="SETTINGS" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Settings}" />
+            <Button Classes="workspace-tab" Classes.active="{Binding IsHistoryWorkspace}" Content="{x:Static res:Strings.WorkspaceTabHistory}" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.History}" />
+            <Button Classes="workspace-tab" Classes.active="{Binding IsSettingsWorkspace}" Content="{x:Static res:Strings.TabSettings}" Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:WorkspacePage.Settings}" />
         </StackPanel>
     </Border>
 </UserControl>

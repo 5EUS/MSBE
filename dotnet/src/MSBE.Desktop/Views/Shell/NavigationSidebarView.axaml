@@ -1,16 +1,17 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:res="using:MSBE.Desktop.Resources"
              xmlns:vm="using:MSBE.Desktop.ViewModels"
              x:Class="MSBE.Desktop.Views.Shell.NavigationSidebarView"
              x:DataType="vm:MainViewModel">
     <Border Classes="sidebar" Width="228" IsVisible="{Binding IsSidebarExpanded}">
         <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
             <StackPanel Spacing="10">
-                <TextBlock Classes="sidebar-label" Text="LIBRARY" />
+                <TextBlock Classes="sidebar-label" Text="{x:Static res:Strings.SidebarLibrary}" />
                 <StackPanel Spacing="6">
-                    <TextBox HorizontalAlignment="Stretch" PlaceholderText="Search instances" Text="{Binding InstanceSearchText}" />
-                    <ComboBox HorizontalAlignment="Stretch" ItemsSource="{Binding InstanceSorts}" SelectedItem="{Binding InstanceSort}" />
-                    <ListBox HorizontalAlignment="Stretch" MaxHeight="280" ItemsSource="{Binding Instances}" SelectedItem="{Binding SelectedInstance}" />
+                    <TextBox HorizontalAlignment="Stretch" PlaceholderText="{x:Static res:Strings.SidebarSearchInstances}" Text="{Binding InstanceSearchText}" AutomationProperties.Name="{x:Static res:Strings.SidebarSearchInstances}" />
+                    <ComboBox HorizontalAlignment="Stretch" ItemsSource="{Binding InstanceSorts}" SelectedItem="{Binding InstanceSort}" AutomationProperties.Name="{x:Static res:Strings.AccessInstanceSort}" />
+                    <ListBox HorizontalAlignment="Stretch" MaxHeight="280" ItemsSource="{Binding Instances}" SelectedItem="{Binding SelectedInstance}" AutomationProperties.Name="{x:Static res:Strings.AccessInstanceLibrary}" />
                 </StackPanel>
             </StackPanel>
         </ScrollViewer>

@@ -3,6 +3,7 @@ using System.Diagnostics.CodeAnalysis;
 using CommunityToolkit.Mvvm.ComponentModel;
 
 using MSBE.Client;
+using MSBE.Desktop.Resources;
 
 namespace MSBE.Desktop.ViewModels;
 
@@ -44,6 +45,10 @@ public sealed partial class DownloadQueueItem : ObservableObject
     [ObservableProperty]
     public partial string? Profile { get; set; }
 
+    /// <summary>Gets or sets the page the user starts the download on, while it waits for the user.</summary>
+    [ObservableProperty]
+    public partial string? Page { get; set; }
+
     /// <summary>Gets or sets where the download is in the queue's lifecycle.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsCompleted))]
@@ -84,17 +89,17 @@ public sealed partial class DownloadQueueItem : ObservableObject
     /// <summary>Gets a short account of the state.</summary>
     public string StatusText => this.State switch
     {
-        DownloadState.Queued => "Queued",
-        DownloadState.Paused => "Paused",
-        DownloadState.Resolving => "Resolving",
-        DownloadState.Downloading => "Downloading",
-        DownloadState.AwaitingUser => "Waiting for you",
-        DownloadState.Downloaded when this.Instance is null => "Choose a profile",
-        DownloadState.Downloaded => "Downloaded",
-        DownloadState.Adding => "Adding",
-        DownloadState.Completed => "Added",
-        DownloadState.Failed => "Failed",
-        _ => "Cancelled",
+        DownloadState.Queued => Strings.DownloadStateQueued,
+        DownloadState.Paused => Strings.DownloadStatePaused,
+        DownloadState.Resolving => Strings.DownloadStateResolving,
+        DownloadState.Downloading => Strings.DownloadStateDownloading,
+        DownloadState.AwaitingUser => Strings.DownloadStateAwaitingUser,
+        DownloadState.Downloaded when this.Instance is null => Strings.DownloadStateChooseProfile,
+        DownloadState.Downloaded => Strings.DownloadStateDownloaded,
+        DownloadState.Adding => Strings.DownloadStateAdding,
+        DownloadState.Completed => Strings.DownloadStateAdded,
+        DownloadState.Failed => Strings.DownloadStateFailed,
+        _ => Strings.DownloadStateCancelled,
     };
 
     /// <summary>Shows what the daemon now reports about the download.</summary>
@@ -102,13 +107,14 @@ public sealed partial class DownloadQueueItem : ObservableObject
     internal void Update(DownloadInfo download)
     {
         DownloadFileInfo? first = download.Files.Count > 0 ? download.Files[0] : null;
-        this.Title = download.Title ?? download.Source ?? (first is { Name.Length: > 0 } ? first.Name : $"Download {download.Id}");
+        this.Title = download.Title ?? download.Source ?? (first is { Name.Length: > 0 } ? first.Name : Strings.FormatDownloadFallbackTitle(download.Id));
         string provider = first?.Provider ?? ProviderOf(download.Source);
         this.Instance = download.Instance;
         this.Profile = download.Profile;
+        this.Page = download.Page;
         this.Summary = download.Instance is null
-            ? $"{provider} · no profile yet"
-            : $"{provider} · {download.Instance} / {download.Profile}";
+            ? Strings.FormatDownloadSummaryNoProfile(provider)
+            : Strings.FormatDownloadSummary(provider, download.Instance, download.Profile);
         this.State = download.State switch
         {
             "queued" => DownloadState.Queued,
@@ -129,32 +135,31 @@ public sealed partial class DownloadQueueItem : ObservableObject
     {
         if (source is null)
         {
-            return "link";
+            return Strings.DownloadSourceLink;
         }
 
         int colon = source.IndexOf(':', StringComparison.Ordinal);
-        return source.StartsWith("https://", StringComparison.OrdinalIgnoreCase) || colon <= 0 ? "url" : source[..colon];
+        return source.StartsWith("https://", StringComparison.OrdinalIgnoreCase) || colon <= 0 ? Strings.DownloadSourceUrl : source[..colon];
     }
 
     private static string Describe(DownloadInfo download)
     {
         int downloaded = download.Files.Count(file => string.Equals(file.State, "downloaded", StringComparison.Ordinal));
-        string progress = download.Files.Count > 1 ? $"{downloaded} of {download.Files.Count} files downloaded" : string.Empty;
-        string warnings = download.Warnings.Count == 0 ? string.Empty : $" · {download.Warnings.Count} unresolved";
+        string progress = download.Files.Count > 1 ? Strings.FormatDownloadFilesProgress(downloaded, download.Files.Count) : string.Empty;
         string added = (download.Added.Count, download.Skipped.Count) switch
         {
-            (0, > 0) => "Already in profile",
-            (0, _) => "Nothing was added",
-            (1, _) => "Added 1 mod",
-            (int count, _) => $"Added {count} mods",
+            (0, > 0) => Strings.DownloadAlreadyInProfile,
+            (0, _) => Strings.DownloadNothingAdded,
+            (1, _) => Strings.DownloadAddedOneMod,
+            (int count, _) => Strings.FormatDownloadAddedMods(count),
         };
         return download.State switch
         {
-            "awaiting_user" => $"Start the download at {download.Page}",
-            "failed" => download.Message ?? "The download failed.",
-            "cancelled" => "Cancelled",
-            "downloaded" when download.Instance is null => "A link started this download. Add it to a profile.",
-            "completed" => added + warnings,
+            "awaiting_user" => Strings.FormatDownloadStartAt(download.Page),
+            "failed" => download.Message ?? Strings.DownloadFailedFallback,
+            "cancelled" => Strings.DownloadStateCancelled,
+            "downloaded" when download.Instance is null => Strings.DownloadNeedsProfile,
+            "completed" => download.Warnings.Count == 0 ? added : Strings.FormatDownloadAddedWithWarnings(added, download.Warnings.Count),
             _ => progress,
         };
     }

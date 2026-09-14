@@ -36,6 +36,8 @@ pub(crate) enum Work {
     SnapshotRestore { input: PathBuf },
     /// Adds a download queue item's files to its profile: the queue's instance lane.
     DownloadAdd { id: u64 },
+    /// Updates a profile's mods from their providers.
+    UpdateApply(msbe_rpc_schema::ProfileRequest),
 }
 
 /// What a job runs against.

@@ -194,11 +194,15 @@ contents. `verify` exits `7` if a deployed file is missing or has changed.
 ### 4.5 Recover and return to vanilla
 
 ```sh
+"$MSBE" journal mc
 "$MSBE" rollback mc
+"$MSBE" rollback mc --to 3
 "$MSBE" purge mc
 ```
 
-`rollback` undoes the latest deployment. `purge` undoes all deployments and returns the
+`journal` lists the deployments still in effect, newest first. `rollback` undoes the latest
+deployment, and `rollback --to` undoes every deployment after the one named, so that one is in
+effect again. `purge` undoes all deployments and returns the
 instance to the state recorded before MSBE first changed it. Mutable paths declared by a
 plan preserve runtime changes rather than being overwritten or removed.
 
@@ -259,7 +263,9 @@ preview, rather than copied into the game's mod directory.
 | `bisect run INSTANCE`                                                                                                                            | **Implemented** | Deploy the current trial subset for manual testing.                         |
 | `bisect result INSTANCE --bad\|--good`                                                                                                           | **Implemented** | Record the trial verdict and select the next half.                          |
 | `bisect finish INSTANCE`                                                                                                                         | **Implemented** | Restore the source profile and clean up.                                    |
-| `rollback INSTANCE`                                                                                                                              | **Implemented** | Undo the latest deployment.                                                 |
+| `rollback INSTANCE [--to TXN]`                                                                                                                   | **Implemented** | Undo the latest deployment, or every deployment after TXN.                  |
+| `journal INSTANCE`                                                                                                                               | **Implemented** | List the deployments still in effect, newest first.                         |
+| `conflicts INSTANCE [-p PROFILE]`                                                                                                                | **Implemented** | Name the mods that place different contents at one path.                    |
 | `purge INSTANCE`                                                                                                                                 | **Implemented** | Undo all deployment history.                                                |
 | `verify INSTANCE`                                                                                                                                | **Implemented** | Report deployment drift.                                                    |
 | `status INSTANCE`                                                                                                                                | **Implemented** | Show instance and deployment state.                                         |
@@ -283,6 +289,10 @@ preview, rather than copied into the game's mod directory.
 | `tool list`                                                                                                                                      | **Implemented** | List tool providers and the program registered for each.                    |
 | `tool register PROVIDER PROGRAM --accept-terms`                                                                                                  | **Implemented** | Register an installed tool program by SHA-256 and accept the terms.         |
 | `tool forget PROVIDER`                                                                                                                           | **Implemented** | Forget the program registered for a tool provider.                          |
+| `auth status`                                                                                                                                    | **Implemented** | Show sign-in, terms and quota for providers that need them.                 |
+| `auth acknowledge PROVIDER`                                                                                                                      | **Implemented** | Accept a provider's current terms.                                          |
+| `auth login PROVIDER --token-from-stdin\|--token-file FILE`                                                                                      | **Implemented** | Check a key with its provider and keep it.                                  |
+| `auth logout PROVIDER`                                                                                                                           | **Implemented** | Forget the key kept for a provider.                                         |
 
 Pack commands are codec-driven: `pack formats` and `pack options` list what the reviewed registry
 provides, and the CLI names no format itself. Every pack command previews first. `--dry-run`
@@ -397,11 +407,10 @@ in the current binary. Their names and arguments can change before implementatio
 | ------------------------- | ------------------------------------------------------------------------------------- | ------------------------- |
 | Instance lifecycle        | `instance detect`, `instance show`, `instance use`                                    | Future M1/M2 follow-up    |
 | Profiles                  | `profile switch`, `copy`, `diff`, `export`, `import`                                  | M2                        |
-| Resolution                | `lock`, `sync`, `conflicts`, ordering controls                                        | M2                        |
+| Resolution                | `lock`, `sync`, conflict resolution, ordering controls                                | M2                        |
 | Plans and registry        | `plan`, `registry`                                                                    | M7                        |
 | Diagnostics and store     | `doctor`, `store`, `bundle`                                                           | M2 and later              |
 | Daemon control            | `daemon start`, `stop`, `status`; Windows named-pipe transport                        | M1 follow-up              |
-| Credentials and links     | `auth`                                                                                | M5                        |
 | Steam Workshop            | Local directory import; optional item-ID metadata; a tool program for a user-installed SteamCMD| Future, subject to policy |
 | Game launch               | `launch`                                                                              | Future                    |
 
@@ -452,9 +461,8 @@ existing instances retain their pinned support definition when an entry is unloa
 The built-in provider catalog recognizes the `modrinth:` source prefix and HTTPS direct URLs.
 Provider manifests are versioned and constrained configuration, not downloaded code: they can
 describe source recognition, HTTPS metadata origins, policy, and a supported acquisition
-primitive. M1 resolves them only through reviewed built-in adapters and rejects providers that
-require authentication or a persisted policy acknowledgement, because those workflows are not
-implemented yet. See [06 - Providers & policy](06-providers-and-policy.md#63-provider-manifests)
+primitive. They resolve only through reviewed runtimes. A provider that requires a key or accepted
+terms is refused until `msbe auth login` and `msbe auth acknowledge` record them. See [06 - Providers & policy](06-providers-and-policy.md#63-provider-manifests)
 for the contribution and safety model.
 
 For unsupported behavior, consult [09 - Interfaces](09-interfaces.md) for the intended

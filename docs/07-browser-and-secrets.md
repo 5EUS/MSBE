@@ -153,8 +153,11 @@ key derived with Argon2id (64 MiB and three passes by default) from a passphrase
 is unlocked once per daemon lifetime. Its Argon2id costs, salt and nonce are
 authenticated with the ciphertext, so an altered header fails exactly like a wrong
 passphrase, and a file asking for more than 4 GiB of memory is refused before any key
-is derived. `--token-from-stdin` and `--token-file` for one-shot commands arrive with
-`msbe auth`.
+is derived. `msbe auth login <provider>` reads a key only with `--token-from-stdin` or
+`--token-file`, never from an argument, and sends it to the daemon alone. The daemon refuses it
+until the provider's terms are acknowledged (`msbe auth acknowledge`), checks it against the
+program's `[auth] validate` route, and keeps it with the account name the provider reported.
+`msbe auth logout` forgets it; a token in the environment is unaffected.
 
 `<home>/auth/` is readable only by its owner. Beside the encrypted file it holds
 `credentials.toml`, which records each provider's store, account name, and when its
@@ -186,5 +189,6 @@ Discipline around them:
   request carrying a credential itself and fails one that leaves its origin;
 - `msbe bundle` (support bundle, planned) runs the same redactor and prints a summary of
   what it removed so the user can see it worked before mailing the file to a stranger;
-- token scopes are minimal, expiry is honoured, and `msbe auth status` (planned) shows
-  exactly which credentials exist and when they were last used.
+- token scopes are minimal, expiry is honoured, and `msbe auth status` shows exactly
+  which providers have a credential, where it is kept, the account it belongs to, when it
+  was last used (in JSON), whether the terms are accepted, and the quota last reported.

@@ -20,7 +20,7 @@ use msbe_core::{
         Name, NewInstance, Profile, ProfileTarget, Provenance, Status,
     },
 };
-use msbe_fsops::{Backend, Digest, NoopObserver, Operation, RelPath, Store};
+use msbe_fsops::{Backend, Digest, NoopObserver, Operation, RelPath, Store, TxnId};
 use msbe_pack::{
     CaptureKind, CaptureRequest, DiffKind, Direction, ExportRequest, ImportAction, ImportItem,
     ImportRequest, IssueCode, PackError, PackIssue, Resolution, Silent, UpdateRequest,
@@ -42,6 +42,7 @@ use msbe_providers::{
     verify_extension,
 };
 use msbe_rpc_schema::{
+    AUTH_ACKNOWLEDGE_METHOD, AUTH_LOGIN_METHOD, AUTH_LOGOUT_METHOD, AUTH_STATUS_METHOD, AuthStatus,
     BROWSER_CLOSE_METHOD, BROWSER_OPEN_METHOD, BROWSER_STATUS_METHOD, BrowserStatus,
     DOWNLOAD_CANCEL_METHOD, DOWNLOAD_CLEAR_METHOD, DOWNLOAD_CONFIRM_METHOD,
     DOWNLOAD_ENQUEUE_METHOD, DOWNLOAD_LIST_METHOD, DOWNLOAD_MOVE_METHOD, DOWNLOAD_PAUSE_METHOD,
@@ -51,12 +52,17 @@ use msbe_rpc_schema::{
 };
 use serde::Serialize;
 
+mod accounts;
 #[cfg(test)]
 mod end_to_end_tests;
 #[cfg(test)]
 mod fake_modrinth;
 mod handlers;
 mod tools;
+
+pub use accounts::{
+    AccountsError, acknowledge_terms, auth_status, auth_statuses, provider_infos, sign_in, sign_out,
+};
 
 pub use handlers::{HandlerError, handler_status, register_handler, unregister_handler};
 pub use tools::{
@@ -179,6 +185,10 @@ enum Command {
     /// MSBE runs a registered program only while it still has the SHA-256 it was registered with.
     #[command(subcommand)]
     Tool(ToolCommand),
+    /// Sign in to providers that need a key, and accept the terms providers require. Keys stay in
+    /// the local daemon, which checks each with its provider before keeping it.
+    #[command(subcommand)]
+    Auth(AuthCommand),
     /// Search every provider that supports it for mods compatible with a profile target.
     Search {
         /// The instance.
@@ -236,10 +246,26 @@ enum Command {
         #[arg(long, short, default_value = DEFAULT_PROFILE)]
         profile: String,
     },
-    /// Undo the most recent deployment.
+    /// Undo the most recent deployment, or every deployment after a transaction `journal` lists.
     Rollback {
         /// The instance.
         instance: String,
+        /// Return to this transaction, undoing every deployment after it.
+        #[arg(long, value_name = "TXN")]
+        to: Option<u64>,
+    },
+    /// List the deployments still in effect, oldest first; the last is what is deployed.
+    Journal {
+        /// The instance.
+        instance: String,
+    },
+    /// List the paths more than one of a profile's mods would deploy with different contents.
+    Conflicts {
+        /// The instance.
+        instance: String,
+        /// The profile to check.
+        #[arg(long, short, default_value = DEFAULT_PROFILE)]
+        profile: String,
     },
     /// Undo every deployment, returning the instance to its state before MSBE.
     Purge {
@@ -316,6 +342,38 @@ enum DownloadCommand {
     },
     /// Remove completed, failed and cancelled downloads.
     Clear,
+}
+
+#[derive(Debug, Subcommand)]
+enum AuthCommand {
+    /// Show which providers need signing in or accepting terms, and where each stands.
+    Status,
+    /// Sign in with a key from the provider's key page. The key is read from standard input or a
+    /// file, never from the command line.
+    Login {
+        /// The provider.
+        provider: String,
+        /// Read the key from standard input.
+        #[arg(
+            long,
+            required_unless_present = "token_file",
+            conflicts_with = "token_file"
+        )]
+        token_from_stdin: bool,
+        /// Read the key from this file.
+        #[arg(long, value_name = "FILE")]
+        token_file: Option<PathBuf>,
+    },
+    /// Forget the key kept for a provider. A token in the environment is unaffected.
+    Logout {
+        /// The provider.
+        provider: String,
+    },
+    /// Accept a provider's current terms, which `auth status` shows.
+    Acknowledge {
+        /// The provider.
+        provider: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -826,7 +884,7 @@ enum CliError {
     },
     #[error("pass exactly one of --bad or --good")]
     BisectVerdict,
-    #[error("{0} commands run in the local daemon, which owns the download queue")]
+    #[error("{0} commands are sent to the local daemon and cannot run here")]
     DaemonOnly(&'static str),
     #[error("cannot create scratch space for downloads: {0}")]
     Scratch(#[source] io::Error),
@@ -998,7 +1056,18 @@ where
 pub struct DaemonCalls {
     /// Each call's method and parameters, in order.
     pub calls: Vec<(&'static str, serde_json::Value)>,
+    /// Where `auth login` reads its key, which the caller adds to the call as `token`.
+    pub token: Option<TokenSource>,
     json: bool,
+}
+
+/// Where `msbe auth login` reads a key from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TokenSource {
+    /// Standard input.
+    Stdin,
+    /// A file.
+    File(PathBuf),
 }
 
 /// The typed daemon calls for `args`, which include the program name, when they name `handoff`,
@@ -1010,18 +1079,41 @@ where
     T: Into<OsString> + Clone,
 {
     let cli = Cli::try_parse_from(args).ok()?;
+    let token = match &cli.command {
+        Command::Auth(AuthCommand::Login { token_file, .. }) => Some(
+            token_file
+                .clone()
+                .map_or(TokenSource::Stdin, TokenSource::File),
+        ),
+        _ => None,
+    };
     let calls = match cli.command {
         Command::Handoff { uri } => {
             vec![(HANDOFF_SUBMIT_METHOD, serde_json::json!({ "uri": uri }))]
         }
         Command::Download(command) => download_calls(command),
         Command::Browser(command) => vec![browser_call(&command)],
+        Command::Auth(command) => vec![auth_call(command)],
         _ => return None,
     };
     Some(DaemonCalls {
         calls,
+        token,
         json: cli.format == Format::Json,
     })
+}
+
+fn auth_call(command: AuthCommand) -> (&'static str, serde_json::Value) {
+    use serde_json::{Value, json};
+
+    match command {
+        AuthCommand::Status => (AUTH_STATUS_METHOD, Value::Null),
+        AuthCommand::Login { provider, .. } => (AUTH_LOGIN_METHOD, json!({ "provider": provider })),
+        AuthCommand::Logout { provider } => (AUTH_LOGOUT_METHOD, json!({ "provider": provider })),
+        AuthCommand::Acknowledge { provider } => {
+            (AUTH_ACKNOWLEDGE_METHOD, json!({ "provider": provider }))
+        }
+    }
 }
 
 fn browser_call(command: &BrowserCommand) -> (&'static str, serde_json::Value) {
@@ -1105,6 +1197,24 @@ impl DaemonCalls {
                 Ok(receipt) => print_receipt(out, &receipt),
                 Err(_) => writeln!(out, "{result}"),
             },
+            AUTH_STATUS_METHOD => match serde_json::from_value::<Vec<AuthStatus>>(result.clone()) {
+                Ok(statuses) if statuses.is_empty() => {
+                    writeln!(
+                        out,
+                        "No enabled provider needs signing in or accepting terms."
+                    )
+                }
+                Ok(statuses) => statuses
+                    .iter()
+                    .try_for_each(|status| print_auth(out, status)),
+                Err(_) => writeln!(out, "{result}"),
+            },
+            AUTH_LOGIN_METHOD | AUTH_LOGOUT_METHOD | AUTH_ACKNOWLEDGE_METHOD => {
+                match serde_json::from_value::<AuthStatus>(result.clone()) {
+                    Ok(status) => print_auth(out, &status),
+                    Err(_) => writeln!(out, "{result}"),
+                }
+            }
             BROWSER_STATUS_METHOD | BROWSER_OPEN_METHOD | BROWSER_CLOSE_METHOD => {
                 match serde_json::from_value::<BrowserStatus>(result.clone()) {
                     Ok(status) => print_browser(out, &status),
@@ -1128,7 +1238,56 @@ impl DaemonCalls {
     }
 }
 
+fn print_auth(out: &mut dyn Write, status: &AuthStatus) -> io::Result<()> {
+    let label = format!("{} ({})", status.name, status.provider);
+    match (&status.source, &status.account) {
+        (Some(source), _) if source == "environment" => {
+            writeln!(out, "{label}: signed in with a token in the environment")?;
+        }
+        (Some(source), Some(account)) => {
+            writeln!(
+                out,
+                "{label}: signed in as {account}, key kept in the {source}"
+            )?;
+        }
+        (Some(source), None) => writeln!(out, "{label}: signed in, key kept in the {source}")?,
+        (None, _) if status.requires_auth || status.key_page.is_some() => {
+            writeln!(out, "{label}: not signed in")?;
+            if let Some(page) = &status.key_page {
+                writeln!(
+                    out,
+                    "  Get a key at {page}, then run `msbe auth login {} --token-from-stdin`.",
+                    status.provider
+                )?;
+            }
+        }
+        (None, _) => writeln!(out, "{label}")?,
+    }
+    if status.ack_required {
+        if status.acknowledged {
+            writeln!(out, "  Terms accepted: {}", status.terms)?;
+        } else {
+            writeln!(
+                out,
+                "  Terms not accepted: {}. `msbe auth acknowledge {}` accepts them.",
+                status.terms, status.provider
+            )?;
+        }
+    }
+    for (header, remaining) in &status.quota {
+        writeln!(out, "  {header}: {remaining} remaining")?;
+    }
+    Ok(())
+}
+
 fn print_browser(out: &mut dyn Write, status: &BrowserStatus) -> io::Result<()> {
+    if !status.installed {
+        writeln!(
+            out,
+            "The MSBE browser component is not installed beside the daemon. Open waiting pages in \
+             your own browser; a link handler or `msbe handoff` brings their links back."
+        )?;
+    }
     if status.running {
         let shown = status
             .title
@@ -1294,6 +1453,7 @@ fn execute(cli: &Cli, console: &mut Console<'_>) -> Result<u8, CliError> {
         Command::Download(_) => Err(CliError::DaemonOnly("download")),
         Command::Browser(_) => Err(CliError::DaemonOnly("browser")),
         Command::Tool(command) => tool_command(&providers, &home, command, console),
+        Command::Auth(_) => Err(CliError::DaemonOnly("auth")),
         Command::Handler(command) => handler_command(&providers, command, console),
         Command::Search {
             instance,
@@ -1320,7 +1480,9 @@ fn execute(cli: &Cli, console: &mut Console<'_>) -> Result<u8, CliError> {
             dry_run,
         } => deploy(&home, instance, profile, *dry_run, console),
         Command::Lock { instance, profile } => lock(&home, instance, profile, console),
-        Command::Rollback { instance } => rollback(&home, instance, console),
+        Command::Rollback { instance, to } => rollback(&home, instance, *to, console),
+        Command::Journal { instance } => journal(&home, instance, console),
+        Command::Conflicts { instance, profile } => conflicts(&home, instance, profile, console),
         Command::Purge { instance } => purge(&home, instance, console),
         Command::Verify { instance } => verify(&home, instance, console),
         Command::Status { instance } => status(&home, instance, console),
@@ -2908,6 +3070,68 @@ fn update(
     dry_run: bool,
     console: &mut Console<'_>,
 ) -> Result<u8, CliError> {
+    let (report, instance, profile) = updates(
+        providers, home, instance, profile, modules, dry_run, console,
+    )?;
+    console.emit(&report, |out, report| {
+        print_update(out, report, &instance, &profile)
+    })?;
+    Ok(exit::OK)
+}
+
+/// Checks `profile` of `instance` for updates, as `msbe update --dry-run` does, or applies them
+/// when `dry_run` is false. Returns the report `msbe --format json update` prints.
+///
+/// # Errors
+///
+/// Returns the command's error message when the instance, profile or a provider cannot be read,
+/// or an update cannot be downloaded and added.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the same inputs `msbe update` takes, and the network the daemon supplies"
+)]
+pub fn update_report(
+    providers: &Providers,
+    home: &Home,
+    instance: &str,
+    profile: &str,
+    modules: &[String],
+    dry_run: bool,
+    connect: Connect<'_>,
+) -> Result<serde_json::Value, String> {
+    let (mut out, mut err) = (io::sink(), io::sink());
+    let mut console = Console {
+        out: &mut out,
+        err: &mut err,
+        format: Format::Json,
+        connect,
+    };
+    let (report, _, _) = updates(
+        providers,
+        home,
+        instance,
+        profile,
+        modules,
+        dry_run,
+        &mut console,
+    )
+    .map_err(|error| error.to_string())?;
+    serde_json::to_value(&report).map_err(|error| error.to_string())
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the established command handler signature needs the providers alongside command inputs"
+)]
+fn updates(
+    providers: &Providers,
+    home: &Home,
+    instance: &str,
+    profile: &str,
+    modules: &[String],
+    dry_run: bool,
+    console: &mut Console<'_>,
+) -> Result<(UpdateReport, Name, Name), CliError> {
     let opened = open(home, instance, console)?;
     let profile = Name::new(profile)?;
     let selection = opened.profile(&profile)?;
@@ -2945,10 +3169,7 @@ fn update(
             opened.replace_artifacts(&profile, &artifacts)?;
         }
     }
-    console.emit(&report, |out, report| {
-        print_update(out, report, opened.name(), &profile)
-    })?;
-    Ok(exit::OK)
+    Ok((report, opened.name().clone(), profile))
 }
 
 /// The profile's mods to check, limited to `modules` when any are named. Mods in scope that no
@@ -3174,14 +3395,88 @@ fn lock(
     Ok(exit::OK)
 }
 
-fn rollback(home: &Home, instance: &str, console: &mut Console<'_>) -> Result<u8, CliError> {
+fn rollback(
+    home: &Home,
+    instance: &str,
+    to: Option<u64>,
+    console: &mut Console<'_>,
+) -> Result<u8, CliError> {
     let mut opened = open(home, instance, console)?;
-    let undone = RolledBack {
-        rolled_back: opened.rollback()?,
+    let Some(to) = to else {
+        let undone = RolledBack {
+            rolled_back: opened.rollback()?,
+        };
+        console.emit(&undone, |out, undone| match undone.rolled_back {
+            Some(txn) => writeln!(out, "Rolled back transaction {txn}."),
+            None => writeln!(out, "Nothing to roll back."),
+        })?;
+        return Ok(exit::OK);
     };
-    console.emit(&undone, |out, undone| match undone.rolled_back {
-        Some(txn) => writeln!(out, "Rolled back transaction {txn}."),
-        None => writeln!(out, "Nothing to roll back."),
+    let target = TxnId::new(to);
+    let undone = RolledBack {
+        rolled_back: opened.rollback_to(target)?,
+    };
+    console.emit(&undone, |out, undone| {
+        if undone.rolled_back.is_empty() {
+            return writeln!(
+                out,
+                "Transaction {target} is already the latest deployment."
+            );
+        }
+        let listed: Vec<String> = undone.rolled_back.iter().map(ToString::to_string).collect();
+        writeln!(
+            out,
+            "Rolled back transactions {}; transaction {target} is deployed again.",
+            listed.join(", ")
+        )
+    })?;
+    Ok(exit::OK)
+}
+
+fn journal(home: &Home, instance: &str, console: &mut Console<'_>) -> Result<u8, CliError> {
+    let opened = open(home, instance, console)?;
+    let entries = opened.journal();
+    console.emit(&entries, |out, entries| {
+        if entries.is_empty() {
+            return writeln!(out, "Nothing is deployed to {instance}.");
+        }
+        for (index, entry) in entries.iter().enumerate().rev() {
+            let deployed = if index + 1 == entries.len() {
+                " (deployed)"
+            } else {
+                ""
+            };
+            writeln!(
+                out,
+                "{} {}: {} file(s){deployed}",
+                entry.txn, entry.profile, entry.files
+            )?;
+        }
+        Ok(())
+    })?;
+    Ok(exit::OK)
+}
+
+fn conflicts(
+    home: &Home,
+    instance: &str,
+    profile: &str,
+    console: &mut Console<'_>,
+) -> Result<u8, CliError> {
+    let opened = open(home, instance, console)?;
+    let profile = Name::new(profile)?;
+    let found = opened.conflicts(&profile)?;
+    console.emit(&found, |out, found| {
+        if found.is_empty() {
+            return writeln!(out, "No mods in {instance}/{profile} claim the same path.");
+        }
+        for conflict in found {
+            writeln!(out, "{}", conflict.path)?;
+            for claim in &conflict.claims {
+                writeln!(out, "  claimed by {} ({})", claim.module, claim.blob)?;
+            }
+        }
+        Ok(())
     })?;
     Ok(exit::OK)
 }

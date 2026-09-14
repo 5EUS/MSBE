@@ -5,6 +5,7 @@ using System.Text.Json;
 using CommunityToolkit.Mvvm.ComponentModel;
 
 using MSBE.Client;
+using MSBE.Desktop.Resources;
 
 namespace MSBE.Desktop.ViewModels;
 
@@ -72,13 +73,14 @@ internal sealed partial class MainViewModel
             return new ModListItem(name, origin, source, project, version, fileCount);
         }
 
-        return new ModListItem(name, origin, "Local file", string.Empty, string.Empty, fileCount);
+        return new ModListItem(name, origin, Strings.ModSourceLocalFile, string.Empty, string.Empty, fileCount);
     }
 
     partial void OnSelectedProfileChanged(string? value)
     {
         this.ClearBrowseResultsForTargetChange();
         this.ClearPackState();
+        this.ClearProfileHistory();
         if (value is null || this.SelectedInstance is null)
         {
             this.Mods.Clear();
@@ -95,7 +97,12 @@ internal sealed partial class MainViewModel
         }
         else
         {
-            this.PackError = "The running daemon is older than the Pack workspace. Stop it and restart MSBE to load the updated daemon.";
+            this.PackError = Strings.PackDaemonOutdated;
+        }
+
+        if (this.IsHistoryWorkspace)
+        {
+            _ = this.LoadHistoryAsync();
         }
     }
 

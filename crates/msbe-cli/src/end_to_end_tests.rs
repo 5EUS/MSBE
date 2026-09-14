@@ -1234,7 +1234,7 @@ fn download_and_handoff_commands_run_as_typed_daemon_calls() {
     let refused = world.msbe(&["download", "list"]);
     assert_eq!(refused.code, exit::FAILURE);
     assert!(
-        refused.err.contains("run in the local daemon"),
+        refused.err.contains("sent to the local daemon"),
         "{}",
         refused.err
     );
@@ -2045,5 +2045,136 @@ fn tool_commands_name_only_enabled_tool_providers() {
     assert_eq!(
         unknown.err,
         "error: no enabled provider named \"nothing\" runs an external tool\n"
+    );
+}
+
+#[test]
+fn deployments_are_listed_rolled_back_to_and_conflicting_mods_are_named() {
+    let world = World::new();
+    world.add_instance(Some("1.21.1"));
+    let sodium = world.file("sodium.jar", b"sodium bytes");
+    world.json(&["add", "mc", sodium.as_str()]);
+    world.json(&["deploy", "mc"]);
+    let iris = world.file("iris.jar", b"iris bytes");
+    world.json(&["add", "mc", iris.as_str()]);
+    world.json(&["deploy", "mc"]);
+
+    let journal = world.json(&["journal", "mc"]);
+    assert_eq!(journal.as_array().map(Vec::len), Some(2), "{journal}");
+    let first = at(&journal, "/0/txn").as_u64().unwrap();
+    let second = at(&journal, "/1/txn").clone();
+    let listed = world.msbe(&["journal", "mc"]);
+    assert_eq!(listed.code, exit::OK, "{}", listed.err);
+    let newest = listed.out.lines().next().unwrap_or_default();
+    assert!(
+        newest.starts_with(&format!("#{second} default")) && newest.ends_with("(deployed)"),
+        "{}",
+        listed.out
+    );
+
+    let first = first.to_string();
+    let rolled = world.json(&["rollback", "mc", "--to", first.as_str()]);
+    assert_eq!(at(&rolled, "/rolled_back"), &json!([second]));
+    assert!(world.game.join("mods/sodium.jar").is_file());
+    assert!(!world.game.join("mods/iris.jar").exists());
+    let again = world.msbe(&["rollback", "mc", "--to", first.as_str()]);
+    assert_eq!(again.code, exit::OK, "{}", again.err);
+    assert!(
+        again.out.contains("is already the latest deployment"),
+        "{}",
+        again.out
+    );
+    let unknown = world.msbe(&["rollback", "mc", "--to", "99"]);
+    assert_ne!(unknown.code, exit::OK);
+    assert!(
+        unknown
+            .err
+            .contains("#99 is not a deployment still in effect"),
+        "{}",
+        unknown.err
+    );
+
+    assert_eq!(world.json(&["conflicts", "mc"]), json!([]));
+    let first = world.zip("pack-a.zip", &[("a/common.jar", b"version a")]);
+    let second = world.zip("pack-b.zip", &[("b/common.jar", b"version b")]);
+    world.json(&["add", "mc", first.as_str(), second.as_str()]);
+    let found = world.json(&["conflicts", "mc"]);
+    assert_eq!(at(&found, "/0/path"), "mods/common.jar", "{found}");
+    assert_eq!(at(&found, "/0/claims/0/module"), "pack-a");
+    assert_eq!(at(&found, "/0/claims/1/module"), "pack-b");
+    let named = world.msbe(&["conflicts", "mc"]);
+    assert_eq!(named.code, exit::OK, "{}", named.err);
+    assert!(
+        named
+            .out
+            .starts_with("mods/common.jar\n  claimed by pack-a (sha256:"),
+        "{}",
+        named.out
+    );
+}
+
+#[test]
+fn auth_commands_are_typed_daemon_calls_that_never_take_a_key_as_an_argument() {
+    use crate::TokenSource;
+
+    let parsed =
+        |args: &[&str]| crate::daemon_calls(std::iter::once("msbe").chain(args.iter().copied()));
+    let status = parsed(&["auth", "status"]).unwrap();
+    assert_eq!(status.calls, [("auth.status", Value::Null)]);
+    assert_eq!(status.token, None);
+    let login = parsed(&["auth", "login", "keyed", "--token-from-stdin"]).unwrap();
+    assert_eq!(
+        login.calls,
+        [("auth.login", json!({ "provider": "keyed" }))]
+    );
+    assert_eq!(login.token, Some(TokenSource::Stdin));
+    let from_file = parsed(&["auth", "login", "keyed", "--token-file", "/keys/keyed"]).unwrap();
+    assert_eq!(
+        from_file.token,
+        Some(TokenSource::File(PathBuf::from("/keys/keyed")))
+    );
+    assert!(parsed(&["auth", "login", "keyed"]).is_none());
+    assert!(parsed(&["auth", "login", "keyed", "--token", "abc"]).is_none());
+    assert_eq!(
+        parsed(&["auth", "logout", "keyed"]).unwrap().calls,
+        [("auth.logout", json!({ "provider": "keyed" }))]
+    );
+    assert_eq!(
+        parsed(&["auth", "acknowledge", "keyed"]).unwrap().calls,
+        [("auth.acknowledge", json!({ "provider": "keyed" }))]
+    );
+
+    let mut out = Vec::new();
+    status
+        .print(
+            "auth.status",
+            &json!([{
+                "provider": "keyed", "name": "Keyed", "requires_auth": true, "signed_in": false,
+                "key_page": "https://www.keyed.test/account/keys",
+                "terms": "https://www.keyed.test/terms", "ack_required": true, "acknowledged": false
+            }, {
+                "provider": "other", "name": "Other", "requires_auth": true, "signed_in": true,
+                "source": "keyring", "account": "Player", "terms": "", "ack_required": false,
+                "acknowledged": true, "quota": { "x-hourly-remaining": 90 }
+            }]),
+            &mut out,
+        )
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(out).unwrap(),
+        "Keyed (keyed): not signed in\n  \
+         Get a key at https://www.keyed.test/account/keys, then run `msbe auth login keyed --token-from-stdin`.\n  \
+         Terms not accepted: https://www.keyed.test/terms. `msbe auth acknowledge keyed` accepts them.\n\
+         Other (other): signed in as Player, key kept in the keyring\n  \
+         x-hourly-remaining: 90 remaining\n"
+    );
+
+    let world = World::new();
+    let local = world.msbe(&["auth", "status"]);
+    assert_eq!(local.code, exit::FAILURE);
+    assert!(
+        local.err.contains("sent to the local daemon"),
+        "{}",
+        local.err
     );
 }

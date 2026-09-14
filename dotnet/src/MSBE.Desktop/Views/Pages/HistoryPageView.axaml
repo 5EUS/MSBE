@@ -1,0 +1,182 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:res="using:MSBE.Desktop.Resources"
+             xmlns:vm="using:MSBE.Desktop.ViewModels"
+             x:Class="MSBE.Desktop.Views.Pages.HistoryPageView"
+             x:DataType="vm:MainViewModel">
+    <Grid Margin="8" RowDefinitions="Auto,Auto,*" RowSpacing="16">
+        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+            <StackPanel Spacing="3">
+                <TextBlock Classes="sectionHeading" Text="{x:Static res:Strings.WorkspaceHistory}" />
+                <TextBlock Classes="caption" TextWrapping="Wrap" Text="{x:Static res:Strings.HistoryCaption}" />
+            </StackPanel>
+            <StackPanel Grid.Column="1" HorizontalAlignment="Right" Spacing="2">
+                <TextBlock HorizontalAlignment="Right" Text="{Binding SelectedInstance}" />
+                <TextBlock Classes="caption" HorizontalAlignment="Right" Text="{Binding SelectedProfile}" />
+            </StackPanel>
+        </Grid>
+
+        <Grid Grid.Row="1" ColumnDefinitions="*,Auto" ColumnSpacing="10" IsVisible="{Binding IsPackJobRunning}">
+            <StackPanel Spacing="4">
+                <TextBlock Classes="caption" Text="{Binding PackJobMessage}" />
+                <ProgressBar Minimum="0" Maximum="1" Value="{Binding PackJobProgress}" />
+            </StackPanel>
+            <Button Grid.Column="1" Classes="secondary-button" Content="{x:Static res:Strings.Cancel}" Command="{Binding CancelPackJobCommand}" />
+        </Grid>
+
+        <TabControl Grid.Row="2">
+            <TabItem Header="{x:Static res:Strings.HistoryDeploymentsTab}">
+                <Grid Margin="0,12,0,0" RowDefinitions="Auto,Auto,Auto,*" RowSpacing="10">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                        <TextBlock Classes="caption" VerticalAlignment="Center" TextWrapping="Wrap" Text="{x:Static res:Strings.HistoryDeploymentsCaption}" />
+                        <Button Grid.Column="1"
+                                Classes="secondary-button"
+                                Command="{Binding LoadHistoryCommand}"
+                                ToolTip.Tip="{x:Static res:Strings.HistoryRefreshTip}">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <LucideIcon Kind="RefreshCw" Size="15" StrokeWidth="1.8" />
+                                <TextBlock Text="{x:Static res:Strings.Refresh}" />
+                            </StackPanel>
+                        </Button>
+                    </Grid>
+                    <TextBlock Grid.Row="1" Classes="caption" TextWrapping="Wrap" Text="{Binding JournalStatus}" />
+                    <Border Grid.Row="2" Classes="error-banner" IsVisible="{Binding HasPendingRollback}">
+                        <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+                            <TextBlock VerticalAlignment="Center" TextWrapping="Wrap" Text="{Binding PendingRollbackText}" />
+                            <Button Grid.Column="1" Classes="danger-button" Content="{x:Static res:Strings.JournalConfirm}" Command="{Binding ConfirmRollbackCommand}" />
+                            <Button Grid.Column="2" Classes="secondary-button" Content="{x:Static res:Strings.Cancel}" Command="{Binding CancelRollbackCommand}" />
+                        </Grid>
+                    </Border>
+                    <ListBox Grid.Row="3"
+                             Classes="mods-list"
+                             ItemsSource="{Binding JournalEntries}"
+                             AutomationProperties.Name="{x:Static res:Strings.HistoryDeploymentsTab}">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate x:DataType="vm:JournalItem">
+                                <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
+                                    <Border Classes="mod-icon" Width="34" Height="34">
+                                        <LucideIcon Kind="PackageOpen" Size="18" StrokeWidth="1.8" />
+                                    </Border>
+                                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+                                        <TextBlock FontWeight="SemiBold" Text="{Binding Title}" />
+                                        <TextBlock Classes="caption" Text="{Binding Detail}" />
+                                    </StackPanel>
+                                    <TextBlock Grid.Column="2"
+                                               Classes="provider-label"
+                                               VerticalAlignment="Center"
+                                               IsVisible="{Binding IsDeployed}"
+                                               Text="{x:Static res:Strings.JournalDeployed}" />
+                                    <Button Grid.Column="2"
+                                            Classes="secondary-button"
+                                            VerticalAlignment="Center"
+                                            IsVisible="{Binding !IsDeployed}"
+                                            Content="{x:Static res:Strings.JournalRollBackTo}"
+                                            AutomationProperties.Name="{Binding RollBackName}"
+                                            Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).RequestRollbackToCommand}"
+                                            CommandParameter="{Binding}" />
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="{x:Static res:Strings.HistoryConflictsTab}">
+                <Grid Margin="0,12,0,0" RowDefinitions="Auto,Auto,*" RowSpacing="10">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                        <TextBlock Classes="caption" VerticalAlignment="Center" TextWrapping="Wrap" Text="{x:Static res:Strings.HistoryConflictsCaption}" />
+                        <Button Grid.Column="1"
+                                Classes="secondary-button"
+                                Command="{Binding LoadHistoryCommand}"
+                                ToolTip.Tip="{x:Static res:Strings.HistoryRefreshTip}">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <LucideIcon Kind="RefreshCw" Size="15" StrokeWidth="1.8" />
+                                <TextBlock Text="{x:Static res:Strings.Refresh}" />
+                            </StackPanel>
+                        </Button>
+                    </Grid>
+                    <TextBlock Grid.Row="1" Classes="caption" TextWrapping="Wrap" Text="{Binding ConflictsStatus}" />
+                    <TreeView Grid.Row="2" ItemsSource="{Binding Conflicts}" AutomationProperties.Name="{x:Static res:Strings.HistoryConflictsTab}">
+                        <TreeView.DataTemplates>
+                            <TreeDataTemplate DataType="{x:Type vm:ConflictItem}" ItemsSource="{Binding Claims}">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <LucideIcon Kind="CircleAlert" Size="15" StrokeWidth="1.8" VerticalAlignment="Center" />
+                                    <TextBlock FontWeight="SemiBold" VerticalAlignment="Center" Text="{Binding Path}" />
+                                    <TextBlock Classes="caption" VerticalAlignment="Center" Text="{Binding Summary}" />
+                                </StackPanel>
+                            </TreeDataTemplate>
+                            <DataTemplate DataType="{x:Type vm:ConflictClaimItem}">
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                                    <StackPanel VerticalAlignment="Center" Spacing="2">
+                                        <TextBlock Text="{Binding Module}" />
+                                        <TextBlock Classes="caption" Text="{Binding Detail}" />
+                                    </StackPanel>
+                                    <Button Grid.Column="1"
+                                            Classes="secondary-button"
+                                            Content="{Binding RemoveText}"
+                                            Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).RemoveConflictingModCommand}"
+                                            CommandParameter="{Binding}" />
+                                </Grid>
+                            </DataTemplate>
+                        </TreeView.DataTemplates>
+                    </TreeView>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="{x:Static res:Strings.HistoryUpdatesTab}">
+                <Grid Margin="0,12,0,0" RowDefinitions="Auto,Auto,*" RowSpacing="10">
+                    <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+                        <TextBlock Classes="caption" VerticalAlignment="Center" TextWrapping="Wrap" Text="{x:Static res:Strings.HistoryUpdatesCaption}" />
+                        <Button Grid.Column="1" Classes="secondary-button" Content="{x:Static res:Strings.UpdatesCheck}" Command="{Binding CheckUpdatesCommand}" />
+                        <Button Grid.Column="2"
+                                Classes="primary-button"
+                                IsEnabled="{Binding CanApplyUpdates}"
+                                Content="{x:Static res:Strings.UpdatesApply}"
+                                Command="{Binding ApplyUpdatesCommand}" />
+                    </Grid>
+                    <StackPanel Grid.Row="1" Spacing="3">
+                        <TextBlock TextWrapping="Wrap" Text="{Binding UpdatesStatus}" />
+                        <TextBlock Classes="caption" TextWrapping="Wrap" Text="{Binding UpdatesDetail}" IsVisible="{Binding HasUpdatesDetail}" />
+                        <TextBlock Classes="download-error" TextWrapping="Wrap" Text="{Binding UpdatesProblems}" IsVisible="{Binding HasUpdatesProblems}" />
+                    </StackPanel>
+                    <ListBox Grid.Row="2"
+                             Classes="mods-list"
+                             ItemsSource="{Binding AvailableUpdates}"
+                             AutomationProperties.Name="{x:Static res:Strings.HistoryUpdatesTab}">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate x:DataType="vm:UpdateItem">
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                                    <TextBlock FontWeight="SemiBold" Text="{Binding Module}" />
+                                    <TextBlock Grid.Column="1" Classes="caption" Text="{Binding Change}" />
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="{x:Static res:Strings.HistorySnapshotsTab}">
+                <StackPanel Margin="0,12,0,0" Spacing="10">
+                    <TextBlock Classes="caption" TextWrapping="Wrap" Text="{x:Static res:Strings.HistorySnapshotsCaption}" />
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                        <TextBox Text="{Binding SnapshotRestorePath}"
+                                 PlaceholderText="{x:Static res:Strings.SnapshotPathPlaceholder}"
+                                 AutomationProperties.Name="{x:Static res:Strings.SnapshotPathName}" />
+                        <Button Grid.Column="1"
+                                Classes="secondary-button"
+                                IsEnabled="{Binding CanRestoreSnapshot}"
+                                Content="{x:Static res:Strings.SnapshotRestore}"
+                                Command="{Binding RequestSnapshotRestoreCommand}" />
+                    </Grid>
+                    <Border Classes="error-banner" IsVisible="{Binding IsConfirmingSnapshotRestore}">
+                        <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+                            <TextBlock VerticalAlignment="Center" TextWrapping="Wrap" Text="{Binding SnapshotRestoreText}" />
+                            <Button Grid.Column="1" Classes="danger-button" Content="{x:Static res:Strings.SnapshotRestore}" Command="{Binding ConfirmSnapshotRestoreCommand}" />
+                            <Button Grid.Column="2" Classes="secondary-button" Content="{x:Static res:Strings.Cancel}" Command="{Binding CancelSnapshotRestoreCommand}" />
+                        </Grid>
+                    </Border>
+                </StackPanel>
+            </TabItem>
+        </TabControl>
+    </Grid>
+</UserControl>

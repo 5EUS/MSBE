@@ -43,6 +43,43 @@ pub const BROWSER_OPEN_METHOD: &str = "browser.open";
 /// Closes the MSBE browser: returns the [`BrowserStatus`].
 pub const BROWSER_CLOSE_METHOD: &str = "browser.close";
 
+/// Describes every enabled provider for clients: returns a [`ProviderInfo`] for each.
+pub const PROVIDER_LIST_METHOD: &str = "provider.list";
+
+/// Reports every provider that needs signing in or accepting terms, or accepts a key: returns an
+/// [`AuthStatus`] for each. It never returns a credential.
+pub const AUTH_STATUS_METHOD: &str = "auth.status";
+
+/// Checks a key with its provider and keeps it: [`AuthLogin`] returns the provider's
+/// [`AuthStatus`]. The provider's terms must be acknowledged first.
+pub const AUTH_LOGIN_METHOD: &str = "auth.login";
+
+/// Forgets the key kept for a provider: [`AuthProvider`] returns its [`AuthStatus`].
+pub const AUTH_LOGOUT_METHOD: &str = "auth.logout";
+
+/// Acknowledges a provider's current terms: [`AuthProvider`] returns its [`AuthStatus`].
+pub const AUTH_ACKNOWLEDGE_METHOD: &str = "auth.acknowledge";
+
+/// Lists an instance's deployments still in effect, oldest first: [`InstanceRequest`] returns
+/// `[{ txn, profile, files }]`, the last being what is deployed.
+pub const JOURNAL_LIST_METHOD: &str = "journal.list";
+
+/// Undoes deployments: [`JournalRollback`] returns `{ rolled_back, journal }`. With `txn`, every
+/// deployment after it is undone, newest first; without, only the latest.
+pub const JOURNAL_ROLLBACK_METHOD: &str = "journal.rollback";
+
+/// Lists the paths more than one of a profile's mods would deploy with different contents:
+/// [`ProfileRequest`] returns `[{ path, claims: [{ module, blob }] }]`.
+pub const CONFLICTS_LIST_METHOD: &str = "conflicts.list";
+
+/// Checks a profile's provider mods for updates without changing anything: [`ProfileRequest`]
+/// returns the report `msbe --format json update --dry-run` prints.
+pub const UPDATE_PREVIEW_METHOD: &str = "update.preview";
+
+/// Updates an instance profile's mods from their providers, as [`UPDATE_PREVIEW_METHOD`] showed.
+/// It fetches over the network, so it runs only as a job; its result is the same report.
+pub const UPDATE_APPLY_METHOD: &str = "update.apply";
+
 /// Lists every enabled provider that runs an external tool, and the program registered for each:
 /// returns a [`ToolStatus`] for each.
 pub const TOOL_LIST_METHOD: &str = "tool.list";
@@ -164,6 +201,7 @@ pub const JOB_METHODS: &[&str] = &[
     PACK_CAPTURE_EXECUTE_METHOD,
     SNAPSHOT_CREATE_METHOD,
     SNAPSHOT_RESTORE_METHOD,
+    UPDATE_APPLY_METHOD,
 ];
 
 /// Application error codes beyond the JSON-RPC reserved range.
@@ -463,6 +501,8 @@ pub struct HandoffReceipt {
 pub struct BrowserStatus {
     /// Whether the browser window is open.
     pub running: bool,
+    /// Whether the browser component is installed beside the daemon.
+    pub installed: bool,
     /// The provider whose pages it shows, while it is open.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
@@ -500,6 +540,133 @@ pub struct BrowserOpen {
     /// Whether to go to the next page once a download or link arrives. Unchanged when absent.
     #[serde(default)]
     pub auto_advance: Option<bool>,
+}
+
+/// An enabled provider, as [`PROVIDER_LIST_METHOD`] describes it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is an independent fact a client shows"
+)]
+pub struct ProviderInfo {
+    /// The provider id.
+    pub id: String,
+    /// Its display name.
+    pub name: String,
+    /// The prefix its sources start with, such as `example:`; absent for HTTPS URL sources.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<String>,
+    /// Whether it can be searched. One that cannot is added by reference or link.
+    pub search: bool,
+    /// How it acquires files: `direct_https`, `user_action`, `browser_assisted` or
+    /// `external_tool`. Every kind but the first needs the user or a registered tool.
+    pub acquisition: String,
+    /// Whether it needs a credential.
+    pub requires_auth: bool,
+    /// Whether a credential is kept for it, or set in the environment.
+    pub signed_in: bool,
+    /// Whether it requires acknowledging its terms.
+    pub ack_required: bool,
+    /// Whether its current terms are acknowledged, or it requires none.
+    pub acknowledged: bool,
+}
+
+/// A provider's sign-in and terms, as [`AUTH_STATUS_METHOD`] reports them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is an independent fact a client shows"
+)]
+pub struct AuthStatus {
+    /// The provider id.
+    pub provider: String,
+    /// Its display name.
+    pub name: String,
+    /// Whether it needs a credential.
+    pub requires_auth: bool,
+    /// Whether a credential is kept for it, or set in the environment.
+    pub signed_in: bool,
+    /// Where the credential is: `environment`, `keyring`, `encrypted file` or `memory`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// The account the provider reported for the kept key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
+    /// When the kept key was last read, as Unix seconds, to within a minute.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_used: Option<u64>,
+    /// The page where the user finds or creates a key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_page: Option<String>,
+    /// Its terms.
+    pub terms: String,
+    /// Whether it requires acknowledging its terms.
+    pub ack_required: bool,
+    /// Whether its current terms are acknowledged, or it requires none.
+    pub acknowledged: bool,
+    /// The quota its API reported remaining, by header.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub quota: std::collections::BTreeMap<String, u64>,
+}
+
+/// Parameters of [`AUTH_LOGIN_METHOD`]. `Debug` never shows the key.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthLogin {
+    /// The provider.
+    pub provider: String,
+    /// The key the user pasted.
+    pub token: String,
+}
+
+impl std::fmt::Debug for AuthLogin {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AuthLogin")
+            .field("provider", &self.provider)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Parameters naming one provider, for [`AUTH_LOGOUT_METHOD`] and [`AUTH_ACKNOWLEDGE_METHOD`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthProvider {
+    /// The provider.
+    pub provider: String,
+}
+
+/// Parameters naming one instance.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InstanceRequest {
+    /// The instance.
+    pub instance: String,
+}
+
+/// Parameters of [`JOURNAL_ROLLBACK_METHOD`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct JournalRollback {
+    /// The instance.
+    pub instance: String,
+    /// The deployment to return to; the latest is undone when absent.
+    #[serde(default)]
+    pub txn: Option<u64>,
+}
+
+/// Parameters naming a profile of an instance.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProfileRequest {
+    /// The instance.
+    pub instance: String,
+    /// The profile; `default` when absent.
+    #[serde(default)]
+    pub profile: Option<String>,
+    /// For updates, the mods to check; every mod when empty.
+    #[serde(default)]
+    pub modules: Vec<String>,
 }
 
 /// Whether a tool provider's registered program can run.

@@ -237,7 +237,7 @@ native MSBE bundle, or a distributable external pack through a provider-owned co
 options are schema-driven so Desktop does not hardcode a game or format. Accessibility and i18n
 included, not deferred.
 
-**Current checkpoint (approximately 30%)**: the desktop connects to the local daemon;
+**Current checkpoint (beta candidate; the beta gates are not yet run)**: the desktop connects to the local daemon;
 registers and browses instances; creates, clones, selects, and removes profiles; and
 shows profile-ordered mods. Profile-specific loader, loader version, and side targets are
 visible and editable, and changing them invalidates stale provider results. Users can add local files, URLs, and provider references,
@@ -249,9 +249,16 @@ blockers and observation ages, previews imports and pack-layer updates with conf
 captures in-game changes with diffs, and runs each daemon-held plan as a job with progress and
 cancellation. Deployment has a native review of ordered
 filesystem operations, unchanged and locally kept counts, the exclusion report, explicit
-confirmation before apply, and rollback of the latest transaction. Conflict resolution,
-the full journal timeline, wizards, download progress, browser-assisted acquisition,
-updates, snapshot restore from Desktop, complete accessibility, and i18n remain in this milestone.
+confirmation before apply, and rollback of the latest transaction. A History workspace lists every
+deployment still in effect with rollback to any of them after a confirmation, the file conflict tree
+with removal of a claiming mod, provider updates previewed and then applied as a job, and snapshot
+restore. Settings manages provider accounts (key page, paste → check → keep, terms, quota), link
+handlers, the browser component and external tools. Downloads opens a waiting page in the MSBE
+browser or the user's own, and Browse marks results that need the user before they are queued and
+adds projects from providers without search. Every user-visible string is in `Strings.resx`, and
+every input, list and tree has an accessible name. Wizards (moved to M8), conflict resolutions other
+than removing a mod, a screen-reader pass, translations, and the beta gates (the AOT-published
+binary launches; a 1000-row mod list stays smooth) remain.
 
 **Done when**: a user can compose a pack from provider search, review the resolved list, edit
 configuration files, select a discovered codec and its schema-driven options, and import the
