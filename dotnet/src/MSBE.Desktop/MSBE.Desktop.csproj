@@ -20,6 +20,13 @@
     <DaemonExecutableName>msbe-daemon</DaemonExecutableName>
     <DaemonExecutableName Condition="$(RuntimeIdentifier.StartsWith('win'))">msbe-daemon.exe</DaemonExecutableName>
     <DaemonSourcePath>$(MSBuildProjectDirectory)/../../../target/release/$(DaemonExecutableName)</DaemonSourcePath>
+    <!--
+      Link handler registration names the `msbe` binary beside the running executable, so the CLI
+      ships with the app as well as on its own. See docs/12-testing-and-release.md 12.3.
+    -->
+    <CliExecutableName>msbe</CliExecutableName>
+    <CliExecutableName Condition="$(RuntimeIdentifier.StartsWith('win'))">msbe.exe</CliExecutableName>
+    <CliSourcePath>$(MSBuildProjectDirectory)/../../../target/release/$(CliExecutableName)</CliSourcePath>
   </PropertyGroup>
 
   <ItemGroup>
@@ -66,7 +73,9 @@
   <Target Name="BuildDaemonForPublish" BeforeTargets="Publish">
     <Exec Command="cargo build --release --package msbe-daemon --bin msbe-daemon"
           WorkingDirectory="$(MSBuildProjectDirectory)/../../.." />
-    <Copy SourceFiles="$(DaemonSourcePath)"
+    <Exec Command="cargo build --release --package msbe-cli --bin msbe"
+          WorkingDirectory="$(MSBuildProjectDirectory)/../../.." />
+    <Copy SourceFiles="$(DaemonSourcePath);$(CliSourcePath)"
           DestinationFolder="$(PublishDir)"
           SkipUnchangedFiles="true" />
   </Target>
