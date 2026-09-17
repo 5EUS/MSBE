@@ -206,7 +206,7 @@ effect again. `purge` undoes all deployments and returns the
 instance to the state recorded before MSBE first changed it. Mutable paths declared by a
 plan preserve runtime changes rather than being overwritten or removed.
 
-## 5. Current No Man's Sky and Blade & Sorcery workflows
+## 5. Current No Man's Sky, Blade & Sorcery and Schedule I workflows
 
 ### 5.1 No Man's Sky
 
@@ -246,6 +246,36 @@ not supported. The plan covers the PC VR game; the Nomad edition keeps mods on t
 
 Text documentation is quarantined and reported in the deployment preview. An installed provider
 program that lists `bladeandsorcery` among its games can also queue downloads for the instance.
+
+### 5.3 Schedule I
+
+The Schedule I plan installs MelonLoader mods: assemblies land in `Mods/`, loader plugins in
+`Plugins/`, shared libraries in `UserLibs/`, and mod configuration in `UserData/`, which the plan
+declares mutable so the game's own edits to it survive. MelonLoader must already be installed;
+MSBE does not install it, and under Proton its proxy needs `version` set as a DLL override in the
+prefix.
+
+The game's two Steam branches ship incompatible runtimes, and a mod is built for one of them, so
+the instance names its branch — `melonloader` for the default Il2Cpp branch, `melonloader-mono`
+for the alternate Mono branch:
+
+```sh
+"$MSBE" instance add s1 \
+  --root "$HOME/.local/share/Steam/steamapps/common/Schedule I" \
+  --plan plans/schedule1/plan.toml \
+  --loader melonloader --edition il2cpp
+"$MSBE" add s1 "$HOME/Downloads/example-mod.zip"
+"$MSBE" deploy s1
+```
+
+An archive that carries both builds marks them by folder (`IL2CPP/`, `Mono/`) or in the file name
+(`Name.Il2Cpp.dll`, `Name.Mono.dll`); the branch the instance does not run is quarantined and
+reported in the deployment preview, as are documentation and images. A bundled copy of MelonLoader,
+or of the game's own files, is denied. A bare `.dll` installs as it is. A `Mods/` folder at the
+archive root keeps its structure, so a Melon subfolder mod stays together — but a subfolder mod
+nested inside a branch folder does not, and its assembly lands loose in `Mods/`. An installed
+provider program that lists `schedule1` among its games can also queue downloads for the instance;
+that is the Nexus game domain for Schedule I.
 
 ## 6. Implemented command reference
 

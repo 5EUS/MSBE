@@ -1186,6 +1186,144 @@ fn blade_and_sorcery_plan_places_each_mod_folder_beneath_streaming_assets_mods()
 }
 
 #[test]
+fn schedule_one_plan_routes_melon_directories_and_keeps_the_other_branch_out() {
+    let mut world = World::new();
+    world.plan = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plans/schedule1/plan.toml");
+    world.add_instance_with_loader("melonloader", None);
+    // Both builds by folder, both builds by file name, a Melon subfolder mod, and a bare assembly.
+    let branches = world.zip(
+        "time-never-stops.zip",
+        &[
+            ("IL2CPP/Mods/TimeNeverStops.dll", b"il2cpp build"),
+            ("Mono/Mods/TimeNeverStops.dll", b"mono build"),
+            ("README.md", b"not a mod input"),
+        ],
+    );
+    let api = world.zip(
+        "s1api.zip",
+        &[
+            ("Mods/S1API.Il2Cpp.MelonLoader.dll", b"il2cpp api"),
+            ("Mods/S1API.Mono.MelonLoader.dll", b"mono api"),
+            ("Plugins/S1APILoader.MelonLoader.dll", b"loader plugin"),
+            ("UserLibs/Shared.dll", b"shared library"),
+            ("UserData/S1API/defaults.json", b"{}"),
+            ("MelonLoader/net6/MelonLoader.dll", b"a bundled loader"),
+        ],
+    );
+    let subfolder = world.zip(
+        "buyable-boat.zip",
+        &[
+            ("Mods/BuyableBoat/BuyableBoat.dll", b"boat assembly"),
+            (
+                "Mods/BuyableBoat/manifest.json",
+                b"{\"name\":\"BuyableBoat\"}",
+            ),
+        ],
+    );
+    let bare = world.file("QuickSell.dll", b"bare assembly");
+
+    world.json(&[
+        "add",
+        "mc",
+        branches.as_str(),
+        api.as_str(),
+        subfolder.as_str(),
+        bare.as_str(),
+    ]);
+    let dry_run = world.json(&["deploy", "mc", "--dry-run"]);
+    let excluded = at(&dry_run, "/excluded").as_array().unwrap();
+    let reason = |source: &str| {
+        excluded
+            .iter()
+            .find(|item| at(item, "/file/source") == source)
+            .map(|item| at(item, "/file/reason/kind").clone())
+    };
+    assert_eq!(
+        reason("Mono/Mods/TimeNeverStops.dll"),
+        Some(json!("quarantined"))
+    );
+    assert_eq!(
+        reason("Mods/S1API.Mono.MelonLoader.dll"),
+        Some(json!("quarantined"))
+    );
+    assert_eq!(reason("README.md"), Some(json!("quarantined")));
+    assert_eq!(
+        reason("MelonLoader/net6/MelonLoader.dll"),
+        Some(json!("denied"))
+    );
+
+    world.json(&["deploy", "mc"]);
+    let (mods, plugins) = (world.game.join("Mods"), world.game.join("Plugins"));
+    assert_eq!(
+        fs::read(mods.join("TimeNeverStops.dll")).unwrap(),
+        b"il2cpp build"
+    );
+    assert!(mods.join("S1API.Il2Cpp.MelonLoader.dll").is_file());
+    assert!(!mods.join("S1API.Mono.MelonLoader.dll").exists());
+    assert!(mods.join("QuickSell.dll").is_file());
+    // A subfolder mod keeps its folder, so its manifest stays beside its assembly.
+    assert!(mods.join("BuyableBoat/BuyableBoat.dll").is_file());
+    assert!(mods.join("BuyableBoat/manifest.json").is_file());
+    assert_eq!(
+        fs::read(plugins.join("S1APILoader.MelonLoader.dll")).unwrap(),
+        b"loader plugin"
+    );
+    assert!(world.game.join("UserLibs/Shared.dll").is_file());
+    assert!(world.game.join("UserData/S1API/defaults.json").is_file());
+    assert!(!mods.join("IL2CPP").exists());
+    assert!(!mods.join("Mono").exists());
+    assert!(!mods.join("README.md").exists());
+    assert!(!world.game.join("MelonLoader").exists());
+
+    world.json(&["purge", "mc"]);
+    assert!(!mods.join("TimeNeverStops.dll").exists());
+    assert!(!mods.join("BuyableBoat/BuyableBoat.dll").exists());
+    assert!(!world.game.join("UserData/S1API/defaults.json").exists());
+}
+
+#[test]
+fn schedule_one_mono_instance_takes_the_mono_build_and_refuses_the_other_edition() {
+    let mut world = World::new();
+    world.plan = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plans/schedule1/plan.toml");
+    world.add_instance_with_loader("melonloader-mono", None);
+    let branches = world.zip(
+        "time-never-stops.zip",
+        &[
+            ("IL2CPP/Mods/TimeNeverStops.dll", b"il2cpp build"),
+            ("Mono/Mods/TimeNeverStops.dll", b"mono build"),
+        ],
+    );
+
+    world.json(&["add", "mc", branches.as_str()]);
+    world.json(&["deploy", "mc"]);
+    assert_eq!(
+        fs::read(world.game.join("Mods/TimeNeverStops.dll")).unwrap(),
+        b"mono build"
+    );
+
+    // The Mono loader serves the alternate branch alone, so the main branch's edition is refused.
+    let game = world.game.display().to_string();
+    let plan = world.plan.display().to_string();
+    let refused = world.msbe(&[
+        "instance",
+        "add",
+        "main",
+        "--root",
+        game.as_str(),
+        "--plan",
+        plan.as_str(),
+        "--loader",
+        "melonloader-mono",
+        "--side",
+        "client",
+        "--edition",
+        "il2cpp",
+    ]);
+    assert_eq!(refused.code, exit::FAILURE, "{}", refused.out);
+    assert!(refused.err.contains("il2cpp"), "{}", refused.err);
+}
+
+#[test]
 fn usage_errors_and_bad_references_have_distinct_exit_codes() {
     let world = World::new();
     assert_eq!(world.msbe(&["deploy"]).code, exit::USAGE);

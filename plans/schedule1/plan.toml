@@ -1,0 +1,188 @@
+# Schedule I.
+#
+# A MelonLoader game. Mod assemblies load from Mods/, loader plugins from Plugins/, shared
+# libraries from UserLibs/, and mod configuration lives in UserData/, which the game and its mods
+# rewrite at runtime. MelonLoader itself is not installed by MSBE: the instance must already have
+# it, and on Linux its proxy needs the `version` DLL override set in the Proton prefix.
+#
+# The game ships two incompatible runtimes. The default Steam branch is Il2Cpp and the alternate
+# branch is Mono, and a mod assembly is built for one or the other: loading the wrong build fails
+# at startup. An instance names its branch as its edition, each loader serves one branch, and the
+# other branch's files are quarantined, so they stay in the store and are reported in the preview
+# rather than deployed. An archive marks its two builds either by folder (`IL2CPP/`, `Mono/`) or in
+# the file name (`Name.Il2Cpp.dll`, `Name.Mono.dll`); both are recognised, in the spellings the
+# quarantine rules below list literally. A spelling that is not listed is not recognised, and the
+# preview then shows both builds heading for Mods/.
+#
+# Shapes that land: a bare `.dll`, or one anywhere inside an archive, flat in Mods/. A `Mods/`
+# folder at the archive root keeps its structure, so a Melon subfolder mod's manifest and assets
+# stay beside its assembly. `Plugins/` and `UserLibs/` are recognised at any depth, including
+# inside a branch folder, and land flat, as both directories are flat. `UserData/` keeps its
+# structure but is recognised at the archive root only. A subfolder mod nested inside a branch
+# folder is not supported: its assembly lands in Mods/ without its folder.
+#
+# A bundled copy of MelonLoader, and anything that would overwrite the game's own files, is denied.
+
+schema  = 1
+id      = "schedule1"
+name    = "Schedule I"
+version = "0.1.0"
+
+# The Steam branch decides which of a mod's two builds fits, so an instance names it.
+
+[[editions]]
+id   = "il2cpp"
+name = "Main branch (Il2Cpp)"
+
+[[editions]]
+id   = "mono"
+name = "Alternate branch (Mono)"
+
+[[loaders]]
+id        = "melonloader"
+bootstrap = "none"
+sides     = ["client"]
+editions  = ["il2cpp"]
+targets   = [
+  { name = "mods", path = "Mods" },
+  { name = "plugins", path = "Plugins" },
+  { name = "userlibs", path = "UserLibs" },
+  { name = "userdata", path = "UserData" },
+]
+
+[[loaders]]
+id        = "melonloader-mono"
+bootstrap = "none"
+sides     = ["client"]
+editions  = ["mono"]
+targets   = [
+  { name = "mods", path = "Mods" },
+  { name = "plugins", path = "Plugins" },
+  { name = "userlibs", path = "UserLibs" },
+  { name = "userdata", path = "UserData" },
+]
+
+# MelonLoader writes each mod's preferences back to UserData, so a deployed default is the file the
+# game then edits in place.
+
+[deploy]
+mutable = ["@loader.targets.userdata/**"]
+
+# The shape both branches share.
+
+[[steps]]
+type = "extract"
+
+  [steps.with]
+  hygiene = "default"
+  allow   = [
+    "**/*.dll",
+    "Mods/**",
+    "**/Plugins/**",
+    "**/UserLibs/**",
+    "UserData/**",
+  ]
+  deny = [
+    "**/MelonLoader/**",
+    "**/version.dll",
+    "**/winhttp.dll",
+    "**/dobby.dll",
+    "**/GameAssembly.dll",
+    "**/UnityPlayer.dll",
+    "**/Schedule I_Data/**",
+  ]
+  quarantine = [
+    "**/*.txt",
+    "**/*.md",
+    "**/*.markdown",
+    "**/*.pdf",
+    "**/*.url",
+    "**/*.png",
+    "**/*.jpg",
+  ]
+
+# An Il2Cpp instance keeps the Mono build out.
+
+[[steps]]
+type = "extract"
+
+  [steps.with]
+  loaders    = ["melonloader"]
+  quarantine = [
+    "**/Mono/**",
+    "**/mono/**",
+    "**/MONO/**",
+    "**/*.Mono.dll",
+    "**/*.Mono.*.dll",
+    "**/*-Mono.dll",
+    "**/*_Mono.dll",
+    "**/*.mono.dll",
+  ]
+
+# A Mono instance keeps the Il2Cpp build out.
+
+[[steps]]
+type = "extract"
+
+  [steps.with]
+  loaders    = ["melonloader-mono"]
+  quarantine = [
+    "**/IL2CPP/**",
+    "**/Il2Cpp/**",
+    "**/IL2Cpp/**",
+    "**/il2cpp/**",
+    "**/*.Il2Cpp.dll",
+    "**/*.Il2Cpp.*.dll",
+    "**/*.IL2CPP.dll",
+    "**/*.IL2CPP.*.dll",
+    "**/*-Il2Cpp.dll",
+    "**/*_Il2Cpp.dll",
+    "**/*.il2cpp.dll",
+  ]
+
+# A Mods/ folder at the archive root, which is how a Melon subfolder mod arrives.
+
+[[steps]]
+type = "place"
+
+  [steps.with]
+  into         = "@loader.targets.mods"
+  include      = ["Mods/**"]
+  strip_prefix = "Mods"
+  flatten      = false
+
+# Every other assembly is a mod: a bare .dll, or one inside a branch folder such as IL2CPP/Mods/.
+
+[[steps]]
+type = "place"
+
+  [steps.with]
+  into    = "@loader.targets.mods"
+  include = ["**/*.dll"]
+  exclude = ["Mods/**", "**/Plugins/**", "**/UserLibs/**", "UserData/**"]
+  flatten = true
+
+[[steps]]
+type = "place"
+
+  [steps.with]
+  into    = "@loader.targets.plugins"
+  include = ["**/Plugins/**"]
+  flatten = true
+
+[[steps]]
+type = "place"
+
+  [steps.with]
+  into    = "@loader.targets.userlibs"
+  include = ["**/UserLibs/**"]
+  flatten = true
+
+[[steps]]
+type = "place"
+
+  [steps.with]
+  into         = "@loader.targets.userdata"
+  include      = ["UserData/**"]
+  strip_prefix = "UserData"
+  flatten      = false
