@@ -18,7 +18,7 @@ use std::{
 use msbe_provider_api::{
     Accounts, AcquiredArtifact, Adapter, AdapterError, ApiHeaders, Handoff, Header, HttpClient,
     HttpError, HttpRequest, HttpResponse, ManifestError, Origin, PackageId, Provenance, Provider,
-    Rate, Releases, Search, Target, ToolHost, UpdateCheck, Updates,
+    Rate, Redeemed, Releases, Search, Target, ToolHost, UpdateCheck, Updates,
     model::{Account, HandoffTicket, Project, Release, ReleaseFile, Request, SearchResult},
     without_query,
 };
@@ -320,7 +320,7 @@ impl Handoff for Authorized {
         &self,
         http: &dyn HttpClient,
         ticket: &HandoffTicket,
-    ) -> Result<ReleaseFile, AdapterError> {
+    ) -> Result<Redeemed, AdapterError> {
         self.adapter
             .as_handoff()
             .ok_or_else(|| withdrawn("handoff"))?

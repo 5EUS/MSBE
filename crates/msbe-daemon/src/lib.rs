@@ -1297,7 +1297,7 @@ urls = "/url"
             ),
             (
                 "https://api.assisted.test/links/sprocket/r1".to_owned(),
-                json!({ "url": "https://files.assisted.test/sprocket.txt" }),
+                json!({ "url": "https://files.assisted.test/87dc822d-196e-46ea" }),
             ),
             (
                 "https://api.assisted.test/links/gear/r9".to_owned(),
@@ -1306,7 +1306,7 @@ urls = "/url"
         ]);
         web.files.extend([
             (
-                "https://files.assisted.test/sprocket.txt".to_owned(),
+                "https://files.assisted.test/87dc822d-196e-46ea".to_owned(),
                 b"sprocket".to_vec(),
             ),
             (
@@ -1348,7 +1348,8 @@ urls = "/url"
         assert!(fixture.daemon.jobs().run_next());
         let done = item(&mut fixture.daemon, id);
         assert_eq!(at(&done, "/state/kind"), "completed", "{done}");
-        assert_eq!(at(&done, "/added"), &json!(["sprocket"]));
+        assert_eq!(at(&done, "/files/0/name"), "sprocket.txt", "{done}");
+        assert_eq!(at(&done, "/added"), &json!(["Sprocket"]));
 
         let stray = success(call(
             &mut fixture.daemon,
@@ -1373,7 +1374,8 @@ urls = "/url"
         assert!(fixture.daemon.jobs().run_next());
         assert_eq!(
             at(&item(&mut fixture.daemon, stray), "/added"),
-            &json!(["gear"])
+            &json!(["gear"]),
+            "a project the catalog does not list keeps the name its URL gives"
         );
     }
 

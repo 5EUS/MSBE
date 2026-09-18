@@ -275,7 +275,7 @@ fn parsing_never_panics_and_never_yields_a_reference_with_a_slash() {
 }
 
 #[test]
-fn a_redeemed_link_is_a_direct_download_named_by_its_url() {
+fn a_redeemed_link_falls_back_to_its_url_when_the_catalog_lists_nothing() {
     let adapter = adapter();
     let handoff = adapter.as_handoff().unwrap();
     let ticket = parse(adapter.as_ref(), LINK).unwrap();
@@ -286,7 +286,8 @@ fn a_redeemed_link_is_a_direct_download_named_by_its_url() {
                  "URI": "https://files.linked.test/cdn/Some%20Mod-1234.zip?md5=abc&expires=1" }]),
     );
 
-    let file = handoff.redeem(&http, &ticket).unwrap();
+    let redeemed = handoff.redeem(&http, &ticket).unwrap();
+    let file = &redeemed.file;
     assert_eq!(
         file.download,
         Download::Direct {
@@ -298,6 +299,9 @@ fn a_redeemed_link_is_a_direct_download_named_by_its_url() {
         (file.size, file.limit, file.sha512.as_deref()),
         (None, None, None)
     );
+    // This program declares no project or releases route, so nothing is looked up and nothing but
+    // the redeem request is sent.
+    assert_eq!(redeemed.title, None);
     assert_eq!(
         http.sent.borrow().as_slice(),
         [(
@@ -339,4 +343,118 @@ fn a_redeemed_link_is_a_direct_download_named_by_its_url() {
         denied.contains("403") && !denied.contains("secret"),
         "{denied}"
     );
+}
+
+/// A program shaped like Nexus Mods: the link is redeemed for a CDN URL that describes nothing,
+/// while the catalog lists the file's real name and the project's own.
+const LISTING_PROGRAM: &str = r#"
+runtime      = "catalog-v1"
+capabilities = ["project", "releases"]
+
+[games]
+game = "game-domain"
+
+[provider]
+schema = 1
+id     = "linked"
+name   = "Linked"
+[provider.source]
+type   = "prefixed"
+prefix = "linked:"
+[provider.metadata]
+api_base = "https://api.linked.test"
+[provider.acquisition]
+type   = "browser_assisted"
+scheme = "handoff"
+[provider.policy]
+requires_auth              = false
+respects_distribution_flag = false
+tos_url                    = ""
+ack_required               = false
+
+[handoff]
+host   = "game"
+path   = ["mods", "{project}", "files", "{release}"]
+query  = { key = "key", expires = "expires" }
+redeem = "/v1/games/{game}/mods/{project}/files/{release}/link.json"
+
+[routes]
+project  = "/v1/games/{game}/mods/{reference}.json"
+releases = "/v1/games/{game}/mods/{project}/files.json"
+
+[pages]
+release = "https://linked.test/{game}/mods/{project}?file_id={release}"
+
+[mappings.handoff]
+urls = { each = "", value = "/URI" }
+
+[mappings.project]
+id    = "/mod_id"
+title = "/name"
+
+[mappings]
+releases = "/files"
+
+[mappings.release]
+id        = "/file_id"
+number    = "/version"
+published = "/uploaded_timestamp"
+files     = { single = "" }
+
+[mappings.release.file]
+name     = "/file_name"
+size_kib = "/size_kb"
+primary  = "/is_primary"
+"#;
+
+const PROJECT: &str = "https://api.linked.test/v1/games/game-domain/mods/1234.json";
+const RELEASES: &str = "https://api.linked.test/v1/games/game-domain/mods/1234/files.json";
+
+#[test]
+fn a_redeemed_link_takes_its_name_and_project_from_the_catalog_listing() {
+    let program: ProviderProgram = toml::from_str(LISTING_PROGRAM).unwrap();
+    program.validate().unwrap();
+    let adapter = runtime::build(program);
+    let handoff = adapter.as_handoff().unwrap();
+    let ticket = parse(adapter.as_ref(), LINK).unwrap();
+    let mut http = Answers::default();
+    // What a content delivery network answers with: an opaque id, no extension, no mod name.
+    http.json.insert(
+        REDEEM.to_owned(),
+        json!([{ "URI": "https://files.linked.test/87dc822d-196e-46ea-93de-14ea9aec0c26?expires=1" }]),
+    );
+    http.json.insert(
+        RELEASES.to_owned(),
+        json!({ "files": [
+            { "file_id": 5678, "file_name": "Some Mod-1234-1-0.zip", "version": "1.0",
+              "uploaded_timestamp": 1_700_000_000u64, "size_kb": 760, "is_primary": true },
+            { "file_id": 999, "file_name": "Some Mod-old.zip", "version": "0.9",
+              "uploaded_timestamp": 1_600_000_000u64, "size_kb": 10, "is_primary": false },
+        ] }),
+    );
+    http.json.insert(
+        PROJECT.to_owned(),
+        json!({ "mod_id": 1234, "name": "Some Mod" }),
+    );
+
+    let redeemed = handoff.redeem(&http, &ticket).unwrap();
+    // The download still goes to the redeemed URL: only the description comes from the catalog.
+    assert_eq!(
+        redeemed.file.download,
+        Download::Direct {
+            url: "https://files.linked.test/87dc822d-196e-46ea-93de-14ea9aec0c26?expires=1"
+                .to_owned()
+        }
+    );
+    assert_eq!(redeemed.file.name, "Some Mod-1234-1-0.zip");
+    assert_eq!(redeemed.file.limit, Some(761 * 1024));
+    assert_eq!(redeemed.title.as_deref(), Some("Some Mod"));
+
+    // A listing that cannot be reached leaves the link to describe its own file, rather than
+    // failing a download the user is waiting on.
+    http.json.remove(RELEASES);
+    http.json.remove(PROJECT);
+    let bare = handoff.redeem(&http, &ticket).unwrap();
+    assert_eq!(bare.file.name, "87dc822d-196e-46ea-93de-14ea9aec0c26");
+    assert_eq!(bare.title, None);
 }

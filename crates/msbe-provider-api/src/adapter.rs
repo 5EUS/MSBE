@@ -275,7 +275,21 @@ pub trait Handoff {
         &self,
         http: &dyn HttpClient,
         ticket: &HandoffTicket,
-    ) -> Result<ReleaseFile, AdapterError>;
+    ) -> Result<Redeemed, AdapterError>;
+}
+
+/// What redeeming a handoff link yields.
+///
+/// A redeemed link answers with a download URL and nothing else, so the file it names is only as
+/// well described as the catalog's own listing of it. An adapter that can reach that listing
+/// reports what it says; one that cannot leaves both fields as the link alone supports, and the
+/// file is then named after the URL's last path segment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Redeemed {
+    /// The file to download.
+    pub file: ReleaseFile,
+    /// The name the catalog gives the project the file belongs to, for naming what is installed.
+    pub title: Option<String>,
 }
 
 /// Checking which account a credential belongs to.

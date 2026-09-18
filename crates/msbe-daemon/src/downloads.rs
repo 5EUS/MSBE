@@ -899,9 +899,10 @@ impl Lanes {
             .parse(link.uri.expose(), SystemClock.now())
             .map_err(|error| error.to_string())?;
         let http = (self.connect)().map_err(|error| error.to_string())?;
-        let file = handoff
+        let redeemed = handoff
             .redeem(http.as_ref(), &ticket)
             .map_err(|error| error.to_string())?;
+        let file = &redeemed.file;
         let Download::Direct { url } = &file.download else {
             return Err(format!(
                 "{} did not answer the link with a download",
@@ -942,6 +943,9 @@ impl Lanes {
             listed.name.clone_from(&file.name);
             listed.size = Some(acquired.size);
             listed.state = DownloadFileState::Downloaded;
+            if staged.module.is_none() {
+                staged.module.clone_from(&redeemed.title);
+            }
             staged.provenance = Some(Provenance {
                 provider: ticket.provider.clone(),
                 project: ticket.project.clone(),

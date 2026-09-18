@@ -315,7 +315,12 @@ sections. The registry and the runtime do the rest:
   `redeem` route is sent the kept parameters and answers with download URLs, which
   `[mappings.handoff] urls` selects. The first is downloaded like any direct file, without the
   credential. Nothing is published to verify it against, so its SHA-256 and SHA-512 are recorded
-  as provenance.
+  as provenance. A redeemed URL is a delivery address, not a description: its last path segment may
+  be an opaque id with no extension, which would leave the file unnamed and its container
+  unrecognised. So the file is described by the catalog's own listing of that release, and by the
+  project's title, both looked up through the routes the program already declares. A listing MSBE
+  cannot reach leaves the URL to name the file, since a download the user is waiting on is not
+  worth failing over metadata.
 
 Catalogs without exact sizes, digests or dependencies fit as well. `[mappings] releases` accepts
 `{ each, when, unless }` to filter the objects listed. A condition is `{ pointer, equals }` or

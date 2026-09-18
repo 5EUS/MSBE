@@ -40,8 +40,8 @@ pub use acquisition::{
     AcquiredArtifact, AcquisitionError, ArtifactDescriptor, DOWNLOAD_LIMIT, acquire,
 };
 pub use adapter::{
-    Accounts, Adapter, AdapterError, Build, Handoff, ProgramRegistration, Registration, Releases,
-    Search, Update, UpdateCheck, Updates, acquire_download,
+    Accounts, Adapter, AdapterError, Build, Handoff, ProgramRegistration, Redeemed, Registration,
+    Releases, Search, Update, UpdateCheck, Updates, acquire_download,
 };
 pub use codec::{
     BlobSource, BuildPackCodec, ContainerKind, DistributionDecision, EmbeddedBlob, EntryContent,

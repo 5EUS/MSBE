@@ -17,7 +17,7 @@ use std::{
 
 use msbe_provider_api::{
     Accounts, AcquiredArtifact, Adapter, AdapterError, ApiHeaders, Availability, Capability,
-    Handoff, HttpClient, JsonEndpoint, PackageId, Provenance, ProviderProgram, Releases,
+    Handoff, HttpClient, JsonEndpoint, PackageId, Provenance, ProviderProgram, Redeemed, Releases,
     RuntimeKind, Search, Target, ToolError, ToolHost, Update, UpdateCheck, Updates,
     acquire_download, acquired_directory, is_tool_value,
     manifest::Acquisition,
@@ -108,8 +108,27 @@ impl ProgramAdapter {
         Ok(Catalog {
             program: &self.program,
             endpoint: JsonEndpoint::new(http, base, JSON_LIMIT),
-            target,
+            target: Some(target),
             game,
+        })
+    }
+
+    /// The catalog a handoff link is read against: the link's own game, and no instance target.
+    fn link_catalog<'a>(
+        &'a self,
+        http: &'a dyn HttpClient,
+        ticket: &'a HandoffTicket,
+    ) -> Result<Catalog<'a>, AdapterError> {
+        let base = self
+            .program
+            .provider
+            .api_base()
+            .ok_or_else(|| specific(RuntimeError::MissingMetadata))?;
+        Ok(Catalog {
+            program: &self.program,
+            endpoint: JsonEndpoint::new(http, base, JSON_LIMIT),
+            target: None,
+            game: &ticket.catalog_game,
         })
     }
 }
@@ -489,7 +508,7 @@ impl Handoff for ProgramAdapter {
         &self,
         http: &dyn HttpClient,
         ticket: &HandoffTicket,
-    ) -> Result<ReleaseFile, AdapterError> {
+    ) -> Result<Redeemed, AdapterError> {
         let program = &self.program;
         let (Some(link), Some(mapping), Some(base)) = (
             program.handoff.as_ref(),
@@ -523,18 +542,69 @@ impl Handoff for ProgramAdapter {
             .into_iter()
             .next()
             .ok_or_else(|| specific(RuntimeError::NoRedeemedUrl))?;
-        let name = file_name_of(&url).map_err(specific)?;
-        Ok(ReleaseFile {
+        // A redeemed URL is a delivery address, not a description: its last segment may be an
+        // opaque id with no extension, which would leave the file unnamed and its container
+        // unrecognised. The catalog's own listing of the release names it, so that is preferred,
+        // and the URL is the fallback for a listing that cannot be reached.
+        let listed = self.listed_file(http, ticket);
+        let name = match &listed {
+            Some(file) => file.name.clone(),
+            None => file_name_of(&url).map_err(specific)?,
+        };
+        let file = ReleaseFile {
             download: Download::Direct { url },
             name,
-            size: None,
-            limit: None,
-            md5: None,
-            sha1: None,
-            sha256: None,
-            sha512: None,
+            size: listed.as_ref().and_then(|file| file.size),
+            limit: listed.as_ref().and_then(|file| file.limit),
+            md5: listed.as_ref().and_then(|file| file.md5.clone()),
+            sha1: listed.as_ref().and_then(|file| file.sha1.clone()),
+            sha256: listed.as_ref().and_then(|file| file.sha256.clone()),
+            sha512: listed.as_ref().and_then(|file| file.sha512.clone()),
             primary: true,
+        };
+        Ok(Redeemed {
+            file,
+            title: self.listed_title(http, ticket),
         })
+    }
+}
+
+impl ProgramAdapter {
+    /// The catalog's listing of the file `ticket` names, when it lists one.
+    ///
+    /// Best effort: a listing MSBE cannot reach, or one that does not name the release, leaves the
+    /// redeemed link to describe its own file. Redeeming already succeeded by this point, and
+    /// failing it over a metadata lookup would lose a download the user is waiting on.
+    fn listed_file(&self, http: &dyn HttpClient, ticket: &HandoffTicket) -> Option<ReleaseFile> {
+        let catalog = self.link_catalog(http, ticket).ok()?;
+        let release = catalog
+            .listing(&ticket.project)
+            .ok()?
+            .into_iter()
+            .map(|listed| listed.release)
+            .find(|release| release.id == ticket.release)?;
+        let primary = release.files.iter().any(|file| file.primary);
+        release
+            .files
+            .into_iter()
+            .find(|file| file.primary || !primary)
+    }
+
+    /// The catalog's name for the project `ticket` names, when it publishes one. Best effort, for
+    /// the same reason as [`Self::listed_file`].
+    fn listed_title(&self, http: &dyn HttpClient, ticket: &HandoffTicket) -> Option<String> {
+        let catalog = self.link_catalog(http, ticket).ok()?;
+        let route = catalog
+            .route(
+                self.program.routes.project.as_deref()?,
+                Some(("reference", &ticket.project)),
+            )
+            .ok()?;
+        let body = catalog.get(&route, &[]).ok()?;
+        catalog
+            .project(&body)
+            .ok()
+            .map(|project| project.slug.unwrap_or(project.title))
     }
 }
 
@@ -654,8 +724,11 @@ struct Listed {
 struct Catalog<'a> {
     program: &'a ProviderProgram,
     endpoint: JsonEndpoint<'a>,
-    target: &'a Target,
-    /// The catalog's identifier for the target's game.
+    /// What the catalog's answers are judged against, which a catalog opened for a handoff link
+    /// does not have: such a link names a game, and nothing about the installation it is bound for.
+    /// A fact the target would supply is then absent, and every check that needs one is skipped.
+    target: Option<&'a Target>,
+    /// The catalog's identifier for the game.
     game: &'a str,
 }
 
@@ -705,13 +778,12 @@ impl<'a> Catalog<'a> {
     /// The catalog's spellings of the target's values for `fact`: `None` when the target has no
     /// such fact, and empty when the catalog has a spelling for none of them.
     fn fact(&self, fact: TargetFact) -> Option<Vec<&'a str>> {
-        let target = self.target;
         let values: Vec<&'a str> = match fact {
             TargetFact::Game => return Some(vec![self.game]),
-            TargetFact::Loaders => target.loader_ids().collect(),
-            TargetFact::GameVersion => vec![target.game_version.as_deref()?],
-            TargetFact::Edition => vec![target.edition.as_deref()?],
-            TargetFact::Storefront => vec![target.storefront.as_deref()?],
+            TargetFact::Loaders => self.target?.loader_ids().collect(),
+            TargetFact::GameVersion => vec![self.target?.game_version.as_deref()?],
+            TargetFact::Edition => vec![self.target?.edition.as_deref()?],
+            TargetFact::Storefront => vec![self.target?.storefront.as_deref()?],
         };
         Some(match self.program.translate.table(fact) {
             Some(table) if !table.is_empty() => distinct(
@@ -733,7 +805,7 @@ impl<'a> Catalog<'a> {
         if parameter.values.is_empty() {
             return self.fact(fact);
         }
-        let target = self.target;
+        let target = self.target?;
         let values: Vec<&'a str> = match fact {
             TargetFact::Game => vec![target.game.as_str()],
             TargetFact::Loaders => target.loader_ids().collect(),
@@ -944,7 +1016,10 @@ impl<'a> Catalog<'a> {
             .as_deref()
             .and_then(|pointer| value.pointer(pointer))
             .and_then(Value::as_object);
-        let version_matches = match (self.target.loader_version.as_deref(), declared) {
+        let wanted_version = self
+            .target
+            .and_then(|target| target.loader_version.as_deref());
+        let version_matches = match (wanted_version, declared) {
             (Some(wanted), Some(declared)) => {
                 let versions: Vec<&str> = loader_ids
                     .iter()
