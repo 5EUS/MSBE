@@ -22,3 +22,8 @@ artifacts/
 .env
 *.local.toml
 /fixtures/**/local/
+
+extensions/**/codecs/**/target/
+extensions/**/codecs/**/dist/
+
+crates/msbe-cli/*.pem
